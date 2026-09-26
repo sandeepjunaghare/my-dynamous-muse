@@ -9,8 +9,10 @@ database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise RuntimeError("DATABASE_URL is not set; add it to your .env file")
 
+model_choice = os.getenv("MODEL_CHOICE", "gpt-4o-mini")
+
 config = {
-    "llm": {"provider": "openai", "config": {"model": "gpt-4o-mini"}},
+    "llm": {"provider": "openai", "config": {"model": model_choice}},
     "vector_store": {
         "provider": "supabase",
         "config": {
@@ -41,7 +43,7 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
         {"role": "user", "content": message},
     ]
     response = openai_client.chat.completions.create(
-        model=os.getenv("MODEL_CHOICE", "gpt-4o-mini"), messages=messages
+        model=model_choice, messages=messages
     )
     assistant_response = response.choices[0].message.content
 
