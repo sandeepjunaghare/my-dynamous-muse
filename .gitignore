@@ -1,0 +1,19 @@
+# Environments
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+mem0-venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
