@@ -553,15 +553,24 @@ docker compose config -q
 5. **`RetrievalMethod` members** are a first guess beyond `manual_hubspot_entry` (which is required). T5/T6
    may add members; that is a one-line change and not a schema break.
 
+**Settled:**
+
+- **`core/cost.py` stays in `core/`. Confirmed 2026-09-26.** It is a knowing deviation from "core is what
+  exists before any feature" — nothing in T1 spends money. It is here because D7 chose to measure rather
+  than cap, and measurement that arrives with the first spender arrives too late to set a ceiling from. Treat
+  it as infrastructure that predates the features which will use it, not as a speculative abstraction: T6
+  (Places) and T12 (Anthropic) are both known consumers, which also satisfies the three-feature rule's
+  intent. AC6 stands.
+
+- **`ProvenancedValue` is frozen. Confirmed 2026-09-26.** `model_config = ConfigDict(frozen=True)`. A
+  citation is a fact about how a value was obtained, so re-citing it means obtaining it again — a slice
+  needing a new citation constructs a new value rather than mutating one. Decided before nine dependent
+  tickets consume it, because loosening this later is cheap and tightening it later is not. AC7 stands.
+
 **Questions that would change this plan if answered differently:**
 
-- **Does `core/cost.py` belong here at all?** It is a deliberate deviation from "core is what exists before
-  any feature" — nothing in T1 spends money. It is here because D7 chose to measure rather than cap, and
-  measurement that arrives with the first spender is measurement that arrives too late. If that reasoning is
-  rejected, move it to T6 and drop AC6.
-- **Should the provenance model be frozen?** Proposed yes. If a later slice genuinely needs to re-cite a
-  field, it should construct a new value rather than mutate one — but that is worth confirming before it is
-  baked into nine dependent tickets.
+- None outstanding. Both prior questions are settled above. The five assumptions remain, of which #1 — a
+  reachable Supabase project — is the only one that can block a task.
 
 ---
 
@@ -603,3 +612,10 @@ full attention.
 ## AMENDMENTS
 
 *(append-only; newest at the bottom; leave empty at creation)*
+
+- 2026-09-26 — `core/cost.py` confirmed to stay in `core/` rather than moving to T6. It was raised as an open
+  question because nothing in T1 spends money; resolved in favour of keeping it, since D7 chose to measure
+  cost rather than cap it and the first spender would otherwise arrive uninstrumented. AC6 unchanged.
+- 2026-09-26 — `ProvenancedValue` confirmed frozen. The plan already specified `frozen=True` in the
+  provenance task's gotchas, AC7 and the test list; this closes the open question behind it so the constraint
+  is a decision rather than a proposal. No task, criterion or test changed.
