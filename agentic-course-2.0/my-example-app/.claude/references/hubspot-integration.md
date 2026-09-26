@@ -19,8 +19,29 @@ sourced-at, vertical, priority score, route cluster — none of which exist in t
 companies of mixed provenance. Access is a private app token scoped to contacts/companies/deals/tasks
 read+write; rate limits apply per tier.
 
-**The cadence is HubSpot's, not ours.** Tasks and workflows drive the three touches; we do not build a
-scheduler and do not mirror task state into Supabase — putting tasks in two places is the exact failure M4
-exists to prevent. The system's job ends the moment a qualified prospect and its scheduled first touch exist
-in HubSpot. Two open dependencies: Spike 3 (does our tier have sequences, or only tasks and workflows?) and
-the `$999 assessment` deal pipeline, which does not exist yet — M3 cannot be measured until it does.
+**We own the cadence schedule; HubSpot owns the outcomes.** Spike 3 is answered: portal 244766495 offers the
+seats `core`, `sales-starter`, `service-starter` and `view-only` — no professional seat, so **no sequences**,
+and Starter workflows are capped at roughly 10 actions with one workflow per trigger and no branching. There
+is no HubSpot scheduler to hand a three-touch state machine to, so `app/cadence/` holds it.
+
+The boundary that keeps this from becoming the shadow CRM M4 exists to prevent: **Supabase holds which touch
+is due, which cycle we're in, and whether the prospect is parked; HubSpot holds whether the touch happened
+and what was said.** One source of truth per fact, never two copies of one fact. Tasks stay the human
+surface and outcomes are never stored on our side — we read them, we do not mirror them.
+
+**A touch is done when its Task is complete *or* a matching activity was logged on the contact after that
+task was created.** Ties break toward done, because a machine that nags about a call you already made is
+worse than one that occasionally advances early. Cycle position is reconstructed from logged activity rather
+than reset, so a prospect touched twice by hand resumes at touch three — park-after-three-cycles still counts
+those prior touches.
+
+**Adoption.** Prospects the system did not source (the 22 already in the portal) can be adopted into the
+machine. The write-gate governs prospect *field* writes, not task creation, so adoption is not refused for
+records that carry no provenance — instead they become candidates whose provenance says so honestly:
+`retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's
+create date.
+
+One dependency left open on purpose: the `$999 assessment` deal pipeline does not exist (9 deals, all
+January, none at that value) and we have decided not to create it yet. M3 is therefore unmeasurable, and the
+Friday report must render it as **not configured** — never as `0`, which would be indistinguishable from a
+real zero.

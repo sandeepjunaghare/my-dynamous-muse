@@ -1,6 +1,9 @@
 # Architecture — Local Prospect Engine
 
-**Status:** Decisions made, pending Spike 1 · **Date:** 2026-09-26
+**Status:** Decisions made · **Date:** 2026-09-26 · **Revised:** 2026-09-26
+**Revision note:** two original decisions were reversed on evidence — the weekly run is a deterministic
+pipeline rather than an agent loop, and the cadence state machine is ours rather than HubSpot's (Spike 3
+answered: the portal is Sales Hub Starter, which has no sequences). Both reversals are marked inline.
 **Intent:** [`local-prospect-engine.prd.md`](./local-prospect-engine.prd.md) — the *what* and *why*. This doc is the *how*.
 **Scope:** High-level architecture decisions. Not an implementation plan — that comes per-ticket via `piv-plan-implementation`.
 
@@ -41,10 +44,28 @@ A single FastAPI service built from the `base-research-agent` template, exposing
 brief (vertical · ICP band · geography) and produce a qualified, route-clustered prospect list in HubSpot with
 the cadence scheduled.**
 
-Inside it, a Claude Agent SDK loop calls a small set of generic MCP tools — search a declared registry, verify
-a business identity, resolve the owner, classify rollup-vs-local, cluster routes — all parameterized by a
-**vertical manifest**. Sourcing state and provenance live in Supabase; anything a human touches lives in
-HubSpot. The cadence is HubSpot's, not ours.
+Inside it, a **deterministic pipeline** of five generic stages — search a declared registry, verify a business
+identity, resolve the owner, classify rollup-vs-local, cluster routes — all parameterized by a **vertical
+manifest**. The Claude Agent SDK is called at exactly **two judgment nodes** (`resolve_owner`,
+`classify_rollup`), each returning structured output with a citation; the other three stages are ordinary
+HTTP and arithmetic. Sourcing state and provenance live in Supabase; anything a human touches lives in
+HubSpot.
+
+**Why a pipeline rather than an agent loop** *(revised 2026-09-26 — this reverses the original decision)*.
+Three of the five stages never needed judgment, and the properties the tickets demand actively fight
+model-driven control flow: route clustering must be stable across runs, promotion must be idempotent, and
+provenance-as-a-write-gate means every field must trace to a specific call. A loop that re-decides its own
+order each week makes all three harder, costs several times more per run, and is far more awkward to test
+against fixtures. The judgment that genuinely exists — *is this a national rollup?*, *who actually owns this
+business?* — is isolated at two nodes where it can be evaluated, cached and cited. This keeps the whole
+stack, including the Agent SDK; it changes only who decides the order.
+
+**Where the agent does earn its keep: authoring manifests.** The open-ended work is not the weekly run, it is
+*"what is the authoritative registry for collision centers, and what disqualifies one?"* — a research task
+performed once per vertical. `app/manifests/` carries an agent that researches a brief and proposes a DRAFT
+manifest row with every field cited; a human activates it on the CLI, recording the per-source terms-of-use
+decision as they do. That makes M9 a real test rather than an assertion: vertical #2 is *review a proposal*,
+not *write a row*.
 
 The system's job ends the moment a qualified prospect and its scheduled first touch exist in HubSpot. It does
 not call, does not knock, and (for now) does not send.
@@ -56,18 +77,28 @@ not call, does not knock, and (for now) does not send.
 ### Stack & libraries
 
 Inherited wholesale from `base-research-agent`, because a stack the team already enforces beats a better one
-they don't: **FastAPI · Claude Agent SDK (`ClaudeSDKClient`) · Python 3.12 · Pydantic v2 · Supabase/Postgres ·
-structlog (`domain.component.action_state`) · MyPy + Pyright strict, zero suppressions · uv · pytest · ruff ·
-Docker Compose · vertical slice architecture.**
+they don't: **FastAPI · Claude Agent SDK · Python 3.12 · Pydantic v2 · Supabase/Postgres · structlog
+(`domain.component.action_state`) · MyPy + Pyright strict, zero suppressions · uv · pytest · ruff · Docker
+Compose · vertical slice architecture.**
+
+The Agent SDK is scoped to the two judgment nodes and the manifest-authoring agent — it is not the weekly
+run's control flow. See *Recommended approach*.
 
 Deliberately **not** carried over for the MVP:
 
 - **The Vite/React frontend.** See *Review surface* below.
 - **Redis.** The template requires it for caching, sessions and semantic indexing. This service has one user,
-  no sessions and no semantic index. Add it only if a run-lock is needed. *(YAGNI — revisit if wrong.)*
+  no sessions and no semantic index. **Decided 2026-09-26: stays out.** One weekly run by one user cannot
+  race itself; revisit only if a run-lock genuinely becomes necessary.
 - **Langfuse.** Open question below; tracing a single-user weekly job may not earn its keep.
+- **A Postgres container.** Supabase is **hosted**, two free projects (dev and prod), so Compose runs the
+  application alone. A local test run writing into real sourcing state is a cheap mistake to prevent.
 
 Added: an HTTP client for the source registries. No new framework.
+
+**Runtime.** Local Mac first, a small VPS when the weekly run becomes something worth missing. Config is
+strict 12-factor so that move is env vars only. Scheduling stays external — launchd now, cron later, against
+the trigger endpoint.
 
 ### Data model — the shape
 
@@ -77,12 +108,16 @@ That keeps M4 honest — there is no shadow CRM — while giving the system a me
 **Supabase (the sourcing workbench — machine state, never human-edited):**
 
 - `vertical_manifest` — the M9 lever. Declares the authoritative source(s), disqualifier rules, qualifying
-  signals, ICP band and vocabulary for one vertical. Versioned.
+  signals, ICP band and vocabulary for one vertical. Versioned, and **lifecycled `DRAFT → ACTIVE`**: the
+  authoring agent writes drafts, a human activates them on the CLI while recording the terms-of-use decision
+  per source. A source without that decision cannot be marked active.
 - `sourcing_run` — one brief execution: vertical, geography, ICP band, timings, counts.
 - `candidate` — a sourced business pre-qualification, with every field carrying its own provenance.
 - `disqualification` — candidate + the rule that fired + when. **This is what stops the engine re-sourcing the
   same national rollups every week**, which a HubSpot-only model cannot do.
 - `promotion` — the link from a candidate to the HubSpot company/contact ids it became.
+- `cadence_state` — **the schedule only**: which touch is due, which cycle we're in, parked or live. Not
+  outcomes. Added because our HubSpot tier has no sequences to hand the state machine to (see *Cadence*).
 
 **HubSpot (the human surface — everything a person reads or edits):**
 
@@ -97,9 +132,15 @@ That keeps M4 honest — there is no shadow CRM — while giving the system a me
   phone *before* create; the portal already holds 3,118 contacts and 1,040 companies of mixed provenance.
   Rate limits apply per tier.
 - **FMCSA / SAFER** (first source) — public federal records: MC numbers, authority status, fleet size, BOC-3
-  filings. Bulk census files plus a keyed lookup API. Terms of use to confirm before first use.
+  filings. **QCMobile is a *lookup* API keyed on USDOT/MC number, not a search-by-geography API**, so the
+  shape is: pull the bulk Company Census File, filter to DFW counties and active broker authority, then
+  QCMobile per record for detail. Free, and licensed **public domain (CC PDM 1.0)** — the terms-of-use
+  decision for this source is close to a formality, but still gets recorded at `manifest activate`.
 - **Google Places** — paid, per-request. Needed for address and phone verification and for the review-name
-  signal that often surfaces an owner. Cost is per-run and must be bounded.
+  signal that often surfaces an owner. **Runs after qualification, never before** — the registry pull and
+  disqualifier rules are free, so nothing paid touches a candidate the free filters would have dropped.
+  Capped at 500 calls per run as a circuit breaker against a runaway loop; that is a safety valve, not a
+  budget target (see *Cost*).
 - **Secrets** — `.env`, never committed. The template's existing posture; nothing new.
 - **Auth** — single internal user. **No multi-tenant auth, no Supabase RLS for the MVP.** Building either now
   would be scaffolding for the "product later" path the PRD put in Non-goals.
@@ -112,9 +153,17 @@ not a feature slice. Freight's manifest names FMCSA, asset-based-carrier exclusi
 an API", and freight vocabulary. Fire's names the Texas Fire Marshal registry, rollup exclusion, and inspection
 language. Same tools, different data.
 
-**Five generic tools, not one per source** — following the template's "fewer, smarter tools" principle. Search a
-declared registry · verify a business identity · resolve the owner · classify rollup-vs-local · cluster routes.
-Adding freight after fire adds a manifest, not a toolchain.
+**Five generic stages, not one per source** — following the template's "fewer, smarter tools" principle.
+Search a declared registry · verify a business identity · resolve the owner · classify rollup-vs-local ·
+cluster routes. Adding freight after fire adds a manifest, not a pipeline. One module per stage, registration
+a one-line append — which is also what keeps parallel tickets mergeable, since each adds a file rather than
+editing a shared one.
+
+**Cost: a circuit breaker, not a ceiling.** No monthly budget is set; the first runs measure themselves, with
+per-run cost logged from the scaffold onward rather than bolted on at the enrichment ticket. The 500-call
+Places cap exists so a bug cannot run up a bill overnight. Expected shape at one run a week, ~20 qualified
+names out: roughly 600 census records in, ~200 after free filters, ~120 after disqualification, **~80
+verified**, ~40 with a named owner, top 20 clustered.
 
 **Evidence grounding, generalized to field level.** The template mandates `evidence_grounding` before every
 response to prevent hallucination. Here the analogue is: **every prospect field carries source URL, retrieval
@@ -128,8 +177,24 @@ recreates that: another login, another surface, another sync. Sourced prospects 
 `pending review` stage in HubSpot with provenance on the record. Cost: bulk accept/reject is clunkier than a
 custom screen. Reversible — the template's frontend pattern remains available if review proves painful.
 
-**Cadence stays HubSpot's.** Tasks and workflows drive the three touches; we do not rebuild a scheduler.
-Rebuilding it would put tasks in two places, which is the exact failure M4 exists to prevent.
+**Cadence: we own the schedule, HubSpot owns the outcomes.** *(revised 2026-09-26 — this reverses "cadence
+stays HubSpot's", on evidence.)* Spike 3 is answered: the portal offers seats `core`, `sales-starter`,
+`service-starter`, `view-only` — no professional seat, therefore **no sequences**, and Starter workflows are
+capped at roughly 10 actions with one workflow per trigger and no branching. There is no HubSpot scheduler to
+hand a three-touch state machine to, so `app/cadence/` holds it.
+
+The original worry — tasks in two places, the exact failure M4 exists to prevent — is answered by splitting
+on *fact*, not on *record*: **Supabase holds which touch is due, which cycle we're in, and whether the
+prospect is parked; HubSpot holds whether it happened and what was said.** Each fact has one home. Tasks
+remain the human surface; outcomes are read, never mirrored.
+
+A touch is done when its Task is complete **or** a matching activity was logged on the contact after that
+task was created, ties breaking toward done. Cycle position is reconstructed from logged activity rather than
+reset, so a prospect already touched twice by hand resumes at touch three.
+
+Because `cadence/` depends only on `core/` and the HubSpot client, it is a domain of its own rather than
+promotion's back half — and it builds in parallel with the entire sourcing line instead of waiting behind
+qualification and routing.
 
 **Scheduling: boring on purpose.** One weekly run plus ad-hoc. A scheduled trigger against a FastAPI endpoint.
 No Celery, no queue framework — YAGNI at one user, one run a week.
@@ -146,8 +211,13 @@ Things this approach depends on that do not exist yet:
   single problem in the system and the one M6 measures.
 - **HubSpot custom properties** for provenance, route cluster and priority score.
 - **DFW geographic route clustering** — done by hand today (Olympic Drive; the 75238 pair).
+- **A three-touch cadence state machine.** Newly ours, since the tier has no sequences to hand it to. Nothing
+  like it exists today — the 22 open tasks were created by hand and none has advanced.
+- **An adoption path for prospects we did not source**, so the 22 can enter the machine without provenance
+  they never had.
 - **A `$999 assessment` deal pipeline in HubSpot.** It does not exist — 9 deals, all from January, none at that
-  value. M3 cannot be measured until it does.
+  value. **Decided 2026-09-26: not creating it yet.** M3 stays unmeasurable and the Friday report renders it
+  *not configured*, never `0` — an uninstrumented zero and a real zero are different facts.
 - **A rewritten opener.** Not engineering, but it blocks the email leg. E16: three AI-based rejections against
   two notes where the opener was *"local AI expert"*, contradicting the playbook's own rule.
 
@@ -155,25 +225,38 @@ Things this approach depends on that do not exist yet:
 
 ## Spikes & experiments
 
-**Spike 1 — Is the constraint sourcing, or discipline?** *(blocks the first slice)*
+**Spike 1 — Is the constraint sourcing, or discipline?** *(runs alongside Waves 1–2; no longer blocks a slice)*
 - **Question:** would a sourcing engine help, or does the queue simply not get worked?
 - **Spike:** work the 22 existing HubSpot prospects through the three-touch cadence. **Timebox: 2 weeks.**
 - **Decision rule:** ≥3 decision-maker conversations/week → sourcing is the bottleneck, build the engine as
-  specified. Tasks still uncompleted → the first slice is cadence enforcement, not sourcing, and the
-  architecture's centre of gravity moves.
+  specified. Tasks still uncompleted → cadence enforcement carries more weight than sourcing, and the wave
+  order shifts to put `cadence/` ahead of the sourcing line.
+- **It ends in adoption either way.** Surviving prospects of the 22 are adopted into the cadence machine when
+  the spike closes, so the finding arrives attached to a lever instead of as an observation. T1, T2 and T3
+  are built during the two weeks because they are needed under either outcome.
 
-**Spike 2 — Is FMCSA enough on its own?**
+**Spike 2 — Is FMCSA enough on its own?** *(widened 2026-09-26 — it now tests two fields, not one)*
 - **Question:** can we get from an MC number to a named principal *and* a headcount band for DFW non-asset
   brokerages?
-- **Spike:** sample 50 DFW brokerages through FMCSA alone. **Timebox: 1 day.**
-- **Decision rule:** ≥50% yield a named principal → FMCSA is the spine. Below that → the freight manifest needs
-  a second source (Texas SOS or Google Places) from day one, and M6's 70% target needs re-basing.
+- **Spike:** filter the bulk Company Census File to DFW brokerages and sample 50 through QCMobile. **Timebox:
+  1 day.** Running it against the census file rather than live lookups makes it cheaper, repeatable, and
+  possible before the webkey exists.
+- **Expect the headcount half to fail.** FMCSA's headcount-adjacent fields — power units, drivers — describe
+  *carriers*. A non-asset brokerage shows near-zero regardless of how many people sit in its office, and the
+  ICP band is *20–200 employees with an office function*. If that holds, headcount comes from Places and web
+  signals, and M8's "populated **or absent**" clause will be exercised often and honestly.
+- **Decision rule:** ≥50% yield a named principal → FMCSA is the spine for identity. Below that → the freight
+  manifest needs a second source (Texas SOS or Google Places) from day one, and M6's 70% target needs
+  re-basing. Headcount yield is recorded separately and is expected to drive the ICP filter to Places.
 
-**Spike 3 — What does our HubSpot tier actually support?**
-- **Question:** do we have sequences, or only tasks and workflows?
-- **Spike:** check the portal. **Timebox: 1 hour.**
-- **Decision rule:** sequences available → use them for the cadence. Not available → tasks plus workflows, and
-  the three-touch state machine is thinner than assumed.
+**Spike 3 — What does our HubSpot tier actually support?** — **ANSWERED 2026-09-26.**
+- **Finding:** portal 244766495 offers the seats `core`, `sales-starter`, `service-starter`, `view-only`. No
+  professional seat, so **no sequences**; Starter workflows are capped at roughly 10 actions, one workflow per
+  trigger, no branching. *(Read from the portal's seat list — worth reconfirming in Settings → Account &
+  Billing before anyone spends money on the strength of it.)*
+- **Consequence:** the three-touch state machine has nowhere to live in HubSpot, so we own it. See *Cadence*.
+  The alternative — upgrading to Sales Hub Professional — was considered and declined for now: a recurring
+  per-seat bill on an internal tool with no revenue yet.
 
 **Spike 4 — Sending domain.** *(the one-way door)*
 - **Question:** can we send autonomously without risking `compumatrice.com`?
@@ -186,14 +269,21 @@ Things this approach depends on that do not exist yet:
 
 ## Open questions
 
-- [ ] **Does Spike 1 change the first slice?** Everything downstream assumes sourcing is the bottleneck.
-- [ ] **Redis — needed at all?** The template requires it; this service may not. Decide when a run-lock is.
+- [x] **Does Spike 1 change the first slice?** **Decided 2026-09-26: no — it changes the wave order, not the
+      starting point.** T1/T2/T3 are needed under either outcome and are built while it runs; the spike ends
+      in adoption regardless.
+- [x] **Redis — needed at all?** **Decided 2026-09-26: no.** One weekly run by one user cannot race itself.
 - [ ] **Langfuse — keep or drop?** Tracing is valuable for an agent loop, but this is one user and one weekly
-      run. Cheap to add later; noise to carry now.
-- [ ] **Terms of use per source.** FMCSA, Google Places and any state registry each carry their own. Needs a
-      decision per source, recorded in the manifest.
-- [ ] **Google Places cost ceiling per run** — unbounded verification calls are the obvious way to make this
-      expensive.
+      run — and with the run now a deterministic pipeline, structlog plus per-run cost logging covers most of
+      what tracing would have given us. Leaning drop; revisit if the judgment nodes prove hard to debug.
+- [x] **Terms of use per source.** **Decided 2026-09-26:** recorded in the manifest at
+      `lpe manifest activate <id> --accept-terms <sources>`; a source without the decision cannot be marked
+      active. FMCSA/QCMobile is public domain (CC PDM 1.0); Google Places still needs a read of its terms.
+- [x] **Google Places cost ceiling per run** — **Decided 2026-09-26:** no ceiling, a circuit breaker. 500
+      calls per run, per-run cost logged from T1, the ceiling set from observation rather than guess.
+- [ ] **Who reviews manifest *quality*, beyond terms of use?** New, and raised by the authoring agent: nothing
+      currently catches a plausible-but-wrong disqualifier rule or a mis-chosen authoritative source. That
+      failure is silent and produces a credible list of the wrong companies — which is E10 exactly.
 - [ ] **Who rewrites the opener, and by when?** Blocks the email leg regardless of architecture.
 - [x] **New repo, or a slice inside an existing `base-*` project?** **Decided 2026-09-26: new repo.** The
       service is built in `my-example-app/` under `app/`, not as a slice inside a `base-*` project —

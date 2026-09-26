@@ -259,7 +259,8 @@ falls, the WRONG condition in §4 is triggering.
       public data source of the four, and it has had zero outreach so there is no sunk effort to abandon.
       Against that: all current momentum and all 34 live contacts are in fire protection, and the only
       live audit is in Law. Fire's own designation as *practice-only* argues it should not be the
-      volume vertical. **Founder's call.**
+      volume vertical. **Decided 2026-09-26: Freight & 3PL.** Fire is still seeded as the second manifest,
+      because two verticals is how M9 gets proven rather than asserted.
 - [ ] **Does the niche still need choosing at all?** The discovery tracker's stated purpose is to pick
       one niche from 30 conversations and it is 1 conversation in. Pursuing several verticals in
       sequence is a different strategy from choosing one. Which is it — and if it's the former, does the
@@ -268,6 +269,11 @@ falls, the WRONG condition in §4 is triggering.
       tasks sit open in HubSpot with 0 completed and 11 past due. An agent that produces more prospects
       adds rows to a queue nobody is working. Does the MVP need to start by closing the loop on tasks
       that already exist, before sourcing new ones?
+      **Partly answered 2026-09-26.** Spike 1 (2 weeks, working those 22 by hand) runs alongside the first
+      two waves and **ends in adoption** — the survivors enter the cadence state machine either way, so the
+      finding arrives with a lever attached. The MVP now builds cadence enforcement *and* sourcing, with
+      cadence landing earlier than originally sliced. The open half is what the spike's number turns out
+      to be, and whether it shifts the wave order further.
 - [ ] **Fix the opener before scaling it.** E16 shows three AI-based rejections alongside two notes where
       the opener was *"local AI expert"* — against the playbook's own rule. Automating outreach that
       leads with AI would industrialize a known failure. Who rewrites the opener, and by when?
