@@ -5,20 +5,22 @@ import os
 
 load_dotenv()
 
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    raise RuntimeError("DATABASE_URL is not set; add it to your .env file")
+
 config = {
     "llm": {"provider": "openai", "config": {"model": "gpt-4o-mini"}},
     "vector_store": {
         "provider": "supabase",
         "config": {
-            "connection_string": "postgresql://postgres:postgres@127.0.0.1:5432/postgres",
+            "connection_string": database_url,
             "collection_name": "memories",
         },
     },
 }
 
 openai_client = OpenAI()
-
-print(f"database_url::  {os.environ['DATABASE_URL']}")
 
 print("here 111")
 memory = Memory.from_config(config)
