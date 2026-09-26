@@ -1,0 +1,88 @@
+[project]
+name = "local-prospect-engine"
+version = "0.1.0"
+description = "Local Prospect Engine — brief in, route-clustered prospects in HubSpot with a three-touch cadence scheduled."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.14",
+    "asyncpg>=0.30",
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0",
+    "structlog>=24.4",
+    "uvicorn[standard]>=0.32",
+]
+
+# T2 adds the `lpe` CLI here — a two-line change, deliberately left absent until it has a command:
+# [project.scripts]
+# lpe = "app.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    "mypy>=1.13",
+    "pyright>=1.1.390",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# The AI layer's skill references and the pre-existing MCP tooling are not application code;
+# alembic/versions is generated. Lint scope is app/ + tests/ + alembic/env.py.
+extend-exclude = [".agents", ".archon", ".claude", "_tasks", "docs", "tooling", "alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "ANN",  # flake8-annotations — every signature is typed
+    "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN401"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["app", "tests", "alembic"]
+# `mypy .` passes "." and overrides `files`; exclude keeps the scope identical either way.
+exclude = ["^(\\.agents|\\.archon|\\.claude|\\.venv|_tasks|docs|tooling)/"]
+# Zero suppressions is a ground rule — make an unused one an error rather than dead weight.
+warn_unused_ignores = true
+# `Any` is banned in our own code, enforced by tests/test_structure.py rather than by
+# `disallow_any_explicit` — that flag also rejects third-party TypedDicts (SettingsConfigDict)
+# whose definitions we do not control.
+
+[tool.pyright]
+pythonVersion = "3.12"
+# Without these pyright resolves against the system interpreter and reports every
+# third-party import as unresolved, which cascades into hundreds of "unknown type" errors.
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "strict"
+include = ["app", "tests", "alembic"]
+exclude = ["**/__pycache__", ".venv"]
+reportMissingTypeStubs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"

@@ -1,0 +1,23 @@
+# Compose runs the application alone.
+#
+# There is deliberately NO `postgres` service: Supabase is hosted, with one free project for dev
+# and one for prod (D11). A local container would also mean a local test run could write into real
+# sourcing state — a cheap mistake to prevent by not having the option.
+#
+# Also absent on purpose and staying absent: Redis, Langfuse, Celery/queues, a frontend.
+# Scheduling is external (launchd now, cron later) against the trigger endpoint, so there is no
+# scheduler service here either.
+
+services:
+  app:
+    build: .
+    image: local-prospect-engine
+    env_file:
+      # Optional so `docker compose config` validates in a fresh clone. A missing DATABASE_URL
+      # still fails loudly — at application startup, where the error names the variable.
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
