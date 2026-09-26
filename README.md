@@ -94,7 +94,7 @@ raising with the variable name at startup rather than failing partway through a 
 
 ### FullExample
 
-`FullExample/` is a larger system with roughly 30 variables — LLM and embedding providers, Neo4j
+`FullExample/` is a larger system with 27 variables — LLM and embedding providers, Neo4j
 credentials, chunking and rate-limit tuning. Follow its own README rather than this section.
 
 ## Secrets
