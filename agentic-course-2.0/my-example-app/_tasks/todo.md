@@ -103,3 +103,52 @@ would not have been cheap two waves in. Worth re-running `/rules-check-drift` on
 **Still unresolved and deliberately so.** Who reviews manifest *quality* beyond terms of use (T12 can propose
 a plausible-but-wrong source — E10 all over again); Google Places terms and real pricing; whether to keep
 Langfuse. All recorded in the architecture doc's open questions rather than guessed at.
+
+---
+
+# T1 — Project scaffold, core infrastructure, provenance primitive
+
+**Date:** 2026-09-26 · **Branch:** `docs/local-prospect-engine-tickets` · **Status:** done — all gates green
+**Plan:** `.claude/plans/t1-scaffold-core-provenance.md` · **Report:** `.claude/reports/t1-scaffold-core-provenance-report.md`
+
+## Tasks
+
+- [x] `pyproject.toml` + `.python-version` — uv project, ruff · MyPy strict · Pyright strict · pytest
+- [x] `app/shared/provenance.py` — `ProvenancedValue[T]`, `RetrievalMethod`, `is_promotable()`
+- [x] `app/core/config.py` — pydantic-settings, strict 12-factor, required fields undefaulted
+- [x] `app/core/logging.py` — structlog JSON, correlation id, typed (no `Any`)
+- [x] `app/core/exceptions.py` — `LocalProspectEngineError` + three derivations
+- [x] `app/core/database.py` — async engine/session, `DeclarativeBase`, lazily built
+- [x] `app/core/cost.py` — `RunCost`, `BillableKind`, `check_cap`
+- [x] `app/core/middleware.py` + `app/core/dependencies.py`
+- [x] `app/main.py` — lifespan, middleware, centralized handlers, `GET /health`
+- [x] `alembic/` async `env.py` + `0001_baseline` (no domain tables)
+- [x] `docker-compose.yml` (app only) + `Dockerfile` + `.env.example`
+- [x] Tests: config · logging · cost · provenance · health · structure — 68 passing
+- [x] Full validation: ruff, ruff format, mypy, pyright, pytest — all green, zero suppressions
+
+## Review
+
+**What worked.** Building the toolchain first and proving it green on an empty project caught the
+one configuration error that would otherwise have surfaced as ~50 bogus type errors at the end:
+pyright was resolving against the system interpreter rather than `.venv`, so every third-party
+import read as unknown. Five minutes at Phase 1; an afternoon at Phase 5.
+
+**Where the plan met reality.** Two of its prescriptions needed checking rather than copying, and
+both were checked empirically before writing code:
+
+- `Settings.model_validate({})` **does** load the environment (verified), so the plan's
+  suppression-free workaround is correct — worth confirming, since `model_validate` bypasses
+  `__init__` and it was not obvious that pydantic-settings' sources still run.
+- `extra="forbid"` does **not** reject unknown *process* env vars — only unknown keys in `.env`.
+  AC3's "fails loudly on an unknown one" holds for the surface a person actually edits. The test
+  and `.env.example` now say precisely that instead of implying more.
+
+**What to improve.** The plan's `Any` guard was specified as a grep for `: Any` / `-> Any`; it
+fired on this project's own docstrings, which discuss the rule. Parsing the AST is barely more code
+and has no false positives. Worth being the default for "assert an absence" tests — a guard that
+cries wolf gets muted, which is worse than not having it.
+
+**Left undone, and why.** The Alembic round-trip was validated against a throwaway local Postgres
+container rather than Supabase: assumption #1 of the plan (a reachable Supabase project) is still
+unmet. The tooling is proven; the dev and prod projects still need creating before T2.
