@@ -28,7 +28,7 @@ it earlier.
 cd mem0-agent
 python -m venv mem0-venv && source mem0-venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env    # then fill it in
+cp .env.example .env    # see Environment setup below
 python v1-basic-mem0.py
 ```
 
@@ -53,19 +53,52 @@ INITIAL.md  →  /generate-pydantic-ai-prp INITIAL.md  →  /execute-pydantic-ai
 - `FullExample/` — a complete agentic RAG system (Pydantic AI + pgvector + Neo4j/Graphiti +
   FastAPI). Has its own README and setup.
 
-## Configuration
+## Environment setup
 
-Every subproject reads config from a local `.env`, copied from the `.env.example` beside it. Keys
-in use across the repo:
+Each runnable subproject reads its own local `.env`, copied from the `.env.example` sitting beside
+it. Nothing is read from a repo-wide file.
+
+| Copy this | To | Used by |
+|---|---|---|
+| `mem0-agent/.env.example` | `mem0-agent/.env` | all `mem0-agent/` scripts |
+| `my-ai-prp-project/FullExample/.env.example` | `FullExample/.env` | the agentic RAG system |
+| `my-ai-prp-project/PRPs/examples/main_agent_reference/.env.example` | alongside it | the reference agent |
+
+### mem0-agent
 
 ```bash
-OPENAI_API_KEY=      # mem0-agent, my-ai-prp-project
-MEM0_API_KEY=        # mem0helloworld.py (hosted Mem0 API)
-MODEL_CHOICE=        # defaults to gpt-4o-mini
-DATABASE_URL=        # v2-supabase-mem0.py, FullExample
-SUPABASE_URL=
-SUPABASE_KEY=
+cd mem0-agent
+cp .env.example .env
 ```
 
-`.env` files are gitignored. Nothing in this repo should ever contain a real key — if you add code
-that needs one, read it with `os.getenv()` and fail loudly when it's missing.
+Then fill in `.env`. What each script actually needs:
+
+| Script | Requires | Optional |
+|---|---|---|
+| `v1-basic-mem0.py` | `OPENAI_API_KEY` | — |
+| `v2-supabase-mem0.py` | `OPENAI_API_KEY`, `DATABASE_URL` | `MODEL_CHOICE` |
+| `mem0helloworld.py` | `MEM0_API_KEY` | — |
+| `test_supabaseconn.py` | nothing — it hardcodes `localhost:5432` | — |
+
+- **`OPENAI_API_KEY`** — from <https://platform.openai.com/api-keys>.
+- **`MEM0_API_KEY`** — from <https://app.mem0.ai>, for the hosted Mem0 API only.
+- **`MODEL_CHOICE`** — sets both the chat model and Mem0's memory-extraction model in v2.
+  Defaults to `gpt-4o-mini`.
+- **`DATABASE_URL`** — Postgres with pgvector. The comments in `.env.example` give the local and
+  hosted forms; `test_supabaseconn.py` is the fastest way to confirm it before debugging anything
+  else.
+
+`v2-supabase-mem0.py` guards `DATABASE_URL` and `mem0helloworld.py` guards `MEM0_API_KEY`, each
+raising with the variable name at startup rather than failing partway through a run. A missing
+`OPENAI_API_KEY` is not guarded — it surfaces later, as an auth error from the OpenAI client.
+
+### FullExample
+
+`FullExample/` is a larger system with roughly 30 variables — LLM and embedding providers, Neo4j
+credentials, chunking and rate-limit tuning. Follow its own README rather than this section.
+
+## Secrets
+
+`.env` files are gitignored; only `.env.example` files are tracked. Nothing in this repo should
+ever contain a real key — if you add code that needs one, read it with `os.getenv()` and fail
+loudly when it is missing.
