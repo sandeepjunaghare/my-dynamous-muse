@@ -172,9 +172,10 @@ in that PR — logged here rather than as GitHub issues, matching how this file 
 - [ ] **#7 · the `Any` guard misses `cast(Any, ...)` and string annotations**
       (`tests/test_structure.py`). It is the only backstop, since deviation #10 declines mypy's
       `disallow_any_explicit`. Low risk; extend the AST walk when convenient.
-- [ ] **#8 · `os.environ.setdefault("DATABASE_URL", ...)`** in `tests/conftest.py` won't override an
+- [x] **#8 · `os.environ.setdefault("DATABASE_URL", ...)`** in `tests/conftest.py` won't override an
       exported value, so a developer with a real hosted URL could run tests against real infrastructure.
-      **Do before T4**, the first ticket whose tests touch a database.
+      ~~Do before T4~~ — **done in the Wave 2 prep pass below**: forking into worktrees copies `.env`
+      into each one, which turned this from theoretical into live a ticket early.
 
 ---
 
@@ -198,3 +199,50 @@ mode (6543) is the one that breaks them, and that warning stands unchanged.
 `statement_cache_size` workaround.
 
 **Recorded in:** `.env.example`, `app/core/config.py`, `alembic/env.py`, and the T1 plan's AMENDMENTS.
+
+---
+
+# Wave 2 prep — make the repo safe to fork (2026-09-27)
+
+**Branch:** `docs/d15-supabase-session-pooler` · **Status:** code done, one item blocked on a human
+**Why now:** Wave 2 is T2 ∥ T3 in two worktrees. T1 left four things that fail *identically in both
+branches*, which is the worst shape for a merge — each branch fixes them differently and the conflict is
+in the fix, not the feature. Cheaper to fix once on the trunk than twice in parallel.
+
+## Tasks
+
+- [x] **B1 · the structure test encoded a snapshot, not its intent.** `test_slices_are_not_scaffolded_
+      ahead_of_their_tickets` asserted `present == {"core", "shared"}`. T2 adds `manifests/` and T3 adds
+      `promotion/`, so both branches went red on the same line and conflicted on merge. Inverted to assert
+      the rule it always meant — *no package under `app/` is empty* — which slices satisfy by having code
+      in them. Never needs editing again as slices land. Split the "core and shared exist" half into its
+      own test so the two assertions fail for distinguishable reasons.
+- [x] **B3 · Alembic single-head guard added** (`test_migrations_have_exactly_one_head`, via
+      `ScriptDirectory.get_heads()`). Two branches adding migrations both set
+      `down_revision = "0001_baseline"`; git merges that cleanly because the files do not overlap, and the
+      break only appears at `alembic upgrade head` — deploy-time damage from a merge-time mistake. Added
+      now, while it costs nothing, because Wave 3 (T4 ∥ T11) is where it actually bites.
+- [x] **Both guards verified by making them fail**, not by assuming: an empty `app/manifests/` trips B1
+      and passes once it holds a module; two probe migrations off `0001_baseline` trip B3. Probes removed.
+- [x] **Review finding #8 fixed** — `conftest.py` now assigns `DATABASE_URL` unconditionally instead of
+      `setdefault`. Pulled forward from T4 because the worktree setup copies `.env` into every worktree.
+- [x] **B4 · lockfile and migration merge policy recorded** in `.claude/references/conventions.md` (new
+      `## merge` section): `uv.lock` is regenerated on conflict, never hand-merged; a forked migration
+      rebases its `down_revision` rather than reaching for `alembic merge`.
+- [x] **`.env` driver prefix fixed** — it read `postgresql://`, which resolves to the sync psycopg
+      dialect and makes `create_async_engine` raise *"The asyncio extension requires an async driver"*.
+      Now `postgresql+asyncpg://`, matching `.env.example`. Unrelated to the rotation; found while
+      checking it.
+- [ ] **B2 · rotate the password in `.env`** — **blocked, needs the human.** The value is stale and I
+      cannot supply the new one. It must be updated *before* `/worktree-create` runs, because the setup
+      subagent copies `.env` into each worktree and a dead credential would propagate into both.
+
+## Deliberately not done
+
+- **Per-worktree database.** One hosted dev project cannot serve two worktrees running
+  `alembic upgrade head` — they fight over `alembic_version`. Decided: a throwaway local Postgres per
+  worktree while iterating on migrations, hosted dev reserved for a pre-merge check, one branch at a time.
+  No code change; it is a working rule, recorded here so Wave 3 does not rediscover it.
+- **Wave 3 held to two worktrees, not three.** The doc's table says T4 ∥ T11 ∥ T12. T4 and T11 both
+  migrate and are the first real exercise of the B3 guard; three-way parallelism should not be the
+  experiment that also tests an unproven mechanism. Revisit once the guard has caught something real.

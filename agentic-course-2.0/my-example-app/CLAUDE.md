@@ -17,22 +17,26 @@ five stages (registry search, business verification, route clustering) never nee
 place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
-**Today** — no application code yet; this repo is the AI layer plus the specs.
+**Today** — T1 has shipped: the service boots, validates clean, and the provenance primitive exists. No
+feature slice is built yet.
 ```
+app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
+app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
+app/shared/provenance.py                    # ProvenancedValue[T] + is_promotable() — the write-gate as a type
+alembic/                                    # async env.py + 0001_baseline, which defines no domain tables
+tests/                                      # core · shared · the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
 docs/tickets/local-prospect-engine.md       # the MVP sliced into tickets, with waves and gates
 tooling/mcp/codebase_search.py              # codebase-search MCP server, wired in .mcp.json
 ```
 **Planned** — decided, not built. **This folder (`my-example-app/`) is the root**: the service is built here
-under `app/`, not as a slice inside a `base-*` project. (Git's toplevel is the parent `my-dynamous-muse` and
-nothing here is tracked yet.) Slices map 1:1 to the decided data model and tool set; confirm names at the
-first slice.
+under `app/`, not as a slice inside a `base-*` project. (Git's toplevel is the parent `my-dynamous-muse`;
+this folder is tracked inside it.) Slices map 1:1 to the decided data model and tool set; confirm names at
+the first slice. `core/` and `shared/` above are their built counterparts — the rules on them still hold:
+infra that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
 ```
 app/
-  main.py          # FastAPI app + lifespan; routers mounted here; the weekly-run trigger endpoint
-  core/            # config · logging · database · exceptions · dependencies — infra that predates any feature
-  shared/          # only what 3+ slices need; until the third consumer, duplicate
   manifests/       # vertical_manifest (DRAFT → ACTIVE) + the authoring agent — the M9 lever
   sourcing/        # brief → sourcing_run → candidate, every field carrying its own provenance
   qualification/   # disqualifier rules + Intensity×Automatable score; owns `disqualification`
@@ -90,11 +94,11 @@ client, so it builds in parallel with the whole sourcing line.
   you're about to make sits on those lists unanswered, ask.
 
 ## Commands
-Nothing is scaffolded yet — no `pyproject.toml`. Decided toolchain, to be wired at the first slice:
+Wired at T1 and green:
 `uv sync` · `uv run pytest` · `uv run mypy . && uv run pyright` · `uv run ruff check .` ·
 `uv run uvicorn app.main:app --reload` · everything at once: `/piv-validate`
 
-Manifests are reviewed on the CLI — no frontend, no second login:
+Manifests are reviewed on the CLI — no frontend, no second login. **T2 builds these; they do not exist yet:**
 `uv run lpe manifest propose "<brief>"` · `uv run lpe manifest show <id>` ·
 `uv run lpe manifest activate <id> --accept-terms <sources>` (where the terms-of-use decision is recorded).
 

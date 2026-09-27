@@ -3,11 +3,21 @@
 ``DATABASE_URL`` is required config, so it is set before anything imports a module that reads
 settings. The value is never connected to — nothing in T1 touches a database, by design:
 ``/health`` must not, and the provenance type has no storage.
+
+The assignment is unconditional, **not** ``setdefault``. A developer with a real hosted URL
+exported in their shell — which is now every worktree, since the worktree setup copies ``.env`` —
+would otherwise have that URL flow into the test process, and the first test that opens a
+connection would run against real Supabase. Nothing here opens one today; T4 is where it starts,
+and the cost of learning this then is a polluted sourcing table. A test that needs a live database
+gets a fixture that names the database it wants, rather than inheriting one by accident.
+
+Tests that care about the value ``Settings`` sees monkeypatch it per-test, which still works —
+this only fixes the floor.
 """
 
 import os
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test"
 
 from collections.abc import AsyncGenerator, Iterator
 

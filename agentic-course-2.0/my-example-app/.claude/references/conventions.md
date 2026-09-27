@@ -34,6 +34,21 @@
 - The Summary explains WHY this change exists (the intent), not just what it touches.
 - Validation states what was actually run/verified — not aspirational.
 
+## merge
+
+**Mechanical (regex-checkable):**
+- `uv.lock` is **never** hand-resolved. On a conflict: take either side whole
+  (`git checkout --ours uv.lock` or `--theirs`), then `uv lock` and commit the regenerated file.
+- `alembic/versions/` must stay a single chain. A branch whose migration forked from an older tip
+  rebases its `down_revision` onto the current head before merging; `alembic merge` only if both
+  revisions have already been applied to a real database.
+
+**Judgment (rubric for the judge):** <!-- #merge-quality -->
+- A merge commit's body names what the parallel branches each contributed, so the linear history
+  below it is still readable.
+- Generated files (`uv.lock`) are regenerated, never edited — a hand-merged lockfile resolves the
+  conflict and silently invents a dependency set nobody resolved.
+
 ## review
 
 **Mechanical (regex-checkable):**
