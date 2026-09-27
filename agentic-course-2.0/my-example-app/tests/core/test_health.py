@@ -2,13 +2,15 @@
 
 import json
 import re
+from collections.abc import Iterator
 from unittest.mock import patch
 
+import pytest
 from httpx import AsyncClient
 from starlette.requests import Request
 
 from app.core.exceptions import LocalProspectEngineError
-from app.main import handle_known_error, handle_unexpected_error
+from app.main import app, handle_known_error, handle_unexpected_error
 
 UUID4 = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
@@ -87,3 +89,83 @@ class TestErrorHandling:
         body = json.loads(bytes(response.body))
         assert body["detail"] == "an unexpected error occurred"
         assert "hunter2" not in bytes(response.body).decode()
+
+
+@pytest.fixture
+def raising_route() -> Iterator[str]:
+    """Temporarily mount a route that blows up, then remove it.
+
+    Registered on the real `app` rather than a stand-in, because the point is to exercise the
+    actual middleware and handler stack a production request goes through.
+    """
+    path = "/__test__/boom"
+
+    async def boom() -> None:
+        raise RuntimeError("asyncpg://postgres:hunter2@db.internal:5432/postgres")
+
+    app.add_api_route(path, boom, methods=["GET"])
+    yield path
+    app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != path]
+
+
+@pytest.fixture
+def known_error_route() -> Iterator[str]:
+    """Temporarily mount a route raising a deliberate LocalProspectEngineError."""
+    path = "/__test__/known"
+
+    async def known() -> None:
+        raise LocalProspectEngineError("registry unreachable", code="registry_unreachable")
+
+    app.add_api_route(path, known, methods=["GET"])
+    yield path
+    app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != path]
+
+
+class TestHandlersAreActuallyWired:
+    """Finding #3 from the PR #2 review.
+
+    The original error tests called `handle_known_error` / `handle_unexpected_error` directly as
+    plain functions, so they would have passed unchanged if the `@app.exception_handler`
+    registrations were deleted from `app/main.py`. These go through the real stack instead.
+    """
+
+    async def test_unexpected_error_becomes_a_safe_500(
+        self, error_client: AsyncClient, raising_route: str
+    ) -> None:
+        response = await error_client.get(raising_route)
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["code"] == "internal_error"
+        assert body["detail"] == "an unexpected error occurred"
+
+    async def test_unexpected_error_leaks_no_credentials_to_the_client(
+        self, error_client: AsyncClient, raising_route: str
+    ) -> None:
+        """The raised message carries a password; the response must not."""
+        response = await error_client.get(raising_route)
+
+        assert "hunter2" not in response.text
+        assert "Traceback" not in response.text
+        assert "asyncpg" not in response.text
+
+    async def test_known_error_becomes_structured_json(
+        self, error_client: AsyncClient, known_error_route: str
+    ) -> None:
+        response = await error_client.get(known_error_route)
+
+        assert response.status_code == 500
+        assert response.json() == {
+            "error": "LocalProspectEngineError",
+            "detail": "registry unreachable",
+            "code": "registry_unreachable",
+        }
+
+    async def test_correlation_id_survives_an_error_response(
+        self, error_client: AsyncClient, raising_route: str
+    ) -> None:
+        """A failed request is exactly when you need the id to find it in the logs."""
+        response = await error_client.get(raising_route, headers={"X-Request-ID": "trace-me"})
+
+        assert response.status_code == 500
+        assert response.headers.get("x-request-id") == "trace-me"

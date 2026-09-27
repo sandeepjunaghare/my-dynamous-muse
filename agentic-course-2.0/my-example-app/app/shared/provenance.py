@@ -11,10 +11,56 @@ consumers — sourcing, qualification and promotion — which is the three-featu
 This module imports nothing from ``app.core``; it is pure domain vocabulary.
 """
 
-from datetime import UTC, datetime
-from enum import StrEnum
+from collections.abc import Iterable
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from enum import Enum, StrEnum
+from typing import cast
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+_IMMUTABLE_SCALARS = (str, bytes, bool, int, float, Decimal, datetime, date, UUID, Enum, type(None))
+
+
+def _assert_immutable(value: object, path: str, seen: set[int]) -> None:
+    """Raise unless ``value`` cannot be edited after it has been cited.
+
+    ``frozen=True`` on the model only stops its own fields being reassigned. It says nothing about a
+    mutable ``value``, so without this a caller could construct a ProvenancedValue, have
+    :func:`is_promotable` approve it, and then change the very thing that was cited — which is E18
+    happening again through the primitive built to prevent it.
+    """
+    if isinstance(value, _IMMUTABLE_SCALARS):
+        return
+
+    # A cycle means we have already vouched for this object further up the walk.
+    if id(value) in seen:
+        return
+    seen.add(id(value))
+
+    if isinstance(value, tuple | frozenset):
+        # Narrowing an `object` to `tuple`/`frozenset` leaves the element type unknown, which
+        # Pyright strict rejects. The cast states what is already true — any tuple or frozenset is
+        # an iterable of objects — without reaching for a suppression or for `Any`.
+        for index, item in enumerate(cast(Iterable[object], value)):
+            _assert_immutable(item, f"{path}[{index}]", seen)
+        return
+
+    if isinstance(value, BaseModel):
+        if not value.model_config.get("frozen", False):
+            raise ValueError(
+                f"{path}: {type(value).__name__} must set model_config = ConfigDict(frozen=True) "
+                "to be provenanced — a citation for an editable value is not a citation"
+            )
+        for field_name in type(value).model_fields:
+            _assert_immutable(getattr(value, field_name), f"{path}.{field_name}", seen)
+        return
+
+    raise ValueError(
+        f"{path}: {type(value).__name__} is mutable and cannot be provenanced — "
+        "use an immutable equivalent (tuple, frozenset, or a frozen model)"
+    )
 
 
 class RetrievalMethod(StrEnum):
@@ -52,9 +98,15 @@ class ProvenancedValue[T](BaseModel):
     All three provenance fields are required: constructing one without any of them raises
     ``ValidationError``, so an unprovenanced value cannot exist as a ``ProvenancedValue`` at all.
 
-    The model is **frozen**. A citation is a fact about how a value was obtained, so re-citing it
-    means obtaining it again — a caller needing a new citation constructs a new value rather than
-    mutating one.
+    The model is **frozen**, and so must ``value`` be. A citation is a fact about how a value was
+    obtained, so re-citing it means obtaining it again — a caller needing a new citation constructs
+    a new value rather than mutating one.
+
+    Pydantic's ``frozen=True`` only stops *this* model's fields being reassigned; it would happily
+    hold a mutable ``T`` whose contents could change after the gate approved them. So ``T`` is
+    checked at construction: scalars, tuples and frozensets are fine, and a nested ``BaseModel``
+    must itself declare ``frozen=True``. A list, dict, set or unfrozen model is rejected outright
+    with a message naming the offending field.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -93,6 +145,12 @@ class ProvenancedValue[T](BaseModel):
         if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
             raise ValueError("retrieved_at must be timezone-aware")
         return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def _require_immutable_value(self) -> "ProvenancedValue[T]":
+        """Reject a ``value`` that could be edited after this citation was made."""
+        _assert_immutable(self.value, "value", set())
+        return self
 
 
 def is_promotable[T](value: ProvenancedValue[T] | None) -> bool:

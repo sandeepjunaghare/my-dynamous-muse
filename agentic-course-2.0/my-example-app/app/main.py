@@ -15,7 +15,7 @@ from app.core.config import get_settings
 from app.core.database import dispose_engine
 from app.core.dependencies import SettingsDep
 from app.core.exceptions import LocalProspectEngineError
-from app.core.logging import get_logger, setup_logging
+from app.core.logging import get_logger, get_request_id, setup_logging
 from app.core.middleware import RequestContextMiddleware
 
 logger = get_logger(__name__)
@@ -61,6 +61,21 @@ app = FastAPI(
 app.add_middleware(RequestContextMiddleware)
 
 
+def _error_response(status_code: int, payload: ErrorResponse) -> JSONResponse:
+    """Render an error, carrying the correlation id back to the client.
+
+    The id has to be attached here rather than in the middleware: when a route raises, the response
+    is produced by Starlette's ServerErrorMiddleware, which sits *outside* RequestContextMiddleware,
+    so the middleware's own header assignment never runs. A failed request is precisely when
+    someone needs the id to find the matching log line.
+    """
+    return JSONResponse(
+        status_code=status_code,
+        content=payload.model_dump(),
+        headers={"X-Request-ID": get_request_id()},
+    )
+
+
 @app.exception_handler(LocalProspectEngineError)
 async def handle_known_error(request: Request, exc: LocalProspectEngineError) -> JSONResponse:
     """Render a deliberate error as structured JSON — never a stack trace to the client."""
@@ -70,13 +85,9 @@ async def handle_known_error(request: Request, exc: LocalProspectEngineError) ->
         code=exc.code,
         error=exc.message,
     )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=ErrorResponse(
-            error=type(exc).__name__,
-            detail=exc.message,
-            code=exc.code,
-        ).model_dump(),
+    return _error_response(
+        exc.status_code,
+        ErrorResponse(error=type(exc).__name__, detail=exc.message, code=exc.code),
     )
 
 
@@ -87,13 +98,13 @@ async def handle_validation_error(
 ) -> JSONResponse:
     """Return field-level detail for invalid input, at 422."""
     logger.info("core.app.request_invalid", path=request.url.path, errors=exc.errors())
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=ErrorResponse(
+    return _error_response(
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        ErrorResponse(
             error="RequestValidationError",
             detail="request payload failed validation",
             code="validation_error",
-        ).model_dump(),
+        ),
     )
 
 
@@ -106,13 +117,13 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
         error=str(exc),
         exc_info=True,
     )
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=ErrorResponse(
+    return _error_response(
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ErrorResponse(
             error="InternalServerError",
             detail="an unexpected error occurred",
             code="internal_error",
-        ).model_dump(),
+        ),
     )
 
 

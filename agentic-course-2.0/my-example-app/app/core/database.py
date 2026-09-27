@@ -72,6 +72,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def is_initialised() -> bool:
+    """Whether the lazily-built engine or session factory currently exists.
+
+    Exposed so tests can assert isolation without reaching into module privates — the autouse
+    reset fixture in `tests/conftest.py` is only trustworthy if something can observe it working.
+    """
+    return _engine is not None or _sessionmaker is not None
+
+
 async def dispose_engine() -> None:
     """Close every pooled connection. Called from the application lifespan on shutdown."""
     global _engine, _sessionmaker
