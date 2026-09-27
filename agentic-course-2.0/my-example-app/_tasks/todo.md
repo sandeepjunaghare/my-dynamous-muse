@@ -175,3 +175,26 @@ in that PR — logged here rather than as GitHub issues, matching how this file 
 - [ ] **#8 · `os.environ.setdefault("DATABASE_URL", ...)`** in `tests/conftest.py` won't override an
       exported value, so a developer with a real hosted URL could run tests against real infrastructure.
       **Do before T4**, the first ticket whose tests touch a database.
+
+---
+
+## D15 — Supabase connection: session pooler, not direct (2026-09-27)
+
+| # | Decision | Replaces |
+|---|---|---|
+| D15 | **Connect via the pooler in SESSION mode** (`aws-<n>-<region>.pooler.supabase.com:5432`, user `postgres.<project-ref>`). Transaction mode (6543) stays out. | T1 plan assumption #2, "direct connection (5432), not the pooler" |
+
+**Why it changed.** Not a preference — the direct host is unreachable. `db.<ref>.supabase.co` has an AAAA
+record and no A record: Supabase made direct connections IPv6-only for projects created after early 2024,
+with IPv4 sold as an add-on. On a network without IPv6 it fails at DNS with
+`socket.gaierror: nodename nor servname provided`, which looks like a typo and is not one.
+
+**Why session mode specifically.** The original decision existed to protect asyncpg's prepared statements
+from PgBouncer. Session mode holds one dedicated server connection for the life of the client session, so
+prepared statements survive — the property is preserved, only the hostname and username change. Transaction
+mode (6543) is the one that breaks them, and that warning stands unchanged.
+
+**Cost of the change:** documentation only. No application code moved; session mode needs no
+`statement_cache_size` workaround.
+
+**Recorded in:** `.env.example`, `app/core/config.py`, `alembic/env.py`, and the T1 plan's AMENDMENTS.

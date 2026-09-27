@@ -619,3 +619,14 @@ full attention.
 - 2026-09-26 — `ProvenancedValue` confirmed frozen. The plan already specified `frozen=True` in the
   provenance task's gotchas, AC7 and the test list; this closes the open question behind it so the constraint
   is a decision rather than a proposal. No task, criterion or test changed.
+- 2026-09-27 — **Assumption #2 ("Direct connection (5432), not the pooler") is overturned by reality.**
+  The dev Supabase project resolves `db.<ref>.supabase.co` to an AAAA record only; Supabase made direct
+  connections IPv6-only for projects created after early 2024, and IPv4 there is a paid add-on. On a machine
+  with no IPv6 route the host does not resolve at all, so the direct port is not reachable regardless of
+  preference. Replaced by the pooler in **session** mode (`aws-<n>-<region>.pooler.supabase.com:5432`, user
+  `postgres.<project-ref>`). The *reasoning* behind the original decision is unchanged and still decisive:
+  session mode holds one dedicated server connection per client session, so asyncpg's prepared statements
+  survive exactly as they would on a direct connection. What the plan actually warned against was the
+  **transaction**-mode pooler on 6543, and that warning stands. No application code changed —
+  `app/core/database.py` needs no `statement_cache_size` workaround on session mode. Updated in
+  `.env.example`, `app/core/config.py` and `alembic/env.py`.

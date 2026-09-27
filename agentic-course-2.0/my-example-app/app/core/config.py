@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Database — hosted Supabase, one project per environment.
-    # Must use the asyncpg driver and the DIRECT port (5432), not the pooler; see .env.example.
+    # Must use the asyncpg driver and the pooler's SESSION mode (port 5432), never its
+    # TRANSACTION mode (6543), which breaks prepared statements; see .env.example.
     database_url: str
 
     # Observability
