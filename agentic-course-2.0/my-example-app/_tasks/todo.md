@@ -152,3 +152,26 @@ cries wolf gets muted, which is worse than not having it.
 **Left undone, and why.** The Alembic round-trip was validated against a throwaway local Postgres
 container rather than Supabase: assumption #1 of the plan (a reachable Supabase project) is still
 unmet. The tooling is proven; the dev and prod projects still need creating before T2.
+
+---
+
+## PR #2 review findings — deferred
+
+Fixed in the review-fix pass: #1 (shallow `frozen`), #3 (handler wiring untested), #5 (engine globals
+not reset). Full review: `.claude/code-reviews/pr-2-review.md`. The rest are real but deliberately not
+in that PR — logged here rather than as GitHub issues, matching how this file already tracks deferred work.
+
+- [ ] **#2 · `source_url` has no URL-shape validation** (`app/shared/provenance.py`). `"n/a"` passes the
+      gate. The T1 plan's IMPORTS line named `HttpUrl`; bare `str` was chosen without recording why.
+      **Do before T5** — that is the first ticket writing real sourced URLs.
+- [ ] **#4 · 422 responses carry no field-level detail** (`app/main.py`). `backend-api-best-practices.md`
+      requires it. Every future route inherits the current generic message. **Do before T10** adds the
+      first endpoint taking a request body.
+- [ ] **#6 · `RunCost.record()` and `check_cap()` are decoupled**, so nothing structurally prevents
+      spending without counting. Consider `guard_and_record(...)`. **Do before T6** copies the pattern.
+- [ ] **#7 · the `Any` guard misses `cast(Any, ...)` and string annotations**
+      (`tests/test_structure.py`). It is the only backstop, since deviation #10 declines mypy's
+      `disallow_any_explicit`. Low risk; extend the AST walk when convenient.
+- [ ] **#8 · `os.environ.setdefault("DATABASE_URL", ...)`** in `tests/conftest.py` won't override an
+      exported value, so a developer with a real hosted URL could run tests against real infrastructure.
+      **Do before T4**, the first ticket whose tests touch a database.
