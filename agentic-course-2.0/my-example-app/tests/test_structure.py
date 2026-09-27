@@ -12,6 +12,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
@@ -134,11 +136,51 @@ class TestAbsentAuth:
 
 class TestStructure:
     def test_slices_are_not_scaffolded_ahead_of_their_tickets(self) -> None:
-        """T1 ships `core/` and `shared/` only — an empty slice dir is scaffolding, not design."""
-        present = {
-            path.name for path in APP.iterdir() if path.is_dir() and path.name != "__pycache__"
-        }
-        assert present == {"core", "shared"}
+        """No package under `app/` may exist without code in it.
+
+        The rule is *an empty slice dir is scaffolding, not design* — a directory laid out for a
+        ticket nobody has started tells a later reader the slice exists when it does not.
+
+        This asserts that rule rather than a snapshot of which slices happen to exist today. The
+        snapshot version (`present == {"core", "shared"}`) went red the moment any ticket added a
+        slice, which meant every parallel branch had to edit this same line and then conflict with
+        its sibling on merge. Stating the intent instead means slices land without touching it.
+        """
+        scaffolding = [
+            str(path.relative_to(ROOT))
+            for path in sorted(APP.rglob("*"))
+            if path.is_dir()
+            and path.name != "__pycache__"
+            and not [
+                module
+                for module in path.rglob("*.py")
+                if module.name != "__init__.py" and "__pycache__" not in module.parts
+            ]
+        ]
+        assert not scaffolding, f"empty package(s) — scaffolding, not design: {scaffolding}"
+
+    def test_core_and_shared_exist(self) -> None:
+        """The two T1 packages every slice builds on."""
+        for package in ("core", "shared"):
+            assert (APP / package / "__init__.py").exists(), f"app/{package}/ is missing"
+
+    def test_migrations_have_exactly_one_head(self) -> None:
+        """Alembic must never grow a second head.
+
+        Two branches that each add a migration will both set ``down_revision`` to whatever was tip
+        when they forked. Git merges that cleanly — the files do not overlap — and the damage only
+        surfaces at ``alembic upgrade head``, which refuses to pick between two heads. That is a
+        deploy-time failure caused by a merge-time mistake, so it is caught here instead.
+
+        On failure: rebase the later migration's ``down_revision`` onto the other head. Reach for
+        ``alembic merge`` only if both have already been applied somewhere real.
+        """
+        script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+        heads = script.get_heads()
+        assert len(heads) == 1, (
+            f"{len(heads)} migration heads: {heads} — rebase the later migration's "
+            "down_revision onto the other head so the chain stays linear"
+        )
 
     def test_provenance_does_not_depend_on_core(self) -> None:
         """`shared/provenance.py` is pure domain vocabulary — it imports nothing from `core/`.
