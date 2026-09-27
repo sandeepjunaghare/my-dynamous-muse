@@ -7,8 +7,8 @@ Two deliberate departures from what ``alembic init`` writes:
 * Migrations run against an async engine, matching the application. The default (non-``-t async``)
   template is sync and fails outright against ``postgresql+asyncpg://``.
 
-Like the application, Alembic should point at Supabase's **direct** port (5432), not the pooler —
-see ``.env.example``.
+Like the application, Alembic goes through Supabase's pooler in **session** mode (port 5432)
+and never transaction mode (6543), for the prepared-statement reason set out in ``.env.example``.
 """
 
 import asyncio
