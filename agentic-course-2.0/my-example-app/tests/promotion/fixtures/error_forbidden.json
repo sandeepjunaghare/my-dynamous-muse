@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "message": "This app hasn't been granted all required scopes to make this call. Required: crm.schemas.companies.write",
+  "correlationId": "4f0b6d21-9c33-4e5a-b7d8-2a1c9e60f847",
+  "category": "MISSING_SCOPES"
+}

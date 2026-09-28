@@ -246,3 +246,36 @@ in the fix, not the feature. Cheaper to fix once on the trunk than twice in para
 - **Wave 3 held to two worktrees, not three.** The doc's table says T4 ∥ T11 ∥ T12. T4 and T11 both
   migrate and are the first real exercise of the B3 guard; three-way parallelism should not be the
   experiment that also tests an unproven mechanism. Revisit once the guard has caught something real.
+
+
+# T3 — HubSpot gateway (2026-09-27)
+
+**Branch:** `feat/t3-hubspot-gateway` · **Plan:** `.claude/plans/t3-hubspot-gateway.md` · **Status:** implemented, validated
+
+The gateway with no caller: client, the five custom properties, dedupe, and the write-gate enforced
+at the boundary. T9 and T11 are its consumers.
+
+- [x] `httpx` moved to runtime deps; `uv.lock` regenerated.
+- [x] `app/promotion/` — `exceptions` · `schemas` · `client` · `properties` · `dedupe` · README.
+- [x] Write-gate by signature: `to_property_payload` takes `ProvenancedValue`s, collects every
+      uncitable field and raises once, before serializing anything.
+- [x] `create_task` ungated, with a test — the T13 guarantee.
+- [x] 63 new tests, all against fixtures through an injected `MockTransport`; unrouted requests raise.
+- [x] Lifespan closes the client next to the engine; `.env.example` carries the seven scopes.
+
+## Decisions taken while implementing
+
+| # | Decision | Why |
+|---|---|---|
+| D16 | **Task enums read from the live portal, not the docs.** `hs_task_status` has five members (`NOT_STARTED`, `IN_PROGRESS`, `WAITING`, `COMPLETED`, `DEFERRED`), `hs_task_priority` four (incl. `NONE`). | HubSpot's docs contradict themselves; the plan flagged it as open. Settled read-only against portal 244766495. |
+| D17 | **`TaskType` excludes `LINKED_IN_CONNECT` / `LINKED_IN_MESSAGE`**, which the live property does offer. | PRD §8: LinkedIn automation is a non-goal — it violates Sales Navigator's terms and risks the one seat. The write vocabulary should not offer them. |
+| D18 | **A blank `HUBSPOT_PRIVATE_APP_TOKEN` counts as missing.** | `.env.example` ships the key uncommented and empty, so the empty string is what a fresh clone produces. A client built on it sends `Bearer ` and 401s three layers from the cause. Same reasoning as provenance's blank-`source_url` rejection. |
+| D19 | **Status codes are spelled as module constants, not taken from httpx's enum.** | Its members carry a `(value, phrase)` pair through a custom `__new__`; Pyright strict reads that as a tuple and calls every comparison permanently false. |
+
+## Still open after T3
+
+- **Who owns `lpe_sourced_at`** — the caller (as built) or derived by the client from a designated
+  record-defining field. **Decide when planning T9**, per the plan.
+- **The 409 body for a duplicate property** is still community-reported, not documented. Handled by
+  status, never by message string — so the live shape does not matter until someone reads it.
+- **Google Places terms of use and pricing** — unchanged, blocks nothing in T3.

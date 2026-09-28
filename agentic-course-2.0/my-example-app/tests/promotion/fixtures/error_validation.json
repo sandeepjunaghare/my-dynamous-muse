@@ -1,0 +1,7 @@
+{
+  "status": "error",
+  "message": "Property values were not valid",
+  "correlationId": "c3e9a710-8b42-4d6f-95a1-0f7c2b84e93d",
+  "category": "VALIDATION_ERROR",
+  "errors": [{ "message": "lpe_priority_score was not a number", "code": "INVALID_NUMBER" }]
+}

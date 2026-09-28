@@ -1,0 +1,16 @@
+{
+  "total": 1,
+  "results": [
+    {
+      "id": "7001234567",
+      "properties": {
+        "domain": "lonestarfreightbrokers.com",
+        "name": "Lone Star Freight Brokers",
+        "phone": "(214) 555-0147"
+      },
+      "createdAt": "2026-01-14T16:22:10.411Z",
+      "updatedAt": "2026-09-20T11:03:44.002Z",
+      "archived": false
+    }
+  ]
+}
