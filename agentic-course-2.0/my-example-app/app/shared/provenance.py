@@ -91,6 +91,15 @@ class RetrievalMethod(StrEnum):
     member as unused.
     """
 
+    manual_research = "manual_research"
+    """A person read a public source and recorded the finding by hand.
+
+    What the seeded freight and fire manifests carry: a human read FMCSA's and the Texas Fire
+    Marshal's documentation and wrote the row. T12's authoring agent cites ``llm_inference``
+    instead. ``web_lookup`` would be the small lie this primitive exists to prevent — it is defined
+    as a *per-request* lookup, which a hand-written row is not.
+    """
+
 
 class ProvenancedValue[T](BaseModel):
     """A value that knows where it came from.

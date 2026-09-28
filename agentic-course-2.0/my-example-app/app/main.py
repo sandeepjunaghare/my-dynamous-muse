@@ -1,6 +1,7 @@
 """FastAPI application: lifespan, middleware, centralized error handling, health.
 
-Feature routers mount here as slices land. T1 mounts none — the weekly-run trigger endpoint is T10.
+Feature routers mount here as slices land. T2 mounts the first — the read-only manifests router.
+The weekly-run trigger endpoint is T10.
 """
 
 from collections.abc import AsyncGenerator
@@ -17,6 +18,7 @@ from app.core.dependencies import SettingsDep
 from app.core.exceptions import LocalProspectEngineError
 from app.core.logging import get_logger, get_request_id, setup_logging
 from app.core.middleware import RequestContextMiddleware
+from app.manifests.routes import router as manifests_router
 
 logger = get_logger(__name__)
 
@@ -59,6 +61,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(RequestContextMiddleware)
+app.include_router(manifests_router)
 
 
 def _error_response(status_code: int, payload: ErrorResponse) -> JSONResponse:

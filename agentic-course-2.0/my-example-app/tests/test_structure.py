@@ -197,3 +197,42 @@ class TestStructure:
                 imported.append(node.module)
 
         assert not [m for m in imported if m.startswith("app.core")], imported
+
+    def test_no_branch_on_the_vertical_name(self) -> None:
+        """Vertical is data, not code — nothing in `app/` may branch on a vertical's name.
+
+        The moment `if vertical == "freight"` exists, M9 ("vertical #2 in under a founder-day") is
+        quietly impossible: adding a vertical becomes editing slices instead of writing a row.
+
+        AST, not grep, for the reason `test_no_any_annotations` gives: a textual match fires on
+        this project's own prose about the rule, and a guard that cries wolf gets muted. Comparing
+        two *variables* (`manifest.vertical == vertical`) is legitimate and must not fire — only a
+        comparison against a literal is the thing the rule forbids.
+        """
+
+        def _is_vertical(node: ast.expr) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id == "vertical"
+            return isinstance(node, ast.Attribute) and node.attr == "vertical"
+
+        def _is_string_literal(node: ast.expr) -> bool:
+            if isinstance(node, ast.Constant):
+                return isinstance(node.value, str)
+            if isinstance(node, ast.Tuple | ast.List | ast.Set):
+                return bool(node.elts) and all(_is_string_literal(item) for item in node.elts)
+            return False
+
+        offenders: list[str] = []
+        for path in _app_sources():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Compare):
+                    sides = [node.left, *node.comparators]
+                    vertical_side = any(_is_vertical(side) for side in sides)
+                    literal_side = any(_is_string_literal(side) for side in sides)
+                    if vertical_side and literal_side:
+                        offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+                elif isinstance(node, ast.Match) and _is_vertical(node.subject):
+                    offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+
+        assert not offenders, f"vertical is data, not code: {sorted(set(offenders))}"

@@ -17,13 +17,15 @@ five stages (registry search, business verification, route clustering) never nee
 place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
-**Today** — T1 has shipped: the service boots, validates clean, and the provenance primitive exists. No
-feature slice is built yet.
+**Today** — T1 and T2 have shipped: the service boots, validates clean, the provenance primitive exists,
+and the first feature slice (`manifests/`) is built.
 ```
 app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
 app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
 app/shared/provenance.py                    # ProvenancedValue[T] + is_promotable() — the write-gate as a type
-alembic/                                    # async env.py + 0001_baseline, which defines no domain tables
+app/manifests/                              # vertical_manifest DRAFT→ACTIVE, the terms gate, read-only routes, the CLI
+app/cli.py                                  # the `lpe` entry point; each slice registers its command group
+alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds
 tests/                                      # core · shared · the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
@@ -37,7 +39,7 @@ the first slice. `core/` and `shared/` above are their built counterparts — th
 infra that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
 ```
 app/
-  manifests/       # vertical_manifest (DRAFT → ACTIVE) + the authoring agent — the M9 lever
+  manifests/agent  # the manifest-authoring agent (T12) — the built slice above is everything else
   sourcing/        # brief → sourcing_run → candidate, every field carrying its own provenance
   qualification/   # disqualifier rules + Intensity×Automatable score; owns `disqualification`
   routing/         # DFW geographic route clustering
@@ -98,9 +100,14 @@ Wired at T1 and green:
 `uv sync` · `uv run pytest` · `uv run mypy . && uv run pyright` · `uv run ruff check .` ·
 `uv run uvicorn app.main:app --reload` · everything at once: `/piv-validate`
 
-Manifests are reviewed on the CLI — no frontend, no second login. **T2 builds these; they do not exist yet:**
-`uv run lpe manifest propose "<brief>"` · `uv run lpe manifest show <id>` ·
+Manifests are reviewed on the CLI — no frontend, no second login. Built at T2 and working:
+`uv run lpe manifest list` · `uv run lpe manifest show <id>` ·
 `uv run lpe manifest activate <id> --accept-terms <sources>` (where the terms-of-use decision is recorded).
+**`uv run lpe manifest propose "<brief>"` is T12 and does not exist yet.**
+
+Database-backed tests need a throwaway Postgres and skip without one:
+`docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·
+`export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5433/postgres`
 
 ## Runtime
 Local Mac first, small VPS when the weekly run is something you'd miss — so config is strict 12-factor and
