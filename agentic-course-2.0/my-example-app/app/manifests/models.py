@@ -9,7 +9,16 @@ queries inside it, so it is one JSONB ``body`` whose shape
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Index, Integer, String, UniqueConstraint, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -50,6 +59,13 @@ class VerticalManifest(Base):
 
     __table_args__ = (
         UniqueConstraint("vertical", "version", name="uq_vertical_manifest_vertical_version"),
+        # `status` is a plain string column, so without this the database would accept any value —
+        # and a row saying 'Active' would escape the partial index below (which keys on the literal
+        # 'active') while also being invisible to every reader filtering on it.
+        CheckConstraint(
+            "status in ('draft', 'active', 'superseded')",
+            name="ck_vertical_manifest_status",
+        ),
         Index("ix_vertical_manifest_vertical", "vertical"),
         Index(
             "uq_vertical_manifest_one_active_per_vertical",

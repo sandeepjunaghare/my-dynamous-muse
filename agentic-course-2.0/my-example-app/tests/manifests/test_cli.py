@@ -11,9 +11,11 @@ These tests are synchronous because ``lpe`` runs its own ``asyncio.run`` — see
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.cli import main
-from app.manifests.schemas import ManifestStatus, TermsDecision
+from app.manifests.schemas import ManifestResponse, ManifestStatus, TermsDecision
+from app.manifests.service import ManifestService
 from tests.conftest import requires_db
 from tests.manifests.conftest import load_committed_body
 
@@ -35,6 +37,39 @@ class TestUsageErrors:
         with pytest.raises(SystemExit):
             main(["manifest", "--help"])
         assert "propose" not in capsys.readouterr().out
+
+
+class TestDatabaseRefusals:
+    def test_an_integrity_error_is_one_line_not_a_traceback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """ "Never a traceback" is unconditional, so it must hold for unmodelled refusals too.
+
+        Found in the PR #6 review: the CLI caught only `LocalProspectEngineError`, so a losing
+        activation race — the partial unique index refusing a second ACTIVE row — escaped as a
+        raw Python traceback, against this CLI's own stated contract.
+
+        No database needed: the refusal is injected at the service boundary, which is where a real
+        one would surface from.
+        """
+
+        def refuse(*args: object, **kwargs: object) -> ManifestResponse:
+            raise IntegrityError("INSERT INTO vertical_manifest ...", {}, Exception("duplicate"))
+
+        monkeypatch.setattr(ManifestService, "activate", refuse)
+
+        exit_code = main(
+            ["manifest", "activate", str(uuid4()), "--accept-terms", "fmcsa"],
+        )
+
+        captured = capsys.readouterr()
+        assert exit_code == 1
+        assert "Traceback" not in captured.err
+        assert "error: the database refused the write" in captured.err
+        # The exception's own text is a multi-line SQL dump — it must not be what gets printed.
+        assert "INSERT INTO" not in captured.err
 
 
 @requires_db

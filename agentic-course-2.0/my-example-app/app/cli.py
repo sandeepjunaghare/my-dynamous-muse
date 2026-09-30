@@ -4,8 +4,9 @@ Thin on purpose: it owns the root parser, the slice registrations, and the one p
 failure turns into an exit code. Each slice contributes its own command group, so adding one is an
 import and two lines here.
 
-Exit codes: ``0`` success, ``1`` a deliberate failure (a ``LocalProspectEngineError``, printed as
-one readable line, never a traceback), ``2`` argparse's own usage error.
+Exit codes: ``0`` success; ``1`` a failure the person can act on — a ``LocalProspectEngineError``
+or a database refusal — printed as one readable line, **never a traceback**; ``2`` argparse's own
+usage error.
 """
 
 import argparse
@@ -13,6 +14,7 @@ import sys
 from collections.abc import Sequence
 
 import structlog
+from sqlalchemy.exc import IntegrityError
 
 from app.core.exceptions import LocalProspectEngineError
 from app.core.logging import setup_logging
@@ -77,6 +79,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         # A deliberate failure is a message, not a stack trace: every one of these is something a
         # person can act on (read the terms, fix the id, activate a draft first).
         print(f"error: {exc.message}", file=sys.stderr)
+        return 1
+    except IntegrityError:
+        # The database refused the write. "Never a traceback" is unconditional, so it has to hold
+        # for refusals the slice did not model as domain errors too — today that means the partial
+        # unique index, i.e. someone activated the same vertical in the same instant. The message
+        # is deliberately generic: `IntegrityError`'s own text is a multi-line SQL and parameter
+        # dump, which is a traceback by another name. PR #6 review, finding 2.
+        print(
+            "error: the database refused the write — another activation for this vertical may "
+            "have landed first; run `lpe manifest show <id>` to see where it stands",
+            file=sys.stderr,
+        )
         return 1
 
     raise AssertionError(f"unreachable: argparse accepted unknown command {command!r}")

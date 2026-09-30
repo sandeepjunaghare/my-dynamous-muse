@@ -45,6 +45,14 @@ def upgrade() -> None:
         sa.Column("activated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("activated_by", sa.String(length=128), nullable=True),
         sa.UniqueConstraint("vertical", "version", name="uq_vertical_manifest_vertical_version"),
+        # Without this, `status` is any 16 characters. The partial index below keys on the literal
+        # 'active', so a row saying 'Active' is exempt from the one-per-vertical invariant *and*
+        # invisible to every reader filtering on 'active' — visible to nothing, constrained by
+        # nothing. Verified: two such rows for one vertical insert cleanly without this constraint.
+        sa.CheckConstraint(
+            "status in ('draft', 'active', 'superseded')",
+            name="ck_vertical_manifest_status",
+        ),
     )
     op.create_index("ix_vertical_manifest_vertical", "vertical_manifest", ["vertical"])
     op.create_index(

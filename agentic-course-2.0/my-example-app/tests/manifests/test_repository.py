@@ -99,6 +99,44 @@ class TestGetActive:
             await repository.mark_active(second, a_body(), "sandeep")
 
 
+class TestStatusIsConstrained:
+    async def test_an_unknown_status_is_refused_by_the_database(
+        self, db_session: AsyncSession
+    ) -> None:
+        """`status` must be one of the three lifecycle values, enforced by a CHECK constraint.
+
+        Found in the PR #6 review. Without the constraint this insert *succeeded*: the partial
+        unique index keys on the literal `'active'`, so a row saying `'Active'` was exempt from
+        "one active per vertical" while also being invisible to every reader filtering on
+        `'active'` — constrained by nothing and visible to nothing.
+        """
+        db_session.add(
+            VerticalManifest(
+                vertical=a_vertical(),
+                version=1,
+                status="Active",
+                body=a_body().model_dump(mode="json"),
+            )
+        )
+        with pytest.raises(IntegrityError) as exc_info:
+            await db_session.flush()
+
+        assert "ck_vertical_manifest_status" in str(exc_info.value)
+
+    async def test_every_lifecycle_value_is_accepted(self, db_session: AsyncSession) -> None:
+        """The constraint must not be narrower than the enum it mirrors."""
+        for index, status in enumerate(ManifestStatus, start=1):
+            db_session.add(
+                VerticalManifest(
+                    vertical=a_vertical(),
+                    version=index,
+                    status=status.value,
+                    body=a_body().model_dump(mode="json"),
+                )
+            )
+        await db_session.flush()
+
+
 class TestListing:
     async def test_ordering_is_stable_and_filters_apply(self, db_session: AsyncSession) -> None:
         repository = ManifestRepository(db_session)

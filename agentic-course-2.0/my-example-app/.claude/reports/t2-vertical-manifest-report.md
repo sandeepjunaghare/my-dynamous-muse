@@ -64,8 +64,8 @@ not. Probe removed.
 | `uv run ruff format --check .` | pass, 45 files |
 | `uv run mypy .` | pass, 45 source files, zero suppressions |
 | `uv run pyright` | 0 errors, 0 warnings |
-| `uv run pytest` (no DB) | **124 passed, 41 skipped** — skips name the exact `docker run` |
-| `TEST_DATABASE_URL=… uv run pytest` | **165 passed**, 2 warnings (see *Issues*) |
+| `uv run pytest` (no DB) | **125 passed, 43 skipped** — skips name the exact `docker run` |
+| `TEST_DATABASE_URL=… uv run pytest` | **168 passed**, 2 warnings (see *Issues*) |
 | `alembic upgrade head` / `downgrade base` / `upgrade head` | round-trips clean |
 | `alembic check` | no new upgrade operations |
 | `alembic heads` | one head (`0003_seed_freight_and_fire`) |
@@ -136,6 +136,35 @@ discover the id `show` needs).
   of use?* `activate` catches the legal question; nothing catches a plausible-but-wrong disqualifier or
   a mis-chosen authoritative source. It bites at T12, not here. If a `reviewed_note` recorded at
   activation is wanted, it is a schema change and cheaper now than after two manifests exist.
+
+## PR #6 review findings — resolved
+
+Both Medium findings from `.claude/code-reviews/pr-6-review.md` are fixed on this branch. No Critical
+or High findings were raised.
+
+1. **`status` now carries a CHECK constraint** (`ck_vertical_manifest_status`), in `0002` and in the
+   model — the same both-places pattern the partial index uses. Without it, two rows for one vertical
+   with `status = 'Active'` inserted cleanly: exempt from the one-ACTIVE invariant *and* invisible to
+   every reader filtering on `'active'`. Proven by `test_an_unknown_status_is_refused_by_the_database`
+   (asserts the constraint by name) and `test_every_lifecycle_value_is_accepted` (the constraint must
+   not be narrower than the enum it mirrors). **The constraint was added to `0002` rather than as a new
+   revision**: no environment has ever applied it — dev Supabase is still blocked on B2, and every run
+   so far has been a throwaway container — so amending is honest, whereas a `0004` fixing a table
+   created two revisions earlier would imply a history that never happened.
+2. **The CLI now catches `IntegrityError`** alongside `LocalProspectEngineError`. Chosen over modelling
+   a 409 `ActivationConflictError`: on a single-user tool the race is remote, but *"never a traceback"*
+   is stated without a qualifier, so the contract is what gets honoured. The message is deliberately
+   generic — `IntegrityError`'s own text is a multi-line SQL and parameter dump, which is a traceback by
+   another name. `test_an_integrity_error_is_one_line_not_a_traceback` injects the refusal at the
+   service boundary (no database needed) and was **proven to fail without the handler**. The module
+   docstring's exit-code contract was corrected to say what it now actually guarantees.
+
+Not fixed, with reasons: the argparse `Namespace` soundness note (inherent to typeshed; no fix exists
+that does not add a suppression) and a defensive terms-gate `assert` in the repository (the plan puts
+that rule in the service deliberately — duplicating it across two layers is how the two drift apart).
+
+One correction to the review: it also reported finding 2 as a generic 500 from the API. Not reachable —
+the routes are read-only and `activate()` has exactly one caller, the CLI.
 
 ## Merge surface against T3
 
