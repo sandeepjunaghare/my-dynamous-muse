@@ -290,6 +290,38 @@ class TestRetryPolicy:
         assert no_sleep == [2.0]
         await client.aclose()
 
+    async def test_a_locked_response_on_a_create_is_not_retried(
+        self, no_sleep: list[float]
+    ) -> None:
+        """A 423 is as ambiguous as a 5xx — the lock says nothing about whether our write landed.
+
+        And a duplicate made this way cannot be caught within the same run: the search index lags
+        the write, so `dedupe.py` would not see it until a human did.
+        """
+        portal = MockPortal([(*COMPANIES, json_responder(423, load_fixture("error_server")))])
+        client = make_client(portal)
+
+        with pytest.raises(HubSpotResponseError) as raised:
+            await client.create_company(DOMAIN)
+
+        assert portal.count("POST") == 1
+        assert raised.value.status_code_received == 423
+        assert no_sleep == []
+        await client.aclose()
+
+    async def test_a_locked_read_gets_one_retry_and_no_more(self, no_sleep: list[float]) -> None:
+        """`_LOCKED_MAX_ATTEMPTS`, not the shared `_MAX_ATTEMPTS` budget."""
+        portal = MockPortal([(*PROPERTY_GET, json_responder(423, load_fixture("error_server")))])
+        client = make_client(portal)
+
+        with pytest.raises(HubSpotResponseError) as raised:
+            await client.get_property(ObjectType.companies, "lpe_source_url")
+
+        assert portal.count("GET") == 2
+        assert raised.value.status_code_received == 423
+        assert no_sleep == [2.0]
+        await client.aclose()
+
 
 class TestErrorMapping:
     async def test_an_unauthorized_response_raises_an_auth_error(self) -> None:

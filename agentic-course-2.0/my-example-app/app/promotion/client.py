@@ -78,6 +78,10 @@ _MAX_ATTEMPTS = 4
 _BACKOFF_BASE_SECONDS = 0.5
 _JITTER_FRACTION = 0.1
 _LOCKED_RETRY_SECONDS = 2.0
+# A locked record gets one retry, not the full `_MAX_ATTEMPTS` budget: the lock is held for
+# the duration of someone else's import or merge, so a third and fourth 2 s wait buy nothing
+# the caller's next run would not.
+_LOCKED_MAX_ATTEMPTS = 2
 
 _DAILY_POLICY = "DAILY"
 
@@ -339,7 +343,15 @@ class HubSpotClient:
                     correlation_id=correlation_id,
                 )
 
-            if status == _LOCKED_STATUS and attempt == 1:
+            # A 423 carries the same ambiguity as a 5xx: HubSpot locks a record during an import
+            # or a merge and never says whether our write landed before the lock. So a create is
+            # not retried here either — a duplicate company cannot be caught within the same run,
+            # because the search index lags the write (see `dedupe.py`).
+            if (
+                status == _LOCKED_STATUS
+                and retry_on_server_error
+                and attempt < _LOCKED_MAX_ATTEMPTS
+            ):
                 logger.warning("promotion.hubspot.request_locked", path=path, attempt=attempt)
                 await asyncio.sleep(_LOCKED_RETRY_SECONDS)
                 continue
@@ -472,14 +484,14 @@ class HubSpotClient:
             response = await self._request(
                 "POST",
                 f"/crm/objects/{API_VERSION}/{object_type.value}",
-                json_body=body.model_dump(),
+                json_body=body.model_dump(by_alias=True, exclude_none=True),
                 retry_on_server_error=False,
             )
         else:
             response = await self._request(
                 "PATCH",
                 f"/crm/objects/{API_VERSION}/{object_type.value}/{object_id}",
-                json_body=body.model_dump(),
+                json_body=body.model_dump(by_alias=True, exclude_none=True),
                 retry_on_server_error=True,
             )
         return HubSpotObject.model_validate(response.json())
