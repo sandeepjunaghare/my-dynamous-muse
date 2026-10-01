@@ -64,8 +64,8 @@ not. Probe removed.
 | `uv run ruff format --check .` | pass, 45 files |
 | `uv run mypy .` | pass, 45 source files, zero suppressions |
 | `uv run pyright` | 0 errors, 0 warnings |
-| `uv run pytest` (no DB) | **125 passed, 43 skipped** — skips name the exact `docker run` |
-| `TEST_DATABASE_URL=… uv run pytest` | **168 passed**, 2 warnings (see *Issues*) |
+| `uv run pytest` (no DB) | **126 passed, 43 skipped** — skips name the exact `docker run` |
+| `TEST_DATABASE_URL=… uv run pytest` | **169 passed**, 2 warnings (see *Issues*) |
 | `alembic upgrade head` / `downgrade base` / `upgrade head` | round-trips clean |
 | `alembic check` | no new upgrade operations |
 | `alembic heads` | one head (`0003_seed_freight_and_fire`) |
@@ -165,6 +165,31 @@ that rule in the service deliberately — duplicating it across two layers is ho
 
 One correction to the review: it also reported finding 2 as a generic 500 from the API. Not reachable —
 the routes are read-only and `activate()` has exactly one caller, the CLI.
+
+## PR #6 round-2 review — resolved
+
+Round 2 (`.claude/code-reviews/pr-6-review-round-2.md`) confirmed both fixes above closed — the `'Active'`
+insert that succeeded in round 1 now fails by constraint name, all three lifecycle values are accepted, and
+the partial index still refuses a second active row on top of the constraint. It raised one new Medium,
+which is fixed here.
+
+**The refusal message was `activate`-specific, in the file every slice's CLI shares.** `main()`'s handler
+covers every command present and future, but the message named *activation* and advised
+`lpe manifest show <id>` — and the code comment claimed it was "deliberately generic" while it was not.
+`vertical_manifest` carries a second unique constraint, `uq_vertical_manifest_vertical_version`, which
+`create_draft` reaches through a racy select-max-then-insert; T12's `propose` calls exactly that, so a
+losing proposal race would have been told an *activation* landed first and pointed at an id it does not
+have. The message now names no command and no table, and the comment says why.
+
+Chosen over pushing the catch down into per-command handlers: that would duplicate it across every future
+command and give up the single place where a failure becomes an exit code, which is what `app/cli.py`'s
+docstring says the file is for. `test_the_refusal_message_names_no_command_or_table` encodes the rule
+directly — it asserts the error line contains no command-specific noun, and was proven to fail against the
+wording it replaced.
+
+**Carried forward for whoever merges this**: the reasoning that justified amending `0002` rather than adding
+a revision — *no environment has applied it* — **expires at merge**. Once `alembic upgrade head` runs
+anywhere real, the next change to this table's shape must be a new revision, not another amend.
 
 ## Merge surface against T3
 

@@ -82,13 +82,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except IntegrityError:
         # The database refused the write. "Never a traceback" is unconditional, so it has to hold
-        # for refusals the slice did not model as domain errors too — today that means the partial
-        # unique index, i.e. someone activated the same vertical in the same instant. The message
-        # is deliberately generic: `IntegrityError`'s own text is a multi-line SQL and parameter
-        # dump, which is a traceback by another name. PR #6 review, finding 2.
+        # for refusals a slice did not model as a domain error too.
+        #
+        # The wording names no command and no table, because this handler covers **every** slice's
+        # commands — present and future — and more than one constraint can land here. Today that is
+        # the partial unique index (two activations racing one vertical) and the (vertical, version)
+        # constraint reachable through `create_draft`'s select-max-then-insert, which is what T12's
+        # `propose` will call. A message naming one of them is wrong advice for the other.
+        #
+        # It is prose rather than `str(exc)` for a second reason: `IntegrityError`'s own text is a
+        # multi-line SQL and parameter dump, which is a traceback by another name.
+        # PR #6 review, finding 2 (round 1) and the shared-file wording (round 2).
         print(
-            "error: the database refused the write — another activation for this vertical may "
-            "have landed first; run `lpe manifest show <id>` to see where it stands",
+            "error: the database refused the write — a concurrent write may have landed first; "
+            "re-read the record before retrying",
             file=sys.stderr,
         )
         return 1

@@ -71,6 +71,37 @@ class TestDatabaseRefusals:
         # The exception's own text is a multi-line SQL dump — it must not be what gets printed.
         assert "INSERT INTO" not in captured.err
 
+    def test_the_refusal_message_names_no_command_or_table(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The handler covers every slice's commands, so its wording must fit all of them.
+
+        Found in the PR #6 round-2 review. The first version of this message named *activation* and
+        advised `manifest show <id>` — correct for the only write path that existed, wrong for the
+        next one. `create_draft` reaches a different constraint through a racy select-max-then-
+        insert, and T12's `propose` calls it: that caller would have been told an activation landed
+        first, and pointed at an id it does not have.
+        """
+
+        def refuse(*args: object, **kwargs: object) -> ManifestResponse:
+            raise IntegrityError("INSERT INTO vertical_manifest ...", {}, Exception("duplicate"))
+
+        monkeypatch.setattr(ManifestService, "activate", refuse)
+        main(["manifest", "activate", str(uuid4()), "--accept-terms", "fmcsa"])
+
+        # Only the error line, not the whole stream: stderr is also where the CLI's logs go, and a
+        # future log field would otherwise fail this test for a reason it is not about.
+        message = next(
+            line for line in capsys.readouterr().err.splitlines() if line.startswith("error:")
+        )
+        for command_specific in ("activation", "activate", "manifest show", "<id>", "vertical"):
+            assert command_specific not in message, (
+                f"{command_specific!r} makes this message wrong for some other command that "
+                "reaches the same handler"
+            )
+
 
 @requires_db
 class TestShow:
