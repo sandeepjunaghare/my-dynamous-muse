@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "message": "This account is being migrated to another data center.",
+  "correlationId": "e7b3c091-2d46-4f8a-91c5-70a2d6e34b18",
+  "category": "MIGRATION_IN_PROGRESS"
+}

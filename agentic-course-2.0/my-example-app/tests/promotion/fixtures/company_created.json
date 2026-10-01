@@ -1,0 +1,13 @@
+{
+  "id": "7009876543",
+  "properties": {
+    "domain": "bluebonnetlogistics.com",
+    "name": "Bluebonnet Logistics",
+    "lpe_source_url": "https://safer.fmcsa.dot.gov/query.asp?searchtype=ANY&query_type=queryCarrierSnapshot&query_param=MC_MX&query_string=MC1234567",
+    "lpe_sourced_at": "1790380800000",
+    "lpe_vertical": "freight"
+  },
+  "createdAt": "2026-09-27T10:00:00.000Z",
+  "updatedAt": "2026-09-27T10:00:00.000Z",
+  "archived": false
+}

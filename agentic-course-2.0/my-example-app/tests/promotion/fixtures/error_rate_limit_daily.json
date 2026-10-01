@@ -1,0 +1,8 @@
+{
+  "status": "error",
+  "message": "You have reached your daily limit.",
+  "errorType": "RATE_LIMIT",
+  "correlationId": "b1d7e2a4-55c8-4a91-8f0b-3d6e9c27f104",
+  "policyName": "DAILY",
+  "requestId": "77bc1e09d4a2f356"
+}
