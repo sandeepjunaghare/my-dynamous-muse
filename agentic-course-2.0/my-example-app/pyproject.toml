@@ -16,9 +16,8 @@ dependencies = [
     "uvicorn[standard]>=0.32",
 ]
 
-# T2 adds the `lpe` CLI here — a two-line change, deliberately left absent until it has a command:
-# [project.scripts]
-# lpe = "app.cli:main"
+[project.scripts]
+lpe = "app.cli:main"
 
 [dependency-groups]
 dev = [

@@ -20,13 +20,38 @@ import os
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test"
 
 from collections.abc import AsyncGenerator, Iterator
+from pathlib import Path
 
 import pytest
+from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from alembic import command
 from app.core.config import get_settings
-from app.core.database import dispose_engine
+from app.core.database import dispose_engine, get_db
 from app.main import app
+
+ROOT = Path(__file__).resolve().parents[1]
+
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+"""A **throwaway** database for the tests that need one — never ``DATABASE_URL``.
+
+The two are deliberately different variables. ``DATABASE_URL`` is forced to a fake value above so
+that a real hosted URL — which every worktree now has, since the setup copies ``.env`` — cannot
+reach a test. A test that wants a real database has to name the database it wants.
+"""
+
+requires_db = pytest.mark.skipif(
+    TEST_DATABASE_URL is None,
+    reason=(
+        "needs a throwaway Postgres. Start one and point TEST_DATABASE_URL at it:\n"
+        "  docker run --rm -d --name lpe-test-pg -p 5433:5432"
+        " -e POSTGRES_PASSWORD=test postgres:16\n"
+        "  export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5433/postgres"
+    ),
+)
+"""Mark for database-backed tests. The reason names the exact command that un-skips them."""
 
 
 @pytest.fixture(autouse=True)
@@ -80,3 +105,77 @@ async def error_client() -> AsyncGenerator[AsyncClient, None]:
         base_url="http://test",
     ) as async_client:
         yield async_client
+
+
+@pytest.fixture(scope="session")
+def migrated_database() -> Iterator[str]:
+    """Apply the migration chain to ``TEST_DATABASE_URL`` once, and hand back the URL.
+
+    Deliberately a **sync** fixture. ``alembic/env.py`` calls ``asyncio.run`` itself, which raises
+    if it is invoked from inside a running loop — so the upgrade cannot happen in an async fixture.
+
+    ``DATABASE_URL`` is swapped for the duration because ``env.py`` reads the URL from application
+    settings, and put back afterwards so the fake value this module installs keeps protecting every
+    other test.
+    """
+    if TEST_DATABASE_URL is None:  # pragma: no cover — every consumer carries `requires_db`
+        pytest.skip("TEST_DATABASE_URL is not set")
+
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+
+    previous = os.environ["DATABASE_URL"]
+    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+    get_settings.cache_clear()
+    try:
+        command.upgrade(config, "head")
+    finally:
+        os.environ["DATABASE_URL"] = previous
+        get_settings.cache_clear()
+
+    yield TEST_DATABASE_URL
+
+
+@pytest.fixture
+async def db_session(migrated_database: str) -> AsyncGenerator[AsyncSession, None]:
+    """A session inside a transaction that is always rolled back.
+
+    The SQLAlchemy "join an external transaction" recipe: the connection owns a transaction, the
+    session joins it with ``create_savepoint``, and the rollback at the end discards everything the
+    test wrote. ``create_savepoint`` is what lets the code under test call ``commit()`` for real —
+    the service commits, and a test that could not tolerate that would be testing something else.
+    """
+    engine = create_async_engine(migrated_database)
+    try:
+        async with engine.connect() as connection:
+            transaction = await connection.begin()
+            session = AsyncSession(
+                bind=connection,
+                expire_on_commit=False,
+                join_transaction_mode="create_savepoint",
+            )
+            try:
+                yield session
+            finally:
+                await session.close()
+                await transaction.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def client_with_db(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """An httpx client whose routes run against the rolled-back test session."""
+
+    async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as async_client:
+            yield async_client
+    finally:
+        app.dependency_overrides.clear()

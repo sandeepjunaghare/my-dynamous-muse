@@ -1,0 +1,103 @@
+# `app/manifests/` — the vertical manifest slice
+
+**Everything that differs between one vertical and the next is a row in `vertical_manifest`, never a
+branch in a slice.** A manifest declares, for one vertical: the authoritative source(s) to search, the
+rules that disqualify a candidate, the signals that qualify one, the ICP headcount band, and the
+vocabulary to speak in. The five pipeline stages read it; none of them knows what "freight" means.
+
+That is the M9 lever — *vertical #2 in under a founder-day, no rebuild*. `tests/test_structure.py::
+test_no_branch_on_the_vertical_name` is what keeps it true: an `if vertical == "freight"` anywhere in
+`app/` fails the build.
+
+## The shape of a row
+
+Identity and lifecycle are **columns** (`vertical`, `version`, `status`) because that is what the
+database indexes and constrains. The researched content is one JSONB **`body`**, whose shape
+`ManifestBody` owns, because the manifest is always read whole and nothing queries inside it.
+
+Every researched field in the body is wrapped in `ProvenancedValue[T]` — source URL, retrieval
+timestamp, retrieval method — so a manifest field nobody can cite cannot be represented. Everything
+inside a citation is immutable (tuples, frozen models); the primitive rejects anything else at
+construction.
+
+## Lifecycle
+
+```
+          create_draft                 activate --accept-terms <every source>
+  (none) ──────────────▶ DRAFT ──────────────────────────────────────────▶ ACTIVE
+                          ▲                                                  │
+                          │                        a later version activates │
+                    T12's agent                                              ▼
+                     proposes                                           SUPERSEDED
+```
+
+- **DRAFT** — proposed. Never returned by `get_active()`; the pipeline must not source against a
+  proposal nobody accepted.
+- **ACTIVE** — a human accepted it, and a terms-of-use decision exists for **every** declared source.
+- **SUPERSEDED** — replaced by a later version. The row is retained, never overwritten.
+
+Two guards, deliberately doubled:
+
+| Guard | Where | What it is for |
+|---|---|---|
+| terms recorded for every source | `ManifestService.activate` | the good error message, naming what is missing |
+| at most one ACTIVE per vertical | partial unique index in `0002` | still true when a future slice writes by a path nobody anticipated |
+
+This is the same argument provenance already makes: a check can be forgotten by a new slice; a
+constraint cannot be written around.
+
+## Terms of use sit outside the citations
+
+A citation says *when and how a value was obtained*. `activate` does not re-obtain the source
+declaration — it records what a human **decided** about it. If the decision lived inside the cited
+value, activation would have to mint a fresh `ProvenancedValue`, and the manifest would then claim
+FMCSA's base URL was "retrieved" at the moment someone typed `--accept-terms`. So `SourceTerms` is a
+sibling of the cited sources, with `decided_by` / `decided_at` as its own provenance.
+
+Undecided is the **absence** of a record, not a third enum member. A `rejected` decision blocks
+activation exactly as a missing one does — the question was asked and the answer was no.
+
+## The review surface
+
+The CLI is the whole review UI. No frontend, no second login.
+
+```bash
+uv run lpe manifest list [--vertical freight] [--status draft]
+uv run lpe manifest show <id>                          # every field with its citation
+uv run lpe manifest activate <id> --accept-terms fmcsa,places [--actor you]
+```
+
+`lpe manifest propose "<brief>"` is **T12's** and does not exist yet.
+
+Exit codes: `0` success · `1` a deliberate failure, printed as one line, never a traceback · `2`
+argparse's own usage error.
+
+## Conventions this slice sets for the ones after it
+
+T2 is the first feature slice, so its shape is the house pattern whether or not anyone intends it.
+Three decisions worth copying deliberately:
+
+1. **The repository flushes; the service commits.** A repository method may write and flush so that
+   defaults land and constraints fire early, but the transaction boundary belongs to the service —
+   the only layer that knows whether an operation is finished. Superseding and activating happen in
+   one transaction for exactly this reason.
+2. **Slice exceptions derive from `LocalProspectEngineError` and are never caught in handlers.**
+   `app/main.py` renders any of them as structured JSON at the exception's own status code; a local
+   `try/except` would produce a second, inconsistent error shape.
+3. **Tests live in `tests/manifests/`**, mirroring `app/`, and database-backed tests carry
+   `requires_db` so the suite stays runnable with no infrastructure.
+
+## Adding a vertical
+
+See `.claude/references/adding-a-vertical.md`. In short: a manifest row, not a feature. If a new
+source seems to need its own pipeline stage, the schema is missing a field — extend the schema, not
+the pipeline.
+
+## Deliberately absent
+
+- **`propose` / `agent.py`** — T12. A stubbed subcommand in `--help` reads as a broken feature.
+- **A rule evaluator.** `DisqualifierRule` is a declarative shape; **T7** runs it. There is no
+  `matches()` here, and the rule schema deliberately resists growing into a DSL: `RuleKind.judgment`
+  is the escape hatch for anything that needs real judgment, which is a `classify_rollup` call.
+- **Write routes.** Creation is T12's; activation is the CLI's. A `POST /manifests` would be a second
+  door into ACTIVE that bypasses the gate.

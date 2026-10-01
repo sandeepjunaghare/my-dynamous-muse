@@ -59,9 +59,15 @@ class TestIsolationBetweenTests:
 
 class TestBase:
     def test_base_carries_metadata_for_alembic(self) -> None:
-        """Alembic's env.py autogenerates against this; T1's baseline declares no tables yet."""
+        """Alembic's env.py autogenerates against this, so a slice's tables must reach it.
+
+        T1 asserted ``tables == {}`` — true then, and a snapshot that any slice adding a table
+        would break. What it was really guarding is that ``Base.metadata`` is what ``env.py``
+        compares against, so it now asserts that a registered slice table is actually there. A
+        table missing here is autogenerate proposing to drop it.
+        """
         assert Base.metadata is not None
-        assert Base.metadata.tables == {}
+        assert "vertical_manifest" in Base.metadata.tables
 
     def test_sessionmaker_does_not_expire_on_commit(self) -> None:
         """Expiring would trigger a lazy refresh on attribute access, which async code cannot do."""
