@@ -204,7 +204,8 @@ mode (6543) is the one that breaks them, and that warning stands unchanged.
 
 # Wave 2 prep — make the repo safe to fork (2026-09-27)
 
-**Branch:** `docs/d15-supabase-session-pooler` · **Status:** code done, one item blocked on a human
+**Branches:** `docs/d15-supabase-session-pooler` (D15 — PR #3, `effd0e2`) · `chore/wave-2-prep`
+(the guards — PR #4, `8c2d84b`) · **Status:** done — both merged 2026-09-27, B2 closed 2026-10-01
 **Why now:** Wave 2 is T2 ∥ T3 in two worktrees. T1 left four things that fail *identically in both
 branches*, which is the worst shape for a merge — each branch fixes them differently and the conflict is
 in the fix, not the feature. Cheaper to fix once on the trunk than twice in parallel.
@@ -260,9 +261,86 @@ in the fix, not the feature. Cheaper to fix once on the trunk than twice in para
   experiment that also tests an unproven mechanism. Revisit once the guard has caught something real.
 
 
+# T2 — Vertical manifest slice, the M9 lever (2026-09-26)
+
+**Branch:** `feat/t2-vertical-manifest` · **Plan:** `.claude/plans/t2-vertical-manifest.md` ·
+**Report:** `.claude/reports/t2-vertical-manifest-report.md` · **Status:** merged 2026-09-30 —
+PR #6 (`74b1e17`), two review rounds, findings fixed first
+
+Vertical became data. `vertical_manifest` carries identity and lifecycle in columns and the cited
+content in one JSONB `body`; a manifest is born DRAFT and only a human moves it to ACTIVE on the CLI,
+where the per-source terms-of-use decision is recorded.
+
+- [x] `app/manifests/` — `schemas` · `models` · `repository` · `exceptions` · `service` · `routes` ·
+      `cli` · README.
+- [x] `0002_vertical_manifest` (hand-written — autogenerate omits `postgresql_where`) and `0003`,
+      seeding freight and fire fully cited and **both DRAFT**.
+- [x] Two guards, deliberately doubled: the terms gate in the service (the good error, naming what is
+      missing) and the partial unique index in the database (still true when a future slice writes by a
+      path nobody anticipated).
+- [x] `lpe manifest list | show | activate --accept-terms`, with `app/cli.py` as the one place a
+      deliberate failure becomes an exit code. `propose` is T12's and deliberately absent.
+- [x] `RetrievalMethod.manual_research` added — the seeds are hand-read sources, and `web_lookup`
+      (defined as a *per-request* lookup) would have been the small lie the primitive exists to prevent.
+- [x] No-`if vertical ==` AST guard, proven by making it fail on both `if` and `match`.
+- [x] `tests/manifests/` — 6 modules plus shared builders and CLI fixtures: 126 passed / 43 skipped
+      with no database, 169 passed against a throwaway Postgres.
+
+## Deviations from the plan
+
+Nine, all recorded with their measurements in the report. The four that outlive the ticket:
+
+| # | Deviation | Why |
+|---|---|---|
+| 1 | **The partial unique index is declared in the model *and* the migration**, against the plan's instruction. | The plan's two requirements contradicted: with the index only in the migration, `alembic check` reports it as *removed*, so the next `--autogenerate` would silently emit a `drop_index` for the one invariant this slice exists to guarantee. |
+| 2 | **`register(parser)`, not `register(subparsers)`.** | Annotating a subparsers action means naming `argparse._SubParsersAction` — private usage under Pyright strict, and no suppression is allowed. The CLI surface is identical. |
+| 3 | **The CLI logs to stderr**, not in the plan. | A service's stdout is its log; a CLI's stdout *is* the review surface, and JSON lines interleaved into `manifest show` corrupt the output the command exists to produce. |
+| 4 | **`activate(..., licenses=...)` takes a mapping, and the CLI has no `--license` flag.** | Nothing on `ManifestSource` holds a licence. Flagged rather than inventing a flag the plan did not specify — see *Still open* below. |
+
+## Still open after T2
+
+- [ ] **A CLI activation records `license=None`**, so FMCSA's CC PDM 1.0 is not captured on the row
+      today. A two-line `--license` flag closes it; it was left out rather than invented.
+- **Fire cannot be activated** while Google Places' terms of use remain unread — which is the gate
+  working, not a defect. Freight can.
+- **Who reviews manifest *quality* beyond terms of use** — `activate` catches the legal question, not
+  the correctness one. Bites at T12, not here. If a `reviewed_note` recorded at activation is wanted it
+  is a schema change, and cheaper before a second manifest exists than after.
+- **Two Starlette deprecation warnings** (`HTTP_422_UNPROCESSABLE_ENTITY`, T1 code) surfaced because T2
+  is the first slice to produce a 422. Lands naturally with deferred finding #4, already queued before T10.
+
+## Review passes (PR #6, two rounds, 2026-09-30)
+
+Round 1 (`.claude/code-reviews/pr-6-review.md`) raised two Mediums, no Critical or High: `status` was a
+plain string column, so `'Active'` inserted cleanly — exempt from the one-ACTIVE invariant *and* invisible
+to every reader filtering on `'active'`; and the CLI let an `IntegrityError` escape as a traceback against
+a contract that says "never a traceback" without a qualifier. Both fixed. Round 2
+(`.claude/code-reviews/pr-6-review-round-2.md`) confirmed them closed and raised one more: the refusal
+message named *activation* while living in the file every slice's CLI shares — so T12's `propose`, which
+reaches the second unique constraint through a racy select-max-then-insert, would have been told an
+activation landed first and pointed at an id it does not have. Fixed in `82b0c63`.
+
+**What worked.** Declining two of round 1's suggestions with reasons — the argparse `Namespace` soundness
+note (inherent to typeshed; no fix without a suppression) and a defensive terms-gate `assert` in the
+repository (duplicating the rule across two layers is how two layers drift apart). A review is evidence,
+not an instruction list.
+
+**What didn't.** The `status` hole was reachable from the first line of the model and survived authoring,
+self-review and a full green suite. A column constrained in prose and nowhere else is the same shape as
+the `if vertical ==` problem this slice exists to solve, and the slice's own README argued the general
+case — *a check can be forgotten by a new slice; a constraint cannot be written around* — while the table
+it described left one unconstrained.
+
+**To improve.** When a column's legal values are named anywhere in prose, they belong in a CHECK
+constraint in the same commit. Worth a line in the plan template beside the retry-table note T3 earned.
+
+---
+
 # T3 — HubSpot gateway (2026-09-27)
 
-**Branch:** `feat/t3-hubspot-gateway` · **Plan:** `.claude/plans/t3-hubspot-gateway.md` · **Status:** implemented, validated, reviewed, review findings fixed — awaiting human merge
+**Branch:** `feat/t3-hubspot-gateway` · **Plan:** `.claude/plans/t3-hubspot-gateway.md` ·
+**Report:** `.claude/reports/t3-hubspot-gateway-report.md` · **Status:** merged 2026-09-30 —
+PR #5 (`a78967e`), review findings fixed first
 
 The gateway with no caller: client, the five custom properties, dedupe, and the write-gate enforced
 at the boundary. T9 and T11 are its consumers.
@@ -313,3 +391,42 @@ and 423 did not — the asymmetry was the tell, and it was visible in the test n
 **To improve.** When a policy flag like `retry_on_server_error` governs several branches, the branches
 should be checked as a set, not reviewed one at a time — and each should get the paired test the others
 have. Worth a line in the plan template for anything with a retry table.
+
+
+---
+
+# Wave 2 closed — where `main` stands (2026-09-30)
+
+Both Wave 2 tickets are merged and `main` is clean at `9bbf26c`. T1, T2 and T3 have shipped: the service
+boots, validates clean, the provenance primitive exists, and two slices are built — `manifests/`, and the
+gateway half of `promotion/`.
+
+| | |
+|---|---|
+| Suite on `main` | **191 passed, 43 skipped** with no database (verified 2026-09-30); the skips name the exact `docker run` |
+| Merged | PR #3 `effd0e2` · PR #4 `8c2d84b` · PR #5 `a78967e` (T3) · PR #6 `74b1e17` (T2) |
+| Dev Supabase | at `0003_seed_freight_and_fire` (head); freight and fire both DRAFT |
+| Prod Supabase | not created yet |
+
+**The amend window is closed** — recorded above under Wave 2 prep and repeated here because it is the
+rule most likely to be broken by someone reading only the newest section. Dev has applied `0002` and
+`0003`. Any future change to `vertical_manifest`'s shape is a new revision, never an amend, including
+anything T4 or T11 discovers it wants.
+
+## Blocked on the human
+
+- [ ] **The live-portal provisioning run** (T3) — writes five custom properties to portal 244766495.
+      Internal names are permanent in HubSpot: no rename, no clean undo. AC2's "a second run no-ops" is
+      proven by test only until this runs. The one outstanding one-way door.
+
+## Carried into Wave 3
+
+Deferred review findings, unchanged and still due at the tickets named above: **#2** `source_url` URL-shape
+(before T5) · **#4** 422 field-level detail (before T10) · **#6** `RunCost` record/check coupling (before
+T6) · **#7** the `Any` guard's blind spots (when convenient). T2's `--license` flag joins them, due
+whenever a licence first needs to be on a row.
+
+**Next: Wave 3 — T4 ∥ T11**, held to two worktrees rather than the doc's three (reason under *Deliberately
+not done* above: T4 and T11 both migrate and are the first real exercise of the B3 single-head guard;
+three-way parallelism should not be the experiment that also tests an unproven mechanism). T12 follows.
+Plan just-in-time — a dependent ticket waits until its dependency is *implemented*, not merely sliced.
