@@ -1,0 +1,12 @@
+{
+  "id": "88001122",
+  "properties": {
+    "hs_task_subject": "Call - Bluebonnet Logistics",
+    "hs_task_status": "NOT_STARTED",
+    "hs_task_type": "CALL",
+    "hs_task_priority": "MEDIUM",
+    "hs_timestamp": "1790380800000"
+  },
+  "createdAt": "2026-09-27T10:00:01.000Z",
+  "updatedAt": "2026-09-27T10:00:01.000Z"
+}

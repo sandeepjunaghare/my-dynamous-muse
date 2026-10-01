@@ -1,0 +1,18 @@
+{
+  "total": 1,
+  "results": [
+    {
+      "id": "400112233",
+      "properties": {
+        "email": "marisol@lonestarfreightbrokers.com",
+        "firstname": "Marisol",
+        "lastname": "Guerrero",
+        "phone": "+1 214-555-0147",
+        "mobilephone": null
+      },
+      "createdAt": "2026-02-02T09:15:00.000Z",
+      "updatedAt": "2026-09-21T14:41:09.220Z",
+      "archived": false
+    }
+  ]
+}

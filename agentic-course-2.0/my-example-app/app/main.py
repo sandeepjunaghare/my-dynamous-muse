@@ -19,6 +19,7 @@ from app.core.exceptions import LocalProspectEngineError
 from app.core.logging import get_logger, get_request_id, setup_logging
 from app.core.middleware import RequestContextMiddleware
 from app.manifests.routes import router as manifests_router
+from app.promotion.client import aclose_hubspot_client
 
 logger = get_logger(__name__)
 
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     yield
     await dispose_engine()
+    await aclose_hubspot_client()
     logger.info("core.app.shutdown_succeeded")
 
 

@@ -246,3 +246,58 @@ in the fix, not the feature. Cheaper to fix once on the trunk than twice in para
 - **Wave 3 held to two worktrees, not three.** The doc's table says T4 ∥ T11 ∥ T12. T4 and T11 both
   migrate and are the first real exercise of the B3 guard; three-way parallelism should not be the
   experiment that also tests an unproven mechanism. Revisit once the guard has caught something real.
+
+
+# T3 — HubSpot gateway (2026-09-27)
+
+**Branch:** `feat/t3-hubspot-gateway` · **Plan:** `.claude/plans/t3-hubspot-gateway.md` · **Status:** implemented, validated, reviewed, review findings fixed — awaiting human merge
+
+The gateway with no caller: client, the five custom properties, dedupe, and the write-gate enforced
+at the boundary. T9 and T11 are its consumers.
+
+- [x] `httpx` moved to runtime deps; `uv.lock` regenerated.
+- [x] `app/promotion/` — `exceptions` · `schemas` · `client` · `properties` · `dedupe` · README.
+- [x] Write-gate by signature: `to_property_payload` takes `ProvenancedValue`s, collects every
+      uncitable field and raises once, before serializing anything.
+- [x] `create_task` ungated, with a test — the T13 guarantee.
+- [x] 63 new tests, all against fixtures through an injected `MockTransport`; unrouted requests raise.
+- [x] Lifespan closes the client next to the engine; `.env.example` carries the seven scopes.
+
+## Decisions taken while implementing
+
+| # | Decision | Why |
+|---|---|---|
+| D16 | **Task enums read from the live portal, not the docs.** `hs_task_status` has five members (`NOT_STARTED`, `IN_PROGRESS`, `WAITING`, `COMPLETED`, `DEFERRED`), `hs_task_priority` four (incl. `NONE`). | HubSpot's docs contradict themselves; the plan flagged it as open. Settled read-only against portal 244766495. |
+| D17 | **`TaskType` excludes `LINKED_IN_CONNECT` / `LINKED_IN_MESSAGE`**, which the live property does offer. | PRD §8: LinkedIn automation is a non-goal — it violates Sales Navigator's terms and risks the one seat. The write vocabulary should not offer them. |
+| D18 | **A blank `HUBSPOT_PRIVATE_APP_TOKEN` counts as missing.** | `.env.example` ships the key uncommented and empty, so the empty string is what a fresh clone produces. A client built on it sends `Bearer ` and 401s three layers from the cause. Same reasoning as provenance's blank-`source_url` rejection. |
+| D19 | **Status codes are spelled as module constants, not taken from httpx's enum.** | Its members carry a `(value, phrase)` pair through a custom `__new__`; Pyright strict reads that as a tuple and calls every comparison permanently false. |
+| D20 | **A 423 Locked is never retried on a create** — only on a read, and then exactly once (`_LOCKED_MAX_ATTEMPTS`). | The plan's retry table said "423 Locked — once, after ≥2 s" without distinguishing creates from reads. A lock says nothing about whether our write landed, so it carries the same ambiguity as a 5xx, and the search index lag means a duplicate made this way is invisible until a human finds it. Found by the PR #5 review. |
+
+## Still open after T3
+
+- **Who owns `lpe_sourced_at`** — the caller (as built) or derived by the client from a designated
+  record-defining field. **Decide when planning T9**, per the plan.
+- **The 409 body for a duplicate property** is still community-reported, not documented. Handled by
+  status, never by message string — so the live shape does not matter until someone reads it.
+- **Google Places terms of use and pricing** — unchanged, blocks nothing in T3.
+- [ ] **The live-portal provisioning run — blocked, needs the human.** Writes five custom properties
+      to portal 244766495, and property internal names are permanent in HubSpot: no rename, no clean
+      undo. AC2's "a second run no-ops" is proven by test only until this runs. One-way door.
+
+## Review pass (PR #5, 2026-09-30)
+
+Reviewed by the `code-reviewer` agent in a clean context — report at `.claude/code-reviews/pr-5-review.md`.
+One Critical, one Medium, one Low, all in `_request`; all three fixed in `d604fa2`, suite back green at
+156 passed.
+
+**What worked.** Dispatching a separate reviewer rather than self-reviewing. The Critical was a branch
+the authoring session had read several times without seeing it — every other retry path gated on
+`retry_on_server_error` and this one silently did not.
+
+**What didn't.** A green suite proved nothing here: the 423 test only covered a read, so the create path
+had no coverage at all. The 5xx and timeout cases each had an explicit "a create is never retried" test
+and 423 did not — the asymmetry was the tell, and it was visible in the test names alone.
+
+**To improve.** When a policy flag like `retry_on_server_error` governs several branches, the branches
+should be checked as a set, not reviewed one at a time — and each should get the paired test the others
+have. Worth a line in the plan template for anything with a retry table.

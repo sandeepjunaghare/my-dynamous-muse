@@ -1,0 +1,11 @@
+{
+  "name": "lpe_source_url",
+  "label": "Source URL",
+  "type": "string",
+  "fieldType": "text",
+  "groupName": "lpe",
+  "description": "Where this record's data was retrieved from.",
+  "createdAt": "2026-09-27T09:58:00.000Z",
+  "hasUniqueValue": false,
+  "hidden": false
+}
