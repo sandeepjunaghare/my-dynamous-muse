@@ -233,9 +233,21 @@ in the fix, not the feature. Cheaper to fix once on the trunk than twice in para
       dialect and makes `create_async_engine` raise *"The asyncio extension requires an async driver"*.
       Now `postgresql+asyncpg://`, matching `.env.example`. Unrelated to the rotation; found while
       checking it.
-- [ ] **B2 · rotate the password in `.env`** — **blocked, needs the human.** The value is stale and I
-      cannot supply the new one. It must be updated *before* `/worktree-create` runs, because the setup
-      subagent copies `.env` into each worktree and a dead credential would propagate into both.
+- [x] **B2 · rotate the password in `.env`** — **done 2026-10-01 by the human.** Verified by connecting:
+      `uv run alembic current` reaches hosted dev and reports `0001_baseline`. The URL shape is what D15
+      requires — `postgresql+asyncpg`, the pooler host, port 5432 (session mode), user `postgres.<ref>`.
+      Wave 3's `/worktree-create` can now copy a live `.env` into each worktree.
+
+- [x] **Dev brought up to head — 2026-10-01.** It sat at `0001_baseline`; `0002_vertical_manifest` and
+      `0003_seed_freight_and_fire` are now applied. Verified on dev: revision is `0003` (head),
+      `alembic check` reports no pending operations, the `ck_vertical_manifest_status` check constraint
+      and all four indexes exist — including `uq_vertical_manifest_one_active_per_vertical` — and
+      `lpe manifest list` renders freight and fire, both DRAFT.
+
+      **The amend window is now closed.** Amending `0002` in place during the T2 review (PR #6, round 2)
+      was safe because no environment had applied it. That is no longer true. **Any future change to
+      `vertical_manifest`'s shape is a new revision, never an amend** — including anything T4 or T11
+      discovers it wants.
 
 ## Deliberately not done
 
