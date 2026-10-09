@@ -64,7 +64,7 @@ class TestProposeWritesADraft:
         assert "fmcsa: UNDECIDED — blocks activation" in out
         assert "sources[dat_directory]: cites https://www.dat.com/load-boards" in out
         assert "https://www.fmcsa.dot.gov/policies" in out  # where to read the terms
-        assert "$0.8421" in out
+        assert "$0.84 " in out
         assert QUALITY_REVIEW_NOTE in out
 
     def test_an_unreported_cost_is_shown_as_unknown_not_zero(
