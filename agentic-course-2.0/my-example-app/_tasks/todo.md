@@ -527,8 +527,9 @@ to `sourcing_run`, `candidate` or `cadence_state` is a new revision.
 - **Due before T13:** `lpe cadence park <contact>`; `lpe cadence sync --dry-run` for the first run on the 22
 - **Deferred, when convenient:** the per-touch "closed by a note" line · T11 L1 (enrol race — reuse H1's key) ·
   T12's deferred Lows (listed in `pr-8-review.md`) · #4 (before T10), #6 (before T6), #7 from Wave 2
-- **Fix the AI layer:** `.claude/skills/piv-validate/SKILL.md` is an unfilled template, though `CLAUDE.md` calls
-  it wired; every agent this wave fell back to the raw commands
+- ~~**Fix the AI layer:** `piv-validate` is an unfilled template~~ — **done 2026-10-09 (`515c020`)**: wired to
+  ruff · mypy · pyright · pytest · alembic check; the verdict names its tier (full / offline + skip count).
+  Verified green on `main` (538 passed, no drift) and verified to fail on a deliberate lint/type break
 
 **Next: Wave 4 — T7 ∥ T8 ∥ T13** per the ticket doc, T13 still gated on Spike 1 closing.
 
