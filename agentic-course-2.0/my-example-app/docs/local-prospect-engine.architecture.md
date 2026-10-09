@@ -247,7 +247,7 @@ Things this approach depends on that do not exist yet:
 
 ## Spikes & experiments
 
-**Spike 1 — Is the constraint sourcing, or discipline?** *(runs alongside Waves 1–2; no longer blocks a slice)*
+**Spike 1 — Is the constraint sourcing, or discipline?** — **ANSWERED 2026-10-09: discipline.**
 - **Question:** would a sourcing engine help, or does the queue simply not get worked?
 - **Spike:** work the 22 existing HubSpot prospects through the three-touch cadence. **Timebox: 2 weeks.**
 - **Decision rule:** ≥3 decision-maker conversations/week → sourcing is the bottleneck, build the engine as
@@ -256,6 +256,19 @@ Things this approach depends on that do not exist yet:
 - **It ends in adoption either way.** Surviving prospects of the 22 are adopted into the cadence machine when
   the spike closes, so the finding arrives attached to a lever instead of as an observation. T1, T2 and T3
   are built during the two weeks because they are needed under either outcome.
+- **Finding (HubSpot, read 2026-10-09; closed a day early by the human):** **1 of 22 tasks completed**, and that
+  one was ticked on 10-09. 20 more are past due. **0 decision-maker conversations** in two weeks. Activity was
+  10 notes and no logged calls, meetings or emails, all from 09-27 to 09-29; nothing has been logged since.
+  The work stopped after day 4 and nothing noticed. **Discipline: cadence enforcement carries more weight than
+  sourcing.**
+- **Consequence:** cadence had already moved ahead of sourcing (T11 shipped in Wave 3). **No further reorder:**
+  T13 runs alongside T7 ∥ T8 in Wave 4. Lapses are expected ("life happens"), and the machine exists to absorb
+  them, so the sourcing line does not pause. The guard is a checkpoint, not a gate: **read M5 on the adopted
+  prospects before T10's first real run**. New prospects cannot reach HubSpot before T9/T10 anyway.
+- **What it showed about the machine:** work that did happen was logged as a **note** and the task left
+  unticked (two calls to one prospect on 09-28; both tasks still open). T11's rule, *task done OR matching
+  activity after creation, notes count*, is what makes such touches visible. Explicit refusals (one "do not
+  call again", two "not interested") must be excluded or parked by T13, not enrolled.
 
 **Spike 2 — Is FMCSA enough on its own?** *(widened 2026-09-26 — it now tests two fields, not one)*
 - **Question:** can we get from an MC number to a named principal *and* a headcount band for DFW non-asset
@@ -307,9 +320,14 @@ Things this approach depends on that do not exist yet:
       a full pass. Free before paid, cheaper paid before dearer paid: Places before `classify_rollup`, which
       revises D8. One judgment call per candidate. Census `company_officer_1` before `resolve_owner`. See
       *Recommended approach*.
-- [ ] **Who reviews manifest *quality*, beyond terms of use?** New, and raised by the authoring agent: nothing
+- [x] **Who reviews manifest *quality*, beyond terms of use?** New, and raised by the authoring agent: nothing
       currently catches a plausible-but-wrong disqualifier rule or a mis-chosen authoritative source. That
       failure is silent and produces a credible list of the wrong companies — which is E10 exactly.
+      **Decided 2026-10-09:** a mechanical **dry-run** (`lpe manifest dry-run`, built in T7 on its evaluator)
+      runs the free rules against the real source data and reports the pool after each rule. `activate`
+      requires one. A human still reads it, but now reads numbers rather than reasoning. Freight v1 and v2
+      both failed exactly this check by hand. A mis-chosen *source* is still only caught by the human reading
+      the citations.
 - [ ] **Who rewrites the opener, and by when?** Blocks the email leg regardless of architecture.
 - [x] **New repo, or a slice inside an existing `base-*` project?** **Decided 2026-09-26: new repo.** The
       service is built in `my-example-app/` under `app/`, not as a slice inside a `base-*` project —

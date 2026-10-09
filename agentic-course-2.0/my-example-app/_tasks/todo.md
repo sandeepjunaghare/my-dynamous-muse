@@ -629,3 +629,83 @@ per-call anchor beat a token estimate.
 price is per agentic call with fetches. A bare classification without fetches would be cheaper. The census
 officer is a named principal, not proven to be the decision-maker, so M6 still needs checking.
 **Next.** Wave 4 (T7 ∥ T8, T13 if Spike 1 is closed) can be planned against these docs.
+
+---
+
+# Spike 1 closed — discipline, not sourcing (2026-10-09)
+
+**Why:** T13 is gated on Spike 1 closing. The timebox (2026-09-26 → 10-10) ends tomorrow, and nothing a day
+could add would reach the decision rule's bar. **Human closed it today.**
+**Scope:** docs only. No code.
+
+**Evidence, read-only from HubSpot (2026-10-09):**
+- **Tasks: 1 of 22 completed.** The only completion is the GFS Fire Pros follow-up call, ticked on 10-09. The
+  other 21 are NOT_STARTED, and 20 of them are past due. Only the Crisp-LaDew re-approach (11-23) is still in
+  date. The portal holds 26 tasks: the 22, two HubSpot sample tasks, and two created during the spike (the
+  Kodiak call and the Sentinel follow-up, both 09-29 and both unworked).
+- **Activity: 10 notes, 0 logged calls, 0 meetings, 0 emails** since 09-26. All of it happened 09-27 → 09-29:
+  one website teardown, a morning of calls on 09-28 and two door knocks on 09-29. **Nothing has been logged
+  since 09-29.**
+- **Decision-maker conversations: 0** (human, 2026-10-09). The three 09-28 call outcomes did not reach a
+  decision-maker: a "not interested" from Justin, "not interested right now", and "no more new customers, do
+  not call them again". At the Sentinel door knock the front desk (Beth) took collateral for Brian, the
+  decision-maker.
+- **Rule:** ≥3 decision-maker conversations a week → sourcing is the bottleneck. Measured: 0 over two weeks,
+  with work stopping after day 4 → **discipline. Cadence enforcement carries more weight than sourcing.**
+
+**What the data says about the machine (T11/T13):**
+- When the work was done, it was logged as a **note**, not a call, and the task was **not ticked**. Example:
+  Jorge was called twice on 09-28 and both of his tasks are still open. T11's *task done OR matching activity
+  after creation, notes count* rule is what makes these touches visible. Without it, the machine would nag
+  about work already done.
+- For T13, "surviving prospects" has to exclude explicit refusals, above all the "do not call them again"
+  company. They need parking or exiting, not enrolment.
+
+## Tasks
+
+- [x] Architecture doc → *Spike 1*: **ANSWERED 2026-10-09**, with finding, consequence and what it showed about
+      the machine
+- [x] PRD → *"Is the bottleneck sourcing at all, or discipline?"* checked and answered
+- [x] Tickets → D6, the SPIKE-1 gate row, the graph label, T13 (gate cleared, refusals excluded, notes count),
+      the Wave 4 note and T10 (M5 checkpoint before the first real run)
+- [x] Further reorder? **Decided (human): no.** T7 ∥ T8 ∥ T13 stands. I proposed T13 first and alone, and the
+      human pushed back: lapses are a fact of life, and the machine exists to absorb them. Running alone would
+      not ship T13 sooner, and new prospects cannot reach HubSpot before T9/T10 anyway. Guard: a **checkpoint**
+      (M5 on the adopted prospects before T10's first real run), not a pause
+
+## Review
+
+**Worked.** The spike's evidence was already in HubSpot. One read-only pull gave the verdict, so no
+self-report was needed. Asking the human only the question the data could not answer (were the 09-28 calls
+with decision-makers?) kept the verdict honest.
+**Didn't.** My first reorder proposal (T13 alone) treated the finding as a reason to slow sourcing. It
+optimised for focus, which doesn't need serialising when the slices are disjoint. The human's framing was
+right: the spike justifies the machine, not a pause.
+**Watch.** The 22 is reconstructed from E15's counts (20 from September plus 2 from February). Recheck the
+exact set when T13 is planned. Two tasks created during the spike (Kodiak, Sentinel) are adoption candidates
+too.
+
+---
+
+# Manifest agent: turn cap and quality review (2026-10-09)
+
+**Why:** two open items from the live `propose` run. Turns were the binding cap (36 of 40, $0.78 of $5.00),
+and a capped run fails whole, writing nothing. Activation checks terms of use, not correctness, and freight
+v1 and v2 were both wrong in ways only a check against real data caught.
+
+- [x] Turn cap default **40 → 60** (`app/core/config.py`, `.env.example`, the cap-message test). `.env` does not
+      set it, so the default applies. The $5.00 budget stays as the runaway guard
+- [x] Quality review **decided (human): a mechanical dry-run, built in T7.** `lpe manifest dry-run <id>`
+      reports step-by-step pool counts and sample rows from the free rules against real data; `activate`
+      requires a recorded one. Optional: a check at proposal time that rule values exist in the source data.
+      Recorded in T7, the ticket doc's *Still open* and the architecture doc's open questions
+- [ ] Still open for **freight v3** before anyone activates it: the ICP band (6–50) rests on one survey
+      (human's call), and three sources' terms point at `unknown-license` (answered at `activate`)
+
+## Review
+
+**Worked.** Both decisions came out of evidence already on hand: the live run's turn count, and the two
+manifests the hand check caught. The quality gate copies the check that actually worked, rather than
+inventing a review step.
+**Watch.** The dry-run makes T7 bigger, by a CLI command plus an activation precondition (likely a column, so
+a new migration). Re-size T7 when it's planned.

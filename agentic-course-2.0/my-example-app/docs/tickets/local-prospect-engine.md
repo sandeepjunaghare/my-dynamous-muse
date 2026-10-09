@@ -21,7 +21,7 @@ Previously assumptions; now settled. Change any of them and re-slice the affecte
 | D3 | **Manifest authoring is agentic and in the MVP.** Agent proposes a DRAFT row; a human activates it on the CLI, recording terms of use as they do. | T2, **T12** |
 | D4 | **We own the cadence schedule; HubSpot owns outcomes.** Spike 3: no sequences on Starter. | **T11**, T9, **T13** |
 | D5 | **Done = Task complete OR matching activity logged after task creation**, ties breaking toward done. | T11 |
-| D6 | **Spike 1 runs alongside Waves 1–2 and ends in adoption** of the surviving 22. | Wave order, **T13** |
+| D6 | **Spike 1 runs alongside Waves 1–2 and ends in adoption** of the surviving 22. **Closed 2026-10-09: discipline**, no further reorder. | Wave order, **T13** |
 | D7 | **No budget ceiling; a 500-call Places circuit breaker.** Per-run cost logged from T1. | T1, T6 |
 | D8 | **Free before paid; cheaper paid before dearer paid** *(revised 2026-10-09)*. Nothing paid touches a candidate a free filter would drop. Places verification (~$0.03) runs before the `classify_rollup` judgment call (~$0.08) and feeds it evidence. Was: "qualification before verification". | T5, T6, T7 |
 | D9 | **Hosted Supabase (dev + prod), local Mac first then a small VPS.** Compose carries no Postgres. | T1 |
@@ -180,6 +180,8 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
 - `disqualification` table: candidate + the rule that fired + when. **Re-source suppression:** a disqualified candidate is not re-sourced next run — tested across two runs. This is the thing a HubSpot-only model cannot do.
 - Priority score: Intensity (1–5) × Automatable (1–5) = 1–25; ≥16 live, <9 dead (E9), computed from cited signals.
 - Fixture test: the four known rollups (Impact Fire, Summit Fire, Century Fire, Control Systems) classify as rollup; **<5% rollup false positives** (M6).
+- **Manifest dry-run: the quality check (decided 2026-10-09).** `lpe manifest dry-run <id>` runs a manifest's **free** rules through this evaluator against the real source data and prints the pool size after each rule, plus a few sample rows that pass and a few that fail. It writes nothing and makes no paid calls. It works on a DRAFT, and `activate` refuses a manifest that has no recorded dry-run. This automates the hand check that caught freight v1 (a rule matching nothing) and v2 (an exclusion list that let through anything it didn't list). Tests: a rule that matches nothing and a rule that excludes nothing are both flagged in the output.
+- **If cheap once the evaluator exists:** check at proposal time that each rule's field, and its literal values, appear in a sample of the source data (v1's `'asset_based'` against the real A/B/C).
 
 **Per-ticket context:** E7 · E9 · architecture → *Missing pieces* ("a rollup-vs-local classifier") · M6 ·
 PRD §4 WRONG condition (founder rejects ≥30% → qualification judgment cannot be encoded).
@@ -258,13 +260,14 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 - Read the surviving open prospects of the 22 (11 were already past due at slice time) and enrol them in the cadence state machine. **No new sourcing.**
 - **Adopted candidates carry honest provenance**, not an exemption: `retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's create date. One code path, and the data says truthfully that it was hand-typed.
 - **Cycle position is reconstructed from logged activity, never reset** — a prospect touched twice by hand resumes at touch three, and park-after-three-cycles counts those prior touches.
-- Runs **after Spike 1 closes**, so the spike ends with a lever attached rather than as an observation.
+- Runs **after Spike 1 closes**, so the spike ends with a lever attached rather than as an observation. *(Closed 2026-10-09: discipline. 1 of 22 tasks completed.)*
+- **Surviving** excludes explicit refusals: the "do not call them again" prospect and the two "not interested" replies of 09-28 are parked or exited, never enrolled. Most past touches are **notes** on unticked tasks, so reconstruction must count them.
 - Test: a record with zero citable fields adopts successfully (proving the gate covers field writes, not task creation); a record with two prior logged calls resumes at touch three.
 
 **Per-ticket context:** E15 (0 of 22 completed, 11 past due) · PRD JTBD (secondary) · M5 · architecture →
 *Spike 1* and *Cadence*.
 **Files:** `app/cadence/adoption.py`, `tests/cadence/`
-**Size:** ~500–800 lines · **Depends on:** T11 · **Gated by:** SPIKE-1 closing
+**Size:** ~500–800 lines · **Depends on:** T11 · **Gated by:** ~~SPIKE-1 closing~~ cleared 2026-10-09
 
 ---
 
@@ -276,6 +279,7 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 - Friday report: the four numbers unchanged from the playbook — doors knocked · owner conversations · assessments booked · paid assessments sold — read from HubSpot, not from a spreadsheet.
 - **M3 renders `not configured`, never `0`** — the `$999 assessment` pipeline does not exist and we have decided not to create it (D10, GATE-A). An uninstrumented zero and a real zero are different facts.
 - Failure semantics: a degraded enrichment run still promotes what it can cite, and says what it dropped.
+- **Before the first real run (Spike 1 checkpoint, 2026-10-09):** read M5 on the T13-adopted prospects. If touches still are not getting done with the machine running, fix that before the run adds volume. This is a human check, not a code gate.
 
 **Per-ticket context:** PRD §6 steps 1–8 · M7 · architecture → *Scheduling: boring on purpose*, *Cost* ·
 **GATE-A**.
@@ -288,7 +292,7 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 
 ```mermaid
 graph TD
-  S1[SPIKE-1 · 2 wks · ends in adoption]:::spike
+  S1[SPIKE-1 · answered: discipline]:::spike
   S2[SPIKE-2 · 1 day · FMCSA yield, offline]:::spike
 
   T1[T1 scaffold + core + provenance + cost]
@@ -344,7 +348,7 @@ graph TD
 | **1** | **T1** | no | Blocks everything |
 | **2** | **T2** ∥ **T3** | 2 worktrees | Disjoint (`manifests/` vs `promotion/`) |
 | **3** | **T4** ∥ **T11** ∥ **T12** | 3 worktrees | `sourcing/` · `cadence/` · `manifests/`. T11 needs no sourcing at all, so the cadence machine exists before the first list does |
-| **4** | **T7** ∥ **T8** ∥ **T13** | 3 worktrees | T13 once Spike 1 closes — the 22 enter the machine here |
+| **4** | **T7** ∥ **T8** ∥ **T13** | 3 worktrees | Spike 1 closed 2026-10-09 (discipline): T13 is unblocked and stays in parallel, and the 22 enter the machine here |
 | **5** | **T5** ∥ **T9** | 2 worktrees | `sourcing/`+`tools/` vs `promotion/` |
 | **6** | **T6** | no | After T5. No longer waits for T7: verification now runs before the judgment call (D8, revised 2026-10-09) |
 | **7** | **T10** | no | Integration; plan it last, when the seams are real |
@@ -371,7 +375,7 @@ against a guess.
 
 | Gate | Question | Timebox | Blocks |
 |---|---|---|---|
-| SPIKE-1 | Is the constraint sourcing, or discipline? | 2 weeks | **T13.** Runs alongside Waves 1–2; ends in adoption either way. Its finding shifts wave order, not the starting point |
+| SPIKE-1 | Is the constraint sourcing, or discipline? | 2 weeks | **ANSWERED 2026-10-09: discipline.** 1 of 22 tasks done, 0 decision-maker conversations, nothing logged after day 4. No further reorder. T13 is unblocked and runs in parallel. **Checkpoint:** read M5 on the adopted prospects before T10's first real run |
 | SPIKE-2 | Does FMCSA yield a named principal **and** a headcount band for DFW non-asset brokerages? | 1 day | **T5.** Run offline against the bulk census file. <50% principal yield → the freight manifest needs a second source from day one and M6's 70% needs re-basing. **The headcount half is expected to fail** — FMCSA's power-unit/driver fields describe carriers, not brokers. **Principal half measured 2026-10-09:** census `company_officer_1` is present for **67%** of freight v3's 4,449 DFW pool, which clears the 50% bar. Whether those officers are the decision-maker M6 means is still unchecked, and the headcount half is not yet run |
 | SPIKE-3 | Does our HubSpot tier have sequences, or only tasks? | — | **ANSWERED.** Starter — no sequences, workflows capped. Forced D4 |
 | SPIKE-4 | Can we send without risking `compumatrice.com`? | — | **Out of MVP scope.** No ticket here sends. T11 drafts the email touch only |
@@ -381,7 +385,10 @@ against a guess.
 - **Who reviews manifest *quality*, beyond terms of use?** T12's agent can propose a plausible-but-wrong
   disqualifier or a mis-chosen authoritative source, and that failure is silent — it yields a credible list
   of the wrong companies, which is E10 exactly. `activate` catches the legal question, not the correctness
-  one. **Blocks nothing yet; will bite at vertical #2.**
+  one. **Decided 2026-10-09: the dry-run in T7.** `activate` requires a recorded dry-run (step-by-step pool
+  counts plus sample rows), and a human reads it. A critic agent was rejected: it shares the author's blind
+  spots and cannot see the real data. A checklist alone was rejected: it relies on the discipline Spike 1 found
+  lacking.
 - **Google Places terms of use** — unread. FMCSA/QCMobile is public domain (CC PDM 1.0). **Blocks marking
   the Places source active in a manifest**, not building T6 against fixtures.
 - **Google Places real pricing** — the ~$20–30/month estimate is unverified. **Confirm when planning T6.**

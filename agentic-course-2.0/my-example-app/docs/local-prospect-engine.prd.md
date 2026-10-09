@@ -265,7 +265,7 @@ falls, the WRONG condition in §4 is triggering.
       one niche from 30 conversations and it is 1 conversation in. Pursuing several verticals in
       sequence is a different strategy from choosing one. Which is it — and if it's the former, does the
       tracker's "choose a niche" framing get retired?
-- [ ] **Is the bottleneck sourcing at all, or discipline?** E15 is the uncomfortable finding: 22 follow-up
+- [x] **Is the bottleneck sourcing at all, or discipline?** E15 is the uncomfortable finding: 22 follow-up
       tasks sit open in HubSpot with 0 completed and 11 past due. An agent that produces more prospects
       adds rows to a queue nobody is working. Does the MVP need to start by closing the loop on tasks
       that already exist, before sourcing new ones?
@@ -274,6 +274,10 @@ falls, the WRONG condition in §4 is triggering.
       finding arrives with a lever attached. The MVP now builds cadence enforcement *and* sourcing, with
       cadence landing earlier than originally sliced. The open half is what the spike's number turns out
       to be, and whether it shifts the wave order further.
+      **Answered 2026-10-09: discipline.** 1 of 22 tasks completed and 0 decision-maker conversations in two
+      weeks. Nothing has been logged since day 4. Cadence was already ahead of sourcing, so the order does not
+      move again: adoption (T13) runs in parallel with the sourcing line, and M5 on the adopted prospects is read
+      before the first real weekly run. Lapses are expected; absorbing them is the cadence machine's job.
 - [ ] **Fix the opener before scaling it.** E16 shows three AI-based rejections alongside two notes where
       the opener was *"local AI expert"* — against the playbook's own rule. Automating outreach that
       leads with AI would industrialize a known failure. Who rewrites the opener, and by when?
