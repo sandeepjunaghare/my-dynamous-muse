@@ -500,16 +500,24 @@ SDK wrongly, and T11's failure test failed the create *before* HubSpot recorded 
 | Suite on `main` | **538 passed** with a database; **376 passed, 162 skipped** without one |
 | Types / lint | mypy 99 files, pyright 0, ruff clean; zero suppressions |
 | Migrations | one head, `0005_cadence`; empty → head → `alembic check` → base → head all clean |
-| Dev Supabase | **still at `0003`** — `0004` and `0005` are not applied yet |
+| Dev Supabase | at **`0005_cadence` (head)** since 2026-10-09; `alembic check` clean |
 | Prod Supabase | not created yet |
 
-**The amend window for `0004` and `0005` is open until dev applies them**, and closes then. Both were edited in
-place during review (legitimately — nothing real had run them). After `alembic upgrade head` on dev, any change
-to `sourcing_run`, `candidate` or `cadence_state` is a new revision.
+**The amend window for `0004` and `0005` is closed** (2026-10-09). Both were edited in place during review —
+legitimately, nothing real had run them — and dev has now applied them. Any change to `sourcing_run`,
+`candidate` or `cadence_state` is a new revision, never an amend.
 
 ## Blocked on the human
 
-- [ ] **Apply `0004` and `0005` to dev Supabase** (`alembic upgrade head` against dev)
+- [x] **Apply `0004` and `0005` to dev Supabase** — **done 2026-10-09.** Dev was unreachable at first: the pooler
+      answered `tenant/user … not found` because the free project had paused; restored by the human. Applied
+      `0003 → 0004 → 0005`; verified `alembic current` = `0005_cadence (head)`, `alembic check` clean, all three
+      tables present and empty with every check/unique/FK constraint, both manifests still DRAFT.
+- [ ] **`.env` driver prefix has regressed** — `DATABASE_URL` reads `postgresql://` again (file edited 2026-10-05),
+      which selects psycopg and fails at startup. It was fixed once in Wave 2 prep. Change it back to
+      `postgresql+asyncpg://`; the migration above ran with the prefix overridden for that one command
+- [ ] **Dev pauses when idle** (free tier, ~7 days). Expect `tenant/user … not found` after a quiet week, and
+      restore from the dashboard; it matters once the daily cadence sync runs against dev
 - [ ] **Add `HUBSPOT_DEFAULT_OWNER_ID` to `.env`** — unset, cadence tasks are unassigned (E15) and every sync warns
 - [ ] **Install the daily launchd job** — command in `app/cadence/README.md`
 - [ ] **One read-only HubSpot GET** of a known contact's task/engagement associations — confirms the response
