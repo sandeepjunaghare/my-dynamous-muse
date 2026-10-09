@@ -17,16 +17,19 @@ five stages (registry search, business verification, route clustering) never nee
 place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
-**Today** — T1, T2 and T3 have shipped: the service boots, validates clean, the provenance primitive
-exists, and two slices are built — `manifests/`, and the gateway half of `promotion/`.
+**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12): the service boots, validates clean, the
+provenance primitive exists, and five slices are built — `manifests/` with its authoring agent, the gateway
+half of `promotion/`, the `sourcing/` data model, and the `cadence/` state machine.
 ```
 app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
 app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
 app/shared/provenance.py                    # ProvenancedValue[T] + is_promotable() — the write-gate as a type
 app/manifests/                              # vertical_manifest DRAFT→ACTIVE, the terms gate, read-only routes, the CLI, the authoring agent (T12)
-app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties
+app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties, task/activity reads
+app/sourcing/                               # sourcing_run + candidate, field-level provenance, one owning stage per field (stages.py)
+app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, routes + CLI
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
-alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds
+alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence
 tests/                                      # mirrors app/, plus the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
@@ -40,11 +43,11 @@ each one lands. `core/` and `shared/` above are their built counterparts — the
 infra that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
 ```
 app/
-  sourcing/        # brief → sourcing_run → candidate, every field carrying its own provenance
+  sourcing/        # the pipeline runner and registry search (T5) — the data model above is built
   qualification/   # disqualifier rules + Intensity×Automatable score; owns `disqualification`
   routing/         # DFW geographic route clustering
   promotion/       # create Company/Contact, own the `promotion` ledger (T9) — the gateway above is built
-  cadence/         # the three-touch state machine, task scheduling, outcome sync, adoption
+  cadence/         # adoption of the existing 22 (T13) — the state machine above is built
   tools/           # pipeline stages, all manifest-parameterized
 ```
 `cadence/` is a domain, not promotion's back half: our HubSpot tier has no sequences (see *Ground rules*), and
@@ -105,6 +108,10 @@ Manifests are reviewed on the CLI — no frontend, no second login. Built at T2 
 `uv run lpe manifest activate <id> --accept-terms <sources>` (where the terms-of-use decision is recorded).
 `uv run lpe manifest propose "<brief>" [--vertical <slug>]` (T12) writes a cited **DRAFT** only; it never
 activates and never answers terms of use. Manifest *quality* review is still an open question — no gate.
+
+The cadence is synced **daily by an external launchd job**, not by the weekly run (T11):
+`uv run lpe cadence sync` · `uv run lpe cadence overdue` (also `POST /cadence/sync`, `GET /cadence/overdue`).
+There is no enrol command by design — enrolment arrives with T9 and T13.
 
 Database-backed tests need a throwaway Postgres and skip without one:
 `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·

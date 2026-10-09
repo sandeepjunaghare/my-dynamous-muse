@@ -430,3 +430,120 @@ whenever a licence first needs to be on a row.
 not done* above: T4 and T11 both migrate and are the first real exercise of the B3 single-head guard;
 three-way parallelism should not be the experiment that also tests an unproven mechanism). T12 follows.
 Plan just-in-time — a dependent ticket waits until its dependency is *implemented*, not merely sliced.
+
+---
+
+# Wave 3 — T4 ∥ T11 ∥ T12 (2026-10-08 → 2026-10-09)
+
+**Base:** `main` @ `bbed27a` · **Landed:** PR #7 `bd691c5` (T4) · PR #9 `d46e147` (T11) · PR #8 `dee4cdf` (T12)
+
+**Three worktrees, not the two Wave 2 closed on.** The note above held Wave 3 to T4 ∥ T11 with T12 after, so
+the single-head guard's first real test would not share a wave with a third branch. The human asked for all
+three in parallel, and that overrode the note. It was not raised at the time because the note was missed (this
+file was overwritten from its first 80 lines and later restored — see *Review*). The guard held: one linear
+chain, verified on the integration branch before anything landed.
+
+| Ticket | PR | Branch | Slice | Migration |
+|---|---|---|---|---|
+| **T4** sourcing data model | #7 | `feat/t4-sourcing-model` | `app/sourcing/` | `0004_sourcing` → `0003` |
+| **T11** cadence state machine | #9 | `feat/t11-cadence` | `app/cadence/` (+ reads in `promotion/`) | `0005_cadence` → `0004` (rebased at merge) |
+| **T12** manifest-authoring agent | #8 | `feat/t12-manifest-agent` | `app/manifests/{agent,prompts,proposal}.py` | none |
+
+## Tasks
+
+- [x] Three worktrees under `my-dynamous-muse/worktrees/`, `.env` copied, 234 passed in each. DB tests ran on a
+      throwaway Postgres (`lpe-wave3-pg`, port **5434** — 5433 was taken), one database per worktree
+- [x] Plan → implement → validate → report → PR, one background agent per ticket, autonomous to PR (human's call)
+- [x] Fresh-eyes review per PR (`piv-review-pr`, posted as comments) → `.claude/code-reviews/pr-{7,8,9}-review.md`
+- [x] Findings fixed per PR (`piv-fix-review-findings`), each fix with a test that failed first
+- [x] T11 due-date floor folded in at merge (`336cb21`)
+- [x] Integration branch `integration/wave-3`: T4 → T11 → T12, full suite green, then each PR landed on GitHub in
+      that order with `main` merged into the next branch; final `main` tree identical to the validated one
+- [x] `CLAUDE.md` architecture map and commands updated
+
+## Review findings and how they closed
+
+| PR | Review | After fixes |
+|---|---|---|
+| #7 T4 | approve-after: 0 Crit · 0 High · 4 Med · 10 Low | all 4 Med fixed; Lows fixed or deferred to T5 |
+| #8 T12 | request changes: 1 Crit · 1 High · 2 Med · ~13 Low | all fixed; the replay harness now drives the SDK's real `query()` |
+| #9 T11 | request changes: 0 Crit · 2 High · 5 Med · 4 Low | all High/Med fixed; L1, L3 deferred |
+
+The two that would have hurt in production: **T12** cited pages whose fetch had returned 403/404 or
+redirected off-host; **T11** could create a duplicate HubSpot task after an ambiguous 5xx, and paired a ticked
+task with activity meant for the next touch. Both were invisible to their own suites — T12's replay modelled the
+SDK wrongly, and T11's failure test failed the create *before* HubSpot recorded it.
+
+## Decided (human, 2026-10-08)
+
+- **T4 field ownership:** each candidate field has one owning stage (`app/sourcing/stages.py`); a non-owner may
+  fill an empty field, never overwrite. Owners: `registry_id`/`legal_name`/`dba_name` → `search_registry`;
+  `address`/`phone`/`website` → `verify_business`.
+- **T4:** keep the unrequested `manifest_id` FK (a run needs an ACTIVE manifest). Merge-never-clears,
+  cost-at-finish and the `(run, registry id)` key stand; their follow-ups are T5's.
+- **T11 sync:** **daily, by an external launchd job**, separate from the weekly sourcing run. Due dates are
+  floored at the end of the sync's own day, so a touch found the next morning is never born overdue.
+- **T11:** notes count as a matching activity; no enrol route/CLI (T9/T13 call `enrol`); no exit on a reached
+  conversation; superseded tasks reported, never completed; a default task-owner setting added.
+- **M5** counts touches the cadence machine closed, not HubSpot task completion (T10 reads it).
+- **T12:** quality review stays an **open question** — no gate, `propose` prints a note. Quote not stored;
+  terms questions printed, not persisted; caps 40 turns / $5.00 until a real run logs cost.
+
+---
+
+# Wave 3 closed — where `main` stands (2026-10-09)
+
+`main` is at `dee4cdf`, clean. T1, T2, T3, T4, T11 and T12 have shipped.
+
+| | |
+|---|---|
+| Suite on `main` | **538 passed** with a database; **376 passed, 162 skipped** without one |
+| Types / lint | mypy 99 files, pyright 0, ruff clean; zero suppressions |
+| Migrations | one head, `0005_cadence`; empty → head → `alembic check` → base → head all clean |
+| Dev Supabase | **still at `0003`** — `0004` and `0005` are not applied yet |
+| Prod Supabase | not created yet |
+
+**The amend window for `0004` and `0005` is open until dev applies them**, and closes then. Both were edited in
+place during review (legitimately — nothing real had run them). After `alembic upgrade head` on dev, any change
+to `sourcing_run`, `candidate` or `cadence_state` is a new revision.
+
+## Blocked on the human
+
+- [ ] **Apply `0004` and `0005` to dev Supabase** (`alembic upgrade head` against dev)
+- [ ] **Add `HUBSPOT_DEFAULT_OWNER_ID` to `.env`** — unset, cadence tasks are unassigned (E15) and every sync warns
+- [ ] **Install the daily launchd job** — command in `app/cadence/README.md`
+- [ ] **One read-only HubSpot GET** of a known contact's task/engagement associations — confirms the response
+      shape and that the `lpe-cadence:` key survives in the task body (T11's H1 fix depends on it)
+- [ ] **Confirm the advisory lock through the session-mode pooler** (5432); transaction mode would break it
+- [ ] **One live `propose` run** (≤ $5) — record it as T12's fixture; confirm same-host-redirect handling
+- [ ] **The live-portal provisioning run** (T3) — still the one outstanding one-way door, unchanged
+
+## Carried into Wave 4
+
+- **Due before T5:** #2 `source_url` URL-shape (from Wave 2) · crash path for a run (cost and `failed` status on
+  a fresh session; DB-clock `finished_at`; conditional finish) · source-prefixed registry ids before the first
+  real write · T5 callers must pass `stage`
+- **Due before T8:** "owned ≠ verified" — a verified address is told apart by `retrieval_method`, not presence
+- **Due before T13:** `lpe cadence park <contact>`; `lpe cadence sync --dry-run` for the first run on the 22
+- **Deferred, when convenient:** the per-touch "closed by a note" line · T11 L1 (enrol race — reuse H1's key) ·
+  T12's deferred Lows (listed in `pr-8-review.md`) · #4 (before T10), #6 (before T6), #7 from Wave 2
+- **Fix the AI layer:** `.claude/skills/piv-validate/SKILL.md` is an unfilled template, though `CLAUDE.md` calls
+  it wired; every agent this wave fell back to the raw commands
+
+**Next: Wave 4 — T7 ∥ T8 ∥ T13** per the ticket doc, T13 still gated on Spike 1 closing.
+
+## Review
+
+**Worked.** One background agent per ticket, each in its own worktree with its own database, ran plan-to-PR
+without collisions. Fixing collision points up front (migration names, merge order) made the merge mechanical:
+two one-file conflicts, both resolved once on the integration branch and replayed onto the PR branches with
+`git checkout integration/wave-3 -- <file>`. Fresh-eyes review earned its cost — all three PRs passed their own
+suites and two still carried a High or worse.
+
+**Didn't.** This file was overwritten at the start of the wave from a read of its first 80 lines, which hid
+the Wave 2 close-out — including the decision to run two worktrees, not three. It was restored before commit.
+Both serious bugs passed their authors' tests because the test doubles encoded the author's assumption about
+the external system (the SDK's stream; when HubSpot records a create).
+
+**Next time.** Read the whole work log before planning a wave, and append — never replace. For anything behind
+an external boundary, the review should ask first whether the fake behaves like the real thing.
