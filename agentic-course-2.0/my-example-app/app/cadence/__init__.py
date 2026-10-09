@@ -3,24 +3,33 @@
 We own the schedule; HubSpot owns the outcomes. The public surface:
 
 * :class:`~app.cadence.service.CadenceService` — ``enrol`` (the seam T9 and T13 call), ``sync``
-  and ``overdue``
+  (with ``dry_run``), ``park`` and ``overdue``
 * :class:`~app.cadence.machine.CadencePosition` and :func:`~app.cadence.machine.next_position`
 * :class:`~app.cadence.sync.OutcomeReader` and :func:`~app.cadence.sync.find_signal` — the D5
   done-policy, which T13 reuses to reconstruct an adopted prospect's position
 """
 
-from app.cadence.exceptions import AlreadyEnrolledError, CadenceError
+from app.cadence.exceptions import (
+    AlreadyEnrolledError,
+    AlreadyParkedError,
+    CadenceError,
+    NotEnrolledError,
+    SyncRunningError,
+)
 from app.cadence.machine import CadencePosition, CadenceStatus, Touch, next_position
 from app.cadence.service import CadenceService
 from app.cadence.sync import OutcomeReader, find_signal, plan_advance
 
 __all__ = [
     "AlreadyEnrolledError",
+    "AlreadyParkedError",
     "CadenceError",
     "CadencePosition",
     "CadenceService",
     "CadenceStatus",
+    "NotEnrolledError",
     "OutcomeReader",
+    "SyncRunningError",
     "Touch",
     "find_signal",
     "next_position",

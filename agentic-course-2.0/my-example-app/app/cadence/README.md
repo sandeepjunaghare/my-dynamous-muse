@@ -157,6 +157,36 @@ closed as `touches_closed`, and logs one `cadence.sync.touch_done` event per tou
 `GET /cadence/overdue` / `uv run lpe cadence overdue` read only our own schedule and need no token.
 Between syncs they can list a touch that has since been done; the next sync notices.
 
+### Dry run
+
+`uv run lpe cadence sync --dry-run` makes the same HubSpot reads and the same decisions as a sync,
+and applies none of them. It creates no task, writes no row and logs no `touch_done`, so M5 never
+counts a rehearsal. For each prospect with something new, it prints the touches that would close and
+**what closed each one** ("task ticked", "note 88000005", "task ticked + call …"), then the task it
+would create and when it is due, or that it would park. A row with an interrupted create says
+whether its task was found (and would be adopted) or would be created. A sync decides first (reads,
+then the pure `plan_advance`) and only then applies, and a dry run stops after deciding, so what it
+prints is what the next sync does, given the same HubSpot state. It takes no lock, so it can run
+while a real sync does. It plans every prospect from **one moment**, the rows and the task batch as
+read at its start, so a sync landing mid-run makes its output stale, never false. It also reports
+overdue touches without logging `touch_overdue`, so alerts see each real sync once.
+
+## Parking by hand
+
+`uv run lpe cadence park <contact>` finishes a prospect's cadence, for example after a conversation
+was reached or the prospect refused.
+
+- **Final.** A contact has one cadence ever (`uq_cadence_state_contact`) and cycle position is never
+  reset, so there is no unpark.
+- **The open task is left alone.** Its id is printed for you to close in HubSpot; this slice never
+  writes to the founder's tasks.
+- **No reason is stored.** What happened belongs in HubSpot as a note, and the command says so.
+- **Under the sync lock.** It refuses while a sync runs, because a sync that already loaded the row
+  could advance a prospect a human just finished.
+- **An interrupted create is cleared**, and the command warns that a task carrying its key may exist
+  in HubSpot.
+- **Never reaches HubSpot**, so it needs no token.
+
 ## Enrolment — the seam for T9 and T13
 
 There is **no enrol route or CLI command**. `CadenceService.enrol()` is called by code:
@@ -173,10 +203,9 @@ A contact is enrolled at most once, live or parked (`uq_cadence_state_contact`).
 
 ## Deferred
 
-- **`lpe cadence sync --dry-run`** — print the plan, create nothing; wanted before T13's first run.
-- **`lpe cadence park <contact>`** — a human stopping a prospect (a conversation reached); wanted
-  before T13 adopts the 22.
-- **A per-touch "closed by a note" line** in the sync output.
+- **A per-touch "closed by a note" line in the real sync's output.** The dry run prints it already;
+  the sync prints counts.
+- **A route for `park`.** CLI only, for now: one user, one terminal.
 
 ## Decided out, for now
 

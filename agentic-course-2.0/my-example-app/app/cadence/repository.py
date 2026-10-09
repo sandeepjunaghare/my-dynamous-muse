@@ -77,9 +77,15 @@ class CadenceRepository:
                     await connection.commit()
 
     async def get_by_contact(self, contact_id: str) -> CadenceState | None:
-        """The cadence for one HubSpot contact, live or parked."""
+        """The cadence for one HubSpot contact, live or parked, **as the database has it now**.
+
+        Re-read rather than taken from the identity map: `park` checks the status under the sync
+        lock, and a copy this session loaded earlier could still say ``live``.
+        """
         result = await self._session.execute(
-            select(CadenceState).where(CadenceState.hubspot_contact_id == contact_id)
+            select(CadenceState)
+            .where(CadenceState.hubspot_contact_id == contact_id)
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 

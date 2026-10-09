@@ -170,3 +170,139 @@ class TestSync:
 
         assert asyncio.run(sync_while_locked()) == 0
         assert "another cadence sync is running" in capsys.readouterr().out
+
+
+def _portal_with_ticked_task(task_id: str) -> FakeHubSpot:
+    """A fake portal holding the committed row's task, already ticked an hour ago."""
+    hubspot = FakeHubSpot(FakeClock(datetime.now(UTC)))
+    ticked = datetime.now(UTC) - timedelta(hours=1)
+    hubspot.tasks[task_id] = {
+        "id": task_id,
+        "properties": {
+            "hs_task_status": "COMPLETED",
+            "hs_task_completion_date": ticked.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        },
+        "createdAt": "2026-10-07T14:00:00.000Z",
+        "updatedAt": "2026-10-07T14:00:00.000Z",
+        "archived": False,
+    }
+    return hubspot
+
+
+async def _status_of(database_url: str, contact_id: str) -> tuple[str, str, str | None]:
+    engine = create_async_engine(database_url)
+    try:
+        async with AsyncSession(engine) as session:
+            state = await CadenceRepository(session).get_by_contact(contact_id)
+            assert state is not None
+            return state.status, state.touch, state.hubspot_task_id
+    finally:
+        await engine.dispose()
+
+
+class TestSyncDryRun:
+    def test_a_dry_run_prints_the_plan_and_changes_nothing(
+        self,
+        committed_live: tuple[str, str],
+        cli_database: str,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        contact_id, task_id = committed_live
+        hubspot = _portal_with_ticked_task(task_id)
+
+        def fake_client() -> HubSpotClient:
+            return make_client(hubspot.portal)
+
+        monkeypatch.setattr("app.cadence.cli.get_hubspot_client", fake_client)
+
+        assert main(["cadence", "sync", "--dry-run"]) == 0
+
+        out = capsys.readouterr().out
+        assert "dry run" in out
+        assert f"contact {contact_id}" in out
+        assert "would close 1/3 call — task ticked" in out
+        assert "would create 1/3 voicemail" in out
+        assert hubspot.created == []
+        assert asyncio.run(_status_of(cli_database, contact_id)) == ("live", "call", task_id)
+
+
+class TestPark:
+    def test_park_finishes_the_cadence_and_points_at_the_open_task(
+        self,
+        committed_live: tuple[str, str],
+        cli_database: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        contact_id, task_id = committed_live
+
+        assert main(["cadence", "park", contact_id]) == 0
+
+        out = capsys.readouterr().out
+        assert f"parked {contact_id} at 1/3 call" in out
+        assert f"open task {task_id}" in out
+        assert "close it in HubSpot" in out
+        assert "as a note on the contact in HubSpot" in out, "the reason belongs in HubSpot"
+        assert asyncio.run(_status_of(cli_database, contact_id)) == ("parked", "call", None)
+
+    def test_parking_twice_is_one_error_line(
+        self, committed_live: tuple[str, str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        contact_id, _ = committed_live
+        assert main(["cadence", "park", contact_id]) == 0
+        capsys.readouterr()
+
+        assert main(["cadence", "park", contact_id]) == 1
+
+        err = capsys.readouterr().err
+        assert "error:" in err
+        assert "already parked" in err
+        assert "Traceback" not in err
+
+    def test_an_unknown_contact_is_one_error_line(
+        self, cli_database: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["cadence", "park", "400999999"]) == 1
+
+        err = capsys.readouterr().err
+        assert "has no cadence" in err
+        assert "Traceback" not in err
+
+    def test_park_needs_no_hubspot_token(
+        self,
+        committed_live: tuple[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        contact_id, _ = committed_live
+        monkeypatch.setenv("HUBSPOT_PRIVATE_APP_TOKEN", "")
+
+        assert main(["cadence", "park", contact_id]) == 0
+
+    def test_park_while_a_sync_runs_is_one_error_line(
+        self,
+        committed_live: tuple[str, str],
+        cli_database: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        contact_id, _ = committed_live
+
+        async def park_while_locked() -> int:
+            engine = create_async_engine(cli_database)
+            try:
+                async with engine.connect() as other:
+                    await other.execute(
+                        text("select pg_advisory_lock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                    )
+                    try:
+                        return await asyncio.to_thread(main, ["cadence", "park", contact_id])
+                    finally:
+                        await other.execute(
+                            text("select pg_advisory_unlock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                        )
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(park_while_locked()) == 1
+        err = capsys.readouterr().err
+        assert "a cadence sync is running" in err
+        assert asyncio.run(_status_of(cli_database, contact_id))[0] == "live"

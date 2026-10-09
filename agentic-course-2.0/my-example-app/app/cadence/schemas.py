@@ -121,6 +121,57 @@ class AdvancePlan(BaseModel):
         return self.changed and self.next_position is None
 
 
+class PendingTask(StrEnum):
+    """What a dry run found for a row whose task create an earlier sync never confirmed."""
+
+    found = "found"
+    """HubSpot has a task carrying the row's key: the real sync adopts it."""
+    would_create = "would_create"
+    """No such task: the real sync creates it, once."""
+
+
+class ProspectPlan(BaseModel):
+    """What a sync **would** do to one prospect. Produced by a dry run; nothing is applied."""
+
+    hubspot_contact_id: str
+    steps: list[AdvanceStep] = Field(default_factory=list[AdvanceStep])
+    """The touches that would close, in order, each with what closed it."""
+    next_position: CadencePosition | None = None
+    next_due_at: datetime | None = None
+    parks: bool = False
+    """The last touch would close, finishing the cadence."""
+    pending_task: PendingTask | None = None
+    pending_task_id: str | None = None
+    """The task a ``found`` pending create would adopt."""
+    pending_task_superseded: bool = False
+    """A ``would_create`` task whose touch logged activity already closes: the real sync creates
+    it and then lists it under ``open_tasks_superseded``, for a person to close."""
+    superseded_task_id: str | None = None
+    """An open task whose touch logged activity would close. Left alone, as in a real sync."""
+    task_missing: bool = False
+    """The current task no longer exists in HubSpot, and nothing would close the touch."""
+
+    @property
+    def changed(self) -> bool:
+        """Whether any touch would close."""
+        return bool(self.steps)
+
+
+class ParkResult(BaseModel):
+    """A cadence a human finished by hand."""
+
+    hubspot_contact_id: str
+    cycle: int
+    touch: Touch
+    """Where the prospect stood when it was parked."""
+    open_task_id: str | None
+    """The current touch's task, left open in HubSpot. We never write to the founder's tasks."""
+    pending_task_key: str | None
+    """Set when a task create had been interrupted: a task carrying this key may exist in
+    HubSpot."""
+    parked_at: datetime
+
+
 class CadenceStateResponse(BaseModel):
     """One prospect's schedule, as the API and CLI render it. Schedule only — no outcomes."""
 
@@ -168,6 +219,9 @@ class SyncReport(BaseModel):
     """What one sync did. Counts are per prospect except ``touches_closed``."""
 
     ran_at: datetime
+    dry_run: bool = False
+    """Nothing was applied: no task created, no row written, no touch counted. ``plans`` says what
+    would have happened, and the counts below stay at zero."""
     skipped: bool = False
     """Another sync held the run lock, so this one did nothing. Not a failure: the running sync
     is doing the work."""
@@ -191,3 +245,5 @@ class SyncReport(BaseModel):
     failures: list[SyncFailure] = Field(default_factory=list[SyncFailure])
     warnings: list[str] = Field(default_factory=list[str])
     """Configuration a person should fix, e.g. no default task owner."""
+    plans: list[ProspectPlan] = Field(default_factory=list[ProspectPlan])
+    """A dry run's decision per prospect. Empty for a real sync."""

@@ -517,8 +517,10 @@ legitimately, nothing real had run them — and dev has now applied them. Any ch
       fails at startup. **Fixed by the human 2026-10-09**; verified — `alembic current` reaches dev with `.env`
       as-is and reports `0005_cadence (head)`. A URL pasted from the Supabase dashboard always loses the
       `+asyncpg`, so check the prefix after any rotation
-- [ ] **Dev pauses when idle** (free tier, ~7 days). Expect `tenant/user … not found` after a quiet week, and
-      restore from the dashboard; it matters once the daily cadence sync runs against dev
+- [x] **Dev pauses when idle** (free tier, ~7 days). **Accepted 2026-10-09 (human):** dev is temporary and is
+      replaced by a real project once the service runs. Meanwhile the daily 07:00 sync touches dev every day,
+      which should keep it from pausing. That holds only while the Mac is awake; after a week away, expect
+      `tenant/user … not found` and restore from the dashboard
 - [x] **`HUBSPOT_DEFAULT_OWNER_ID` in `.env`** — done 2026-10-09 (Sandeep, owner `86826215`; owners read via the
       HubSpot connector). The HubSpot credential is now a **Service Key** (legacy private apps are being phased
       out), still read from `HUBSPOT_PRIVATE_APP_TOKEN`; same `Bearer` header, no code change
@@ -741,3 +743,66 @@ problem: phone and website are Enterprise ($35 per 1,000, 1,000 free), and the P
 returned noise twice; the extracted clause was unambiguous. Pricing and terms answered different questions,
 and only the terms changed the design.
 **Watch.** "Pre-fetch" for an unattended batch is a grey area. Rule 1 is the defensible reading, not a ruling.
+
+---
+
+# Before T13: `lpe cadence park` and `lpe cadence sync --dry-run` (2026-10-09)
+
+**Why:** both are deferred in `app/cadence/README.md` and wanted before T13 adopts the 22. `park` lets a human
+stop a prospect, for example after a conversation is reached. `--dry-run` shows what a sync would do before it
+does it. **Scope:** `app/cadence/` only, CLI only. No migration, no route.
+
+**Proposed behaviour (confirm before building):**
+- `park <contact>`
+  - **Final.** `uq_cadence_state_contact` already makes a parked contact un-enrollable, and there is no unpark.
+  - **Leaves the open HubSpot task alone** and prints its id ("close it in HubSpot"). The slice never writes to
+    the founder's tasks.
+  - **Stores no reason.** Outcomes live in HubSpot, so it prints a reminder to log a note there.
+  - **Takes the sync lock** and refuses while a sync runs. Otherwise a sync that already loaded the row could
+    advance a parked prospect.
+  - Errors: contact not enrolled; already parked. A row with a pending create is parked, its pending key is
+    cleared, and the CLI warns that a task may exist in HubSpot.
+- `sync --dry-run`
+  - **Reads only.** HubSpot reads as a real sync does; no task creates, no database writes, no lock.
+  - Per prospect: the touches that would close and **by what** (task, call, note…, which also covers the
+    deferred "closed by a note" line), then the next task and its due date, or "would park". A pending row says
+    whether the interrupted task was found.
+  - Exit 1 when any prospect's reads fail, as `sync` does.
+
+## Tasks
+
+**Decided (human):** park is final (no unpark), and the open task is left alone with its id printed. The
+plan was approved as written.
+
+- [x] `service.py`: `_sync_one` split into `_decide` (reads, then `plan_advance`) and apply. `sync(dry_run=True)`
+      stops after deciding, takes no lock and logs no `touch_done`. `park(contact_id)` runs under the sync lock.
+      The sync loop also skips a row that is no longer live
+- [x] `schemas.py`: `ProspectPlan`, `PendingTask`, `ParkResult`; `SyncReport.dry_run` and `.plans`
+- [x] `exceptions.py`: `NotEnrolledError` (404), `AlreadyParkedError` (409), `SyncRunningError` (409)
+- [x] `cli.py`: `sync --dry-run` prints per prospect what closes each touch ("task ticked", "note 880…"), then
+      the next task and its due date. `park <contact>` prints the open task to close and asks for a HubSpot note
+- [x] Tests first, each failing first: 13 service, 5 CLI
+- [x] README (*Dry run*, *Parking by hand*; *Deferred* trimmed), `CLAUDE.md` commands, package exports
+- [x] Validation: ruff, mypy, pyright clean; **562 passed with the database**, 382 passed / 180 skipped without;
+      `alembic check` clean (no migration)
+
+**Found on the way:** `b0d1e3c` (the cost rounding) broke a database-tier assertion in `test_cli_propose.py`.
+It was validated without a database, so the test skipped. Fixed on `main` in `029da00`, and this branch is
+rebased on it.
+
+## Review
+
+**Worked.** Splitting decide from apply made the dry run honest by construction: it is the real sync minus the
+writes, not a second code path that could drift. Every new test failed before its code existed.
+**Didn't.** I validated the earlier cost-rounding fix offline only, and a database-tier test caught it a
+commit later. **Run the database tier before any push that changes output text.** The skip count is the
+signal: 162 skipped means 162 tests did not look.
+**Watch.** A dry run plans with "no task" for an interrupted create it would make. That equals a fresh open
+task only because an open task closes nothing, which `find_signal` guarantees today.
+
+**PR #12 review (2026-10-09):** fresh-eyes review by the `code-reviewer` agent, report in
+`.claude/code-reviews/pr-12-review.md`. 0 Critical, 0 High, 1 Medium, 6 Low. All fixed except one CLI test,
+each with a test that failed first. The Medium was a dry run racing a real sync and calling a moved task
+"deleted". **Lesson for test doubles:** an ORM `update()` also refreshes the session's copy, so a test
+simulating "another process changed the row" needs `synchronize_session=False`. The first L4 test passed on the
+broken code.
