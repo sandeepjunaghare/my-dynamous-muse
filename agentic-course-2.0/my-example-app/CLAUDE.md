@@ -115,7 +115,8 @@ Manifests are reviewed on the CLI — no frontend, no second login. Built at T2 
 activates and never answers terms of use. Manifest *quality* review is still an open question — no gate.
 
 The cadence is synced **daily by an external launchd job**, not by the weekly run (T11):
-`uv run lpe cadence sync` · `uv run lpe cadence overdue` (also `POST /cadence/sync`, `GET /cadence/overdue`).
+`uv run lpe cadence sync [--dry-run]` · `uv run lpe cadence park <contact>` · `uv run lpe cadence overdue`
+(also `POST /cadence/sync`, `GET /cadence/overdue`). `park` is final, and leaves the open task for you to close.
 There is no enrol command by design — enrolment arrives with T9 and T13.
 
 Database-backed tests need a throwaway Postgres and skip without one:

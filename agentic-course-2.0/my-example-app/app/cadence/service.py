@@ -16,6 +16,9 @@ How a sync avoids creating a task twice
   associated tasks, and adopting it. Only if none exists is the task created.
 * **Concurrently**, a Postgres advisory lock lets one sync run at a time. A second one skips and
   says so (:attr:`~app.cadence.schemas.SyncReport.skipped`).
+
+Each prospect is **decided** first (HubSpot reads, then the pure :func:`plan_advance`) and only then
+**applied**. A dry run stops after the decision, so it predicts exactly what the real sync does.
 """
 
 from collections.abc import Callable, Mapping
@@ -26,9 +29,15 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.cadence.exceptions import AlreadyEnrolledError
+from app.cadence.exceptions import (
+    AlreadyEnrolledError,
+    AlreadyParkedError,
+    NotEnrolledError,
+    SyncRunningError,
+)
 from app.cadence.machine import (
     CadencePosition,
+    CadenceStatus,
     Touch,
     due_at_enrolment,
     local_date,
@@ -38,8 +47,12 @@ from app.cadence.machine import (
 from app.cadence.models import CadenceState
 from app.cadence.repository import CadenceRepository
 from app.cadence.schemas import (
+    AdvancePlan,
     CadenceStateResponse,
     OverdueTouch,
+    ParkResult,
+    PendingTask,
+    ProspectPlan,
     SyncFailure,
     SyncReport,
     TaskSnapshot,
@@ -76,6 +89,17 @@ def default_owner_id() -> str | None:
     if owner is None or not owner.strip():
         return None
     return owner.strip()
+
+
+@dataclass(frozen=True)
+class _Decision:
+    """What a sync concluded for one prospect from HubSpot reads alone. Nothing is applied yet."""
+
+    task: TaskSnapshot | None
+    """The current touch's task: from the batch read, or — for a pending create — the task found
+    carrying its key, ``None`` when there is none."""
+    pending_key: str | None
+    plan: AdvancePlan
 
 
 @dataclass
@@ -170,11 +194,16 @@ class CadenceService:
         )
         return CadenceStateResponse.model_validate(state)
 
-    async def sync(self) -> SyncReport:
+    async def sync(self, *, dry_run: bool = False) -> SyncReport:
         """Read outcomes for every live prospect and advance whatever is done.
 
         One sync at a time: if another holds the run lock, this one returns at once with
         ``skipped`` set and touches nothing.
+
+        ``dry_run`` makes the same reads and the same decisions and applies none of them: no task
+        is created, no row written, and no ``touch_done`` is logged, so metric M5 never counts a
+        rehearsal. ``plans`` says what would have happened. It takes no lock, since it writes
+        nothing, so it can run alongside a real sync.
 
         Each prospect is its own unit of work. A HubSpot, validation or database failure on one
         rolls back whatever that prospect had not committed, is reported under ``failures``, and
@@ -182,14 +211,16 @@ class CadenceService:
         there is nothing to decide without them.
         """
         now = self._clock()
+        if dry_run:
+            return await self._run(now, dry_run=True)
         async with self._repository.sync_lock() as acquired:
             if not acquired:
                 logger.warning("cadence.sync.run_skipped", reason="another sync holds the lock")
                 return SyncReport(ran_at=now, skipped=True)
-            return await self._sync_locked(now)
+            return await self._run(now, dry_run=False)
 
-    async def _sync_locked(self, now: datetime) -> SyncReport:
-        report = SyncReport(ran_at=now)
+    async def _run(self, now: datetime, *, dry_run: bool) -> SyncReport:
+        report = SyncReport(ran_at=now, dry_run=dry_run)
         default_owner = default_owner_id()
         if default_owner is None:
             logger.warning("cadence.sync.owner_unset")
@@ -199,7 +230,7 @@ class CadenceService:
         # Plain values, captured now: a rollback after a failed prospect expires every loaded row.
         work = [(state.id, state.hubspot_contact_id) for state in states]
         task_ids = [state.hubspot_task_id for state in states if state.hubspot_task_id is not None]
-        logger.info("cadence.sync.run_started", live=len(work))
+        logger.info("cadence.sync.run_started", live=len(work), dry_run=dry_run)
 
         if work:
             client = self._hubspot()
@@ -209,7 +240,10 @@ class CadenceService:
                 report.checked += 1
                 try:
                     state = await self._repository.get(state_id)
-                    if state is None:
+                    if state is None or state.status != CadenceStatus.live.value:
+                        continue
+                    if dry_run:
+                        report.plans.append(await self._plan_one(state, tasks, reader, now))
                         continue
                     result = await self._sync_one(state, tasks, reader, client, now, default_owner)
                 except HubSpotError as exc:
@@ -250,6 +284,7 @@ class CadenceService:
             )
         logger.info(
             "cadence.sync.run_completed",
+            dry_run=dry_run,
             checked=report.checked,
             touches_closed=report.touches_closed,
             tasks_created=report.tasks_created,
@@ -279,20 +314,17 @@ class CadenceService:
         now: datetime,
         default_owner: str | None,
     ) -> _ProspectResult:
-        """Resolve any interrupted create, decide, then apply."""
+        """Decide, resolve any interrupted create, then apply."""
         contact_id = state.hubspot_contact_id
         owner = state.hubspot_owner_id or default_owner
         result = _ProspectResult()
-        if state.pending_task_key is not None:
-            task: TaskSnapshot | None = await self._resolve_pending(
-                state, state.pending_task_key, reader, client, owner, now, result
+        decision = await self._decide(state, tasks, reader, now)
+        task = decision.task
+        if decision.pending_key is not None:
+            task = await self._resolve_pending(
+                state, decision.pending_key, decision.task, client, owner, now, result
             )
-        else:
-            task = None if state.hubspot_task_id is None else tasks.get(state.hubspot_task_id)
-
-        activities = await reader.activities(contact_id, since=state.anchor_at)
-        position = CadencePosition(cycle=state.cycle, touch=Touch(state.touch))
-        plan = plan_advance(position, state.anchor_at, state.anchor_ref, task, activities, now)
+        plan = decision.plan
 
         if not plan.changed:
             if task is None:
@@ -347,11 +379,65 @@ class CadenceService:
         result.tasks_created += 1
         return result
 
+    async def _decide(
+        self,
+        state: CadenceState,
+        tasks: Mapping[str, TaskSnapshot],
+        reader: OutcomeReader,
+        now: datetime,
+    ) -> _Decision:
+        """Read what HubSpot says about one prospect and plan its advance. Reads only.
+
+        A row with an interrupted create is looked up by its key among the contact's tasks (the
+        associations read, not search, which lags). Planning on "no task" when none is found is
+        the same plan the fresh, open task the real sync then creates would give: an open task
+        closes nothing.
+        """
+        contact_id = state.hubspot_contact_id
+        key = state.pending_task_key
+        if key is not None:
+            task = await reader.find_task_by_key(contact_id, key)
+        else:
+            task = None if state.hubspot_task_id is None else tasks.get(state.hubspot_task_id)
+        activities = await reader.activities(contact_id, since=state.anchor_at)
+        position = CadencePosition(cycle=state.cycle, touch=Touch(state.touch))
+        plan = plan_advance(position, state.anchor_at, state.anchor_ref, task, activities, now)
+        return _Decision(task=task, pending_key=key, plan=plan)
+
+    async def _plan_one(
+        self,
+        state: CadenceState,
+        tasks: Mapping[str, TaskSnapshot],
+        reader: OutcomeReader,
+        now: datetime,
+    ) -> ProspectPlan:
+        """A dry run's view of one prospect: the decision, rendered, and nothing applied."""
+        decision = await self._decide(state, tasks, reader, now)
+        plan, task = decision.plan, decision.task
+        pending: PendingTask | None = None
+        pending_task_id: str | None = None
+        if decision.pending_key is not None:
+            pending = PendingTask.would_create if task is None else PendingTask.found
+            pending_task_id = None if task is None else task.task_id
+        return ProspectPlan(
+            hubspot_contact_id=state.hubspot_contact_id,
+            steps=list(plan.steps),
+            next_position=plan.next_position,
+            next_due_at=plan.next_due_at,
+            parks=plan.parks,
+            pending_task=pending,
+            pending_task_id=pending_task_id,
+            superseded_task_id=(
+                task.task_id if plan.changed and task is not None and not task.completed else None
+            ),
+            task_missing=not plan.changed and task is None and decision.pending_key is None,
+        )
+
     async def _resolve_pending(
         self,
         state: CadenceState,
         key: str,
-        reader: OutcomeReader,
+        found: TaskSnapshot | None,
         client: HubSpotClient,
         owner: str | None,
         now: datetime,
@@ -359,13 +445,11 @@ class CadenceService:
     ) -> TaskSnapshot:
         """Settle a create an earlier sync started but never confirmed.
 
-        Look first — the contact's tasks, by association, for one carrying ``key`` — and adopt it
-        if HubSpot made it. Only when none exists is the task created, once. The snapshot returned
-        is the current touch's task, so a task the founder already ticked closes its touch in this
-        same sync.
+        ``found`` is the task :meth:`_decide` found carrying ``key``: adopt it if HubSpot made it.
+        Only when none exists is the task created, once. The snapshot returned is the current
+        touch's task, so a task the founder already ticked closes its touch in this same sync.
         """
         contact_id = state.hubspot_contact_id
-        found = await reader.find_task_by_key(contact_id, key)
         if found is not None:
             await self._repository.attach_task(state, found.task_id)
             await self._session.commit()
@@ -387,6 +471,57 @@ class CadenceService:
         logger.info("cadence.sync.task_created", contact_id=contact_id, task_id=created.id)
         result.tasks_created += 1
         return TaskSnapshot(task_id=created.id, completed=False, completed_at=None)
+
+    async def park(self, contact_id: str) -> ParkResult:
+        """Finish a prospect's cadence by hand, for good — a conversation reached, a refusal.
+
+        **Final:** a contact has one cadence ever (``uq_cadence_state_contact``) and cycle position
+        is never reset, so there is no unpark. The open HubSpot task is **left alone** and returned
+        for a person to close — this slice never writes to the founder's tasks — and **no reason is
+        stored**: what happened belongs in HubSpot, as a note. Never reaches HubSpot.
+
+        Taken under the sync lock: a running sync has already loaded its rows, and parking one
+        under it could see the sync advance a prospect a human just finished.
+        """
+        now = self._clock()
+        async with self._repository.sync_lock() as acquired:
+            if not acquired:
+                raise SyncRunningError(
+                    "a cadence sync is running — park again when it has finished"
+                )
+            state = await self._repository.get_by_contact(contact_id)
+            if state is None:
+                raise NotEnrolledError(
+                    f"contact {contact_id} has no cadence — nothing to park",
+                    contact_id=contact_id,
+                )
+            if state.status == CadenceStatus.parked.value:
+                raise AlreadyParkedError(
+                    f"contact {contact_id} is already parked — parking is final",
+                    contact_id=contact_id,
+                )
+            result = ParkResult(
+                hubspot_contact_id=contact_id,
+                cycle=state.cycle,
+                touch=Touch(state.touch),
+                open_task_id=state.hubspot_task_id,
+                pending_task_key=state.pending_task_key,
+                parked_at=now,
+            )
+            await self._repository.park(
+                state, anchor_at=state.anchor_at, anchor_ref=state.anchor_ref, parked_at=now
+            )
+            await self._session.commit()
+        logger.info(
+            "cadence.service.prospect_parked",
+            contact_id=contact_id,
+            by="human",
+            cycle=result.cycle,
+            touch=result.touch.value,
+            open_task_id=result.open_task_id,
+            pending_task_key=result.pending_task_key,
+        )
+        return result
 
     async def overdue(self, now: datetime | None = None) -> list[OverdueTouch]:
         """Live touches past their due date, most overdue first. Reads only our own schedule.

@@ -13,10 +13,15 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from app.cadence.exceptions import AlreadyEnrolledError
+from app.cadence.exceptions import (
+    AlreadyEnrolledError,
+    AlreadyParkedError,
+    NotEnrolledError,
+    SyncRunningError,
+)
 from app.cadence.machine import CadencePosition, CadenceStatus, Touch, local_date
 from app.cadence.repository import CADENCE_SYNC_LOCK_ID, CadenceRepository
-from app.cadence.schemas import ActivityKind
+from app.cadence.schemas import ActivityKind, PendingTask, SignalSource
 from app.cadence.service import CadenceService
 from app.core.config import get_settings
 from app.promotion.client import HubSpotClient
@@ -689,3 +694,223 @@ class TestDefaultOwner:
         assert isinstance(properties, dict)
         assert "hubspot_owner_id" not in properties
         assert any("HUBSPOT_DEFAULT_OWNER_ID" in warning for warning in report.warnings)
+
+
+async def _hold_sync_lock[T](database_url: str, operation: Callable[[], Awaitable[T]]) -> T:
+    """Run ``operation`` while another connection holds the cadence-sync lock."""
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as other:
+            await other.execute(text("select pg_advisory_lock(:id)"), {"id": CADENCE_SYNC_LOCK_ID})
+            try:
+                return await operation()
+            finally:
+                await other.execute(
+                    text("select pg_advisory_unlock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                )
+    finally:
+        await engine.dispose()
+
+
+class TestDryRun:
+    """``sync --dry-run``: the same reads and the same decision, and nothing applied."""
+
+    async def test_a_dry_run_creates_nothing_and_writes_nothing(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        db_session: AsyncSession,
+    ) -> None:
+        await service.enrol(CONTACT)
+        call_task = hubspot.last_task_id()
+        hubspot.complete_task(call_task, at=clock.advance(minutes=5))
+
+        report = await service.sync(dry_run=True)
+
+        assert report.dry_run is True
+        assert hubspot.task_creates_attempted() == 1, "only the enrolment's create"
+        assert await _state(db_session) == ("live", 1, "call", call_task)
+        assert (report.touches_closed, report.tasks_created, report.parked) == (0, 0, 0)
+        [plan] = report.plans
+        assert plan.hubspot_contact_id == CONTACT
+        assert [(s.position.cycle, s.position.touch) for s in plan.steps] == [(1, Touch.call)]
+        assert plan.steps[0].signal.source == SignalSource.task_completed
+        assert plan.next_position == CadencePosition(cycle=1, touch=Touch.voicemail)
+
+    async def test_a_dry_run_predicts_what_the_real_sync_then_does(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        db_session: AsyncSession,
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        hubspot.log(ActivityKind.note, at=clock.advance(minutes=5))
+        hubspot.log(ActivityKind.note, at=clock.advance(minutes=5))
+        clock.advance(minutes=5)
+
+        [plan] = (await service.sync(dry_run=True)).plans
+        real = await service.sync()
+
+        assert real.touches_closed == len(plan.steps) == 3
+        assert plan.parks is False
+        assert plan.next_position == CadencePosition(cycle=2, touch=Touch.call)
+        _, cycle, touch, _ = await _state(db_session)
+        assert (cycle, touch) == (2, "call")
+
+    async def test_a_dry_run_names_the_note_that_closed_a_touch(
+        self, service: CadenceService, hubspot: FakeHubSpot, clock: FakeClock
+    ) -> None:
+        await service.enrol(CONTACT)
+        note = hubspot.log(ActivityKind.note, at=clock.advance(minutes=5))
+
+        [plan] = (await service.sync(dry_run=True)).plans
+
+        [step] = plan.steps
+        assert step.signal.source == SignalSource.activity
+        assert step.signal.anchor_ref == f"notes:{note}"
+
+    async def test_an_unchanged_prospect_is_planned_as_nothing_new(
+        self, service: CadenceService
+    ) -> None:
+        await service.enrol(CONTACT)
+
+        [plan] = (await service.sync(dry_run=True)).plans
+
+        assert plan.steps == []
+        assert plan.changed is False
+
+    async def test_a_dry_run_does_not_wait_for_the_sync_lock(
+        self, service: CadenceService, migrated_database: str
+    ) -> None:
+        await service.enrol(CONTACT)
+
+        report = await _hold_sync_lock(migrated_database, lambda: service.sync(dry_run=True))
+
+        assert report.skipped is False
+        assert report.checked == 1
+
+    async def test_a_pending_create_that_happened_is_reported_found_not_adopted(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        db_session: AsyncSession,
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        hubspot.lose_create_responses = 1
+        await service.sync()
+        orphan = hubspot.last_task_id()
+
+        [plan] = (await service.sync(dry_run=True)).plans
+
+        assert plan.pending_task == PendingTask.found
+        assert plan.pending_task_id == orphan
+        assert hubspot.task_creates_attempted() == 2
+        assert await _state(db_session) == ("live", 1, "voicemail", None), "still pending"
+
+    async def test_a_pending_create_that_never_happened_is_reported_to_create(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        hubspot.fail_creates = 1
+        await service.sync()
+
+        [plan] = (await service.sync(dry_run=True)).plans
+
+        assert plan.pending_task == PendingTask.would_create
+        assert hubspot.task_creates_attempted() == 2, "the failed create, and no more"
+
+
+class TestPark:
+    """``park``: a human finishes a prospect's cadence for good."""
+
+    async def test_park_finishes_the_cadence_and_leaves_the_task_alone(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        db_session: AsyncSession,
+    ) -> None:
+        await service.enrol(CONTACT)
+        call_task = hubspot.last_task_id()
+        requests_before = len(hubspot.portal.requests)
+
+        result = await service.park(CONTACT)
+
+        assert (result.cycle, result.touch, result.open_task_id) == (1, Touch.call, call_task)
+        assert await _state(db_session) == ("parked", 1, "call", None)
+        assert len(hubspot.portal.requests) == requests_before, "park never reaches HubSpot"
+        assert hubspot.open_tasks() == ["Cadence 1/3 · call"]
+        assert (await service.sync()).checked == 0
+
+    async def test_park_needs_no_hubspot(self, db_session: AsyncSession) -> None:
+        def no_portal() -> HubSpotClient:
+            raise AssertionError("park reached HubSpot")
+
+        await CadenceRepository(db_session).create(
+            contact_id=CONTACT,
+            company_id=None,
+            owner_id=None,
+            position=CadencePosition.first(),
+            task_id="88000001",
+            due_at=datetime(2026, 10, 6, 4, 59, tzinfo=UTC),
+            anchor_at=datetime(2026, 10, 5, 14, 0, tzinfo=UTC),
+            enrolled_at=datetime(2026, 10, 5, 14, 0, tzinfo=UTC),
+        )
+
+        result = await CadenceService(db_session, hubspot=no_portal).park(CONTACT)
+
+        assert result.open_task_id == "88000001"
+
+    async def test_an_unknown_contact_cannot_be_parked(self, service: CadenceService) -> None:
+        with pytest.raises(NotEnrolledError):
+            await service.park("400999999")
+
+    async def test_a_parked_contact_cannot_be_parked_again(self, service: CadenceService) -> None:
+        await service.enrol(CONTACT)
+        await service.park(CONTACT)
+
+        with pytest.raises(AlreadyParkedError):
+            await service.park(CONTACT)
+
+    async def test_park_refuses_while_a_sync_runs(
+        self,
+        service: CadenceService,
+        db_session: AsyncSession,
+        migrated_database: str,
+    ) -> None:
+        """A sync that already loaded the row could otherwise advance a parked prospect."""
+        await service.enrol(CONTACT)
+
+        with pytest.raises(SyncRunningError):
+            await _hold_sync_lock(migrated_database, lambda: service.park(CONTACT))
+
+        status, *_ = await _state(db_session)
+        assert status == "live"
+
+    async def test_park_clears_an_interrupted_create_and_says_so(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        db_session: AsyncSession,
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        hubspot.lose_create_responses = 1
+        await service.sync()
+
+        result = await service.park(CONTACT)
+
+        assert result.pending_task_key == f"lpe-cadence:{CONTACT}:1-voicemail"
+        assert result.open_task_id is None
+        state = await CadenceRepository(db_session).get_by_contact(CONTACT)
+        assert state is not None
+        assert (state.status, state.pending_task_key) == (CadenceStatus.parked.value, None)
