@@ -48,10 +48,28 @@ class TestAbsentDependencies:
             name = re.split(r"[\[<>=!~ ]", requirement, maxsplit=1)[0].lower()
             assert name != package, f"{package} was decided out — reopen the decision first"
 
-    def test_agent_sdk_is_not_carried_unused(self) -> None:
-        """Nothing in T1 calls a model; the SDK is added at first use (T6/T12)."""
-        names = [re.split(r"[\[<>=!~ ]", r, maxsplit=1)[0].lower() for r in _all_dependencies()]
-        assert "claude-agent-sdk" not in names
+    def test_agent_sdk_is_imported_only_at_its_decided_call_sites(self) -> None:
+        """D1: the weekly run is a deterministic pipeline, not an agent loop.
+
+        The SDK arrived with T12's manifest-authoring agent. It is allowed exactly where the
+        architecture put it — that agent, and (when T6/T7 land) the two judgment nodes
+        `resolve_owner` and `classify_rollup`, which add their modules to this set. An import
+        anywhere else is the pipeline quietly growing an agent loop.
+        """
+        allowed = {"app/manifests/agent.py"}
+        importers: set[str] = set()
+        for path in _app_sources():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                modules: list[str] = []
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    modules = [node.module]
+                if any(module.split(".")[0] == "claude_agent_sdk" for module in modules):
+                    importers.add(str(path.relative_to(ROOT)))
+
+        assert importers <= allowed, f"Agent SDK outside its call sites: {importers - allowed}"
 
 
 class TestAbsentServices:
