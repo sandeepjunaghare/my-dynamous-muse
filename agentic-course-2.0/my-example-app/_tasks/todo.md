@@ -513,9 +513,10 @@ legitimately, nothing real had run them — and dev has now applied them. Any ch
       answered `tenant/user … not found` because the free project had paused; restored by the human. Applied
       `0003 → 0004 → 0005`; verified `alembic current` = `0005_cadence (head)`, `alembic check` clean, all three
       tables present and empty with every check/unique/FK constraint, both manifests still DRAFT.
-- [ ] **`.env` driver prefix has regressed** — `DATABASE_URL` reads `postgresql://` again (file edited 2026-10-05),
-      which selects psycopg and fails at startup. It was fixed once in Wave 2 prep. Change it back to
-      `postgresql+asyncpg://`; the migration above ran with the prefix overridden for that one command
+- [x] **`.env` driver prefix had regressed** to `postgresql://` (file edited 2026-10-05), which selects psycopg and
+      fails at startup. **Fixed by the human 2026-10-09**; verified — `alembic current` reaches dev with `.env`
+      as-is and reports `0005_cadence (head)`. A URL pasted from the Supabase dashboard always loses the
+      `+asyncpg`, so check the prefix after any rotation
 - [ ] **Dev pauses when idle** (free tier, ~7 days). Expect `tenant/user … not found` after a quiet week, and
       restore from the dashboard; it matters once the daily cadence sync runs against dev
 - [ ] **Add `HUBSPOT_DEFAULT_OWNER_ID` to `.env`** — unset, cadence tasks are unassigned (E15) and every sync warns
