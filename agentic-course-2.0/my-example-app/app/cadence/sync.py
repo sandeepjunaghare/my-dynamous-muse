@@ -208,7 +208,7 @@ def plan_advance(
     return AdvancePlan(
         steps=tuple(steps),
         next_position=current,
-        next_due_at=due_after(current, steps[-1].signal.done_at),
+        next_due_at=due_after(current, steps[-1].signal.done_at, now=now),
         anchor_at=anchor_at,
         anchor_ref=anchor_ref,
     )

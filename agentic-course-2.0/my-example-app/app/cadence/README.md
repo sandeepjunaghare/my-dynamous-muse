@@ -96,6 +96,11 @@ a sync has seen the previous touch close; a weekly sync would create them up to 
 stretch a twelve-day cadence to about nine weeks. More often than daily is fine and cheap (about
 eight reads per live prospect). No in-process scheduler, no Celery, no Redis.
 
+A task is never due before the end of the day the sync creates it. A daily sync usually learns about
+yesterday's call this morning; without that floor the voicemail task would be due yesterday — overdue
+the moment it exists. The floor only ever moves a date later, so a sync that runs on time gets the
+exact same-day / four-day schedule.
+
 The command a launchd job runs — no server needed, from any working directory:
 
 ```

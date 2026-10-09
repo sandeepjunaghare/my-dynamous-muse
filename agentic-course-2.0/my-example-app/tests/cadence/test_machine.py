@@ -74,21 +74,21 @@ class TestDueDates:
         call_done = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)
 
         for touch in (Touch.voicemail, Touch.email):
-            due = due_after(CadencePosition(cycle=1, touch=touch), call_done)
+            due = due_after(CadencePosition(cycle=1, touch=touch), call_done, now=call_done)
             assert local_date(due) == date(2026, 10, 5)
 
     def test_same_day_means_the_dallas_day_not_the_utc_day(self) -> None:
         """8 pm in Dallas is 1 am UTC tomorrow; a UTC date would push the email a day late."""
         evening = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)  # 2026-10-05 20:00 CDT
 
-        due = due_after(CadencePosition(cycle=1, touch=Touch.email), evening)
+        due = due_after(CadencePosition(cycle=1, touch=Touch.email), evening, now=evening)
 
         assert local_date(due) == date(2026, 10, 5)
 
     def test_the_next_cycle_waits_four_days_after_the_email(self) -> None:
         email_done = datetime(2026, 10, 5, 16, 0, tzinfo=UTC)
 
-        due = due_after(CadencePosition(cycle=2, touch=Touch.call), email_done)
+        due = due_after(CadencePosition(cycle=2, touch=Touch.call), email_done, now=email_done)
 
         assert local_date(due) == date(2026, 10, 9)
 
@@ -96,10 +96,41 @@ class TestDueDates:
         """DST ends 2026-11-01. The call is still due at 23:59 Dallas time, now UTC-6."""
         email_done = datetime(2026, 10, 30, 16, 0, tzinfo=UTC)
 
-        due = due_after(CadencePosition(cycle=2, touch=Touch.call), email_done)
+        due = due_after(CadencePosition(cycle=2, touch=Touch.call), email_done, now=email_done)
 
         assert due == datetime(2026, 11, 4, 5, 59, tzinfo=UTC)
         assert due.astimezone(CADENCE_TZ).strftime("%Y-%m-%d %H:%M") == "2026-11-03 23:59"
+
+    def test_a_same_day_touch_found_next_morning_is_due_today_not_yesterday(self) -> None:
+        """The daily sync sees yesterday's call this morning. The voicemail task it creates must not
+        be born overdue: it is due by the end of today, the first day a human can act on it."""
+        call_done = datetime(2026, 10, 5, 15, 0, tzinfo=UTC)  # 2026-10-05 10:00 CDT
+        next_morning = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)  # 2026-10-06 07:00 CDT
+
+        due = due_after(
+            CadencePosition(cycle=1, touch=Touch.voicemail), call_done, now=next_morning
+        )
+
+        assert local_date(due) == date(2026, 10, 6)
+        assert due > next_morning
+
+    def test_a_call_whose_wait_has_already_elapsed_is_due_today(self) -> None:
+        """An email logged a week ago and only now noticed: the next call is due today, not on a
+        date already in the past."""
+        email_done = datetime(2026, 9, 28, 16, 0, tzinfo=UTC)
+        today = datetime(2026, 10, 6, 14, 0, tzinfo=UTC)
+
+        due = due_after(CadencePosition(cycle=2, touch=Touch.call), email_done, now=today)
+
+        assert local_date(due) == date(2026, 10, 6)
+
+    def test_the_floor_never_brings_a_due_date_forward(self) -> None:
+        """The four-day wait still holds when the sync runs on time."""
+        email_done = datetime(2026, 10, 5, 16, 0, tzinfo=UTC)
+
+        due = due_after(CadencePosition(cycle=2, touch=Touch.call), email_done, now=email_done)
+
+        assert local_date(due) == date(2026, 10, 9)
 
     def test_a_naive_time_is_refused(self) -> None:
         with pytest.raises(ValueError, match="timezone-aware"):

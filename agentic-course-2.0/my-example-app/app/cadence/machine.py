@@ -111,16 +111,23 @@ def due_at_enrolment(enrolled_at: datetime) -> datetime:
     return end_of_local_day(local_date(enrolled_at))
 
 
-def due_after(position: CadencePosition, previous_done_at: datetime) -> datetime:
-    """When ``position`` is due, given when the touch before it was done.
+def due_after(position: CadencePosition, previous_done_at: datetime, *, now: datetime) -> datetime:
+    """When ``position`` is due, given when the touch before it was done and when we are asking.
 
     Voicemail and email are **same-day** touches: due by the end of the local day the previous
     touch was done. A cycle's call (other than the first) comes **four days** after the email.
+
+    Never earlier than the end of *today*. The sync runs daily, so it routinely learns about
+    yesterday's call this morning; a task due yesterday would be born overdue, and an overdue list
+    that is wrong on day one is a list nobody trusts (E15). The floor only ever moves a date later —
+    a sync that runs on time gets exactly the schedule above.
     """
     done_on = local_date(previous_done_at)
     if position.touch is Touch.call:
-        return end_of_local_day(done_on + timedelta(days=WAIT_DAYS))
-    return end_of_local_day(done_on)
+        scheduled = end_of_local_day(done_on + timedelta(days=WAIT_DAYS))
+    else:
+        scheduled = end_of_local_day(done_on)
+    return max(scheduled, end_of_local_day(local_date(now)))
 
 
 def _require_aware(moment: datetime) -> datetime:
