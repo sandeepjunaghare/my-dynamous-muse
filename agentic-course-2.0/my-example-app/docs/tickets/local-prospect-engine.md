@@ -27,6 +27,7 @@ Previously assumptions; now settled. Change any of them and re-slice the affecte
 | D9 | **Hosted Supabase (dev + prod), local Mac first then a small VPS.** Compose carries no Postgres. | T1 |
 | D10 | **GATE-A stays open deliberately** — the `$999 assessment` pipeline is not created; M3 renders *not configured*. | T10 |
 | D11 | **Tickets live here**, in-repo markdown. | Nothing structural |
+| D13 | **Google Places is a check, never a source** *(2026-10-09)*. The Maps Platform Terms forbid storing Places content. Rules: (1) look up within the run, never ahead; (2) use and discard, keeping only the place ID and our own verdict; (3) Places never discovers prospects. Stored address and phone come from the census, website from the email domain or web search, coordinates from the US Census Geocoder. | T6, T7, T8, T9 |
 | D12 | **The run works a backlog in weekly batches** *(2026-10-09)*. Free filters run over the whole pool once (4,449 for freight v3) and persist it. Each run takes a fixed batch (start 150), best first, through the paid steps. **One** judgment call per candidate covers every judgment rule. Census `company_officer_1` comes before `resolve_owner`. | T5, T6, T7, T10 |
 
 ---
@@ -87,7 +88,7 @@ Rule 1 (`core/`) and Rule 2 (the three-feature rule) · CLAUDE.md → *Ground ru
 - **CLI** — `lpe manifest show <id>` renders a draft with every citation; `lpe manifest activate <id> --accept-terms <sources>` records the per-source terms-of-use decision and flips the row active. This is the review surface; there is no frontend and no second login.
 - A source with no recorded terms-of-use decision **cannot be marked active** (test). A DRAFT row is never returned by `get_active` (test).
 - **Seeded: freight** — FMCSA/SAFER; asset-based-carrier exclusion + double-brokering flag; "which TMS, and does it have an API"; 20–200 with an office function; loads/lanes/carrier-packets/COIs/check-calls/detention vocabulary.
-- **Seeded: fire** — Texas State Fire Marshal registry + Google Places; national-rollup-with-no-local-owner exclusion; owner-accessible signal; inspection/permit/AHJ vocabulary. *Seeding both is how M9 gets proven before it is claimed.*
+- **Seeded: fire** — Texas State Fire Marshal registry + Google Places (as a check only, D13); national-rollup-with-no-local-owner exclusion; owner-accessible signal; inspection/permit/AHJ vocabulary. *Seeding both is how M9 gets proven before it is claimed.*
 - Test asserts no `if vertical ==` branch anywhere in `app/`.
 
 **Per-ticket context:** `.claude/references/adding-a-vertical.md` (whole file) · architecture → *Vertical as a
@@ -153,13 +154,15 @@ E10 · **SPIKE-2 result** (below).
 ### T6 — Enrichment stages: `verify_business` + `resolve_owner`
 
 **Scope / acceptance criteria** — *the two fields the ICP filter and M6 depend on get filled, or stay empty — never guessed.*
-- Stages 2 and 3: verify business identity (address, phone via Google Places) and resolve the owner/principal (review-name signal, registry principal, SOS filing). **`resolve_owner` is one of the two Agent SDK judgment nodes** — structured output, with a citation attached to every field it returns.
+- Stages 2 and 3: verify business identity (**a Places check of the census record**, D13) and resolve the owner/principal (registry principal, SOS filing; the review-name signal is dropped because reviews cannot be stored). **`resolve_owner` is one of the two Agent SDK judgment nodes** — structured output, with a citation attached to every field it returns.
 - **Runs after the free filters, before the judgment call** (D8, revised 2026-10-09). Nothing paid touches a candidate a free filter would drop. `verify_business` is the cheaper paid step (~$0.03), and its website, phone and business type are the evidence T7's single judgment call reads.
 - **Owner: census first** (D12). Census `company_officer_1` is a cited principal for 67% of the freight v3 pool, so `resolve_owner`, the judgment node, runs **only where it is absent**. That halves the hardest problem in the system before any model is called.
-- **Confirm the Places SKU when planning.** Text Search Pro is $32 / 1,000 after 5,000 free a month, but phone and website may need a higher tier.
+- **Places is a check, never a source (D13).** Rules: look up only the current batch while it is processed; use the response and discard it; never use Places to find candidates. Store only the **place ID** and our verdict. Stored fields come from licensed sources: **address and phone from the census** (`bulk_file` provenance), **website from the census email domain or a web search**. Request only Pro-tier fields (`id`, `displayName`, `formattedAddress`, `businessStatus`, `types`): $32 per 1,000 after 5,000 free a month, so ~$0 at a batch of 150. Never request phone, website or reviews.
+- Test: no Places field other than the place ID is ever written to `candidate`. A structure guard should reject one.
+- **Decide when planning:** store the verdict ("census address matches"), or only the place ID and a timestamp (the zero-ambiguity option).
 - **Per-run call budget enforced via `core/cost.py` and logged**, default cap 500 Places calls. Exceeding it marks the run *degraded* and stops enrichment — it does not crash and does not silently continue spending.
 - Every written field carries provenance; a field that cannot be cited is **left absent**, not inferred. This is the structural fix for E18 (a company name sitting in a first-name field is exactly a field nobody could cite).
-- Measured over the fixture sample: **≥70% named decision-maker (M6)**, **100% headcount-band fill or absent (M8)**. If SPIKE-2 confirms FMCSA cannot yield headcount for non-asset brokers, the ICP band leans on Places and web signals and *absent* is the honest common case.
+- Measured over the fixture sample: **≥70% named decision-maker (M6)**, **100% headcount-band fill or absent (M8)**. If SPIKE-2 confirms FMCSA cannot yield headcount for non-asset brokers, the ICP band leans on web signals and *absent* is the honest common case. Places cannot supply a stored headcount (D13).
 
 **Per-ticket context:** architecture → *Missing pieces* ("owner resolution — the hardest single problem in the
 system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, not a ceiling* · E18 · M6/M8.
@@ -176,7 +179,7 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
   - **Casts:** census numerics such as `power_units` arrive as text.
   - **A field's source:** `allowToOperate` lives in QCMobile, not the census, so a predicate needs to know which source its field comes from.
   - **Joins:** `authority_revoked` is a join against the revocations dataset, so give it a mechanical path rather than a model call.
-- Stage 4 of 5: `classify_rollup_vs_local`, **the second Agent SDK judgment node**, with a citation attached to the verdict. **One call per candidate decides every judgment rule in the manifest** (D12), e.g. rollup, `self_employed_shell` and `authority_revoked`'s reason, never one call per rule. It reads T6's verified fields as evidence, since Places runs first (D8). ~$0.08 a candidate, measured.
+- Stage 4 of 5: `classify_rollup_vs_local`, **the second Agent SDK judgment node**, with a citation attached to the verdict. **One call per candidate decides every judgment rule in the manifest** (D12), e.g. rollup, `self_employed_shell` and `authority_revoked`'s reason, never one call per rule. It reads T6's Places response as evidence, in the same run, and discards it afterwards (D13). Only the verdict and its citation are stored. ~$0.08 a candidate, measured.
 - `disqualification` table: candidate + the rule that fired + when. **Re-source suppression:** a disqualified candidate is not re-sourced next run — tested across two runs. This is the thing a HubSpot-only model cannot do.
 - Priority score: Intensity (1–5) × Automatable (1–5) = 1–25; ≥16 live, <9 dead (E9), computed from cited signals.
 - Fixture test: the four known rollups (Impact Fire, Summit Fire, Century Fire, Control Systems) classify as rollup; **<5% rollup false positives** (M6).
@@ -197,6 +200,7 @@ PRD §4 WRONG condition (founder rejects ≥30% → qualification judgment canno
 - Cluster labels and size caps matching the cadence: ~10–12 doors per outing, 20 names / 2 clusters per week (E3, E4; the hand-built Route Cluster A: Olympic Drive, Cluster B: 75238).
 - Stable assignment: same input → same clusters across runs.
 - A candidate **without a verified address is excluded from clustering**, not geocoded from a guess.
+- **Coordinates come from the US Census Geocoder** (free, public domain) on the census address, never from Places. Places lat/lng may be cached for only 30 days and is barred as input to point-in-polygon analysis (D13).
 
 **Per-ticket context:** E4 · E5 · architecture → *Missing pieces* ("DFW geographic route clustering — done by
 hand today") · PRD §6 step 5.
@@ -389,9 +393,10 @@ against a guess.
   counts plus sample rows), and a human reads it. A critic agent was rejected: it shares the author's blind
   spots and cannot see the real data. A checklist alone was rejected: it relies on the discipline Spike 1 found
   lacking.
-- **Google Places terms of use** — unread. FMCSA/QCMobile is public domain (CC PDM 1.0). **Blocks marking
-  the Places source active in a manifest**, not building T6 against fixtures.
-- **Google Places real pricing** — the ~$20–30/month estimate is unverified. **Confirm when planning T6.**
+- ~~**Google Places terms of use**~~ — **read 2026-10-09 → D13**: a check, never a source. When activating, accept
+  Places's terms on that basis.
+- ~~**Google Places real pricing**~~ — **confirmed 2026-10-09**: Pro tier, $32 per 1,000 after 5,000 free a month,
+  so ~$0 at a batch of 150. Phone and website (Enterprise) are no longer requested.
 - **Langfuse — keep or drop?** Leaning drop: with the run deterministic, structlog plus per-run cost logging
   covers most of what tracing would have given us.
 - **GATE-A: the `$999 assessment` deal pipeline does not exist** and is deliberately not being created. M3 is

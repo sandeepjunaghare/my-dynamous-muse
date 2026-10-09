@@ -11,6 +11,12 @@ vocabulary; Fire's names the Texas Fire Marshal registry, rollup exclusion, and 
 code, different rows. Each source also carries its own terms of use — record that decision in the manifest
 before first use (FMCSA, Google Places and any state registry each have their own).
 
+**Google Places is a check, never a source** (D13: the Maps Platform Terms forbid storing its content). A new
+vertical must name a **registry** to find candidates in: a licensing board, the Secretary of State, or a
+federal dataset. "Search Places for X in DFW" is not a source; saving what it finds is an index, which the
+terms ban. Places only confirms a record the registry already gave us, within the run, and only its place ID
+is kept.
+
 The weekly run is a **deterministic pipeline of five generic stages, all parameterized by the manifest**:
 search a declared registry · verify a business identity · resolve the owner · classify rollup-vs-local ·
 cluster routes. Two of those five need judgment and call the Agent SDK with structured output and a citation
@@ -18,8 +24,8 @@ cluster routes. Two of those five need judgment and call the Agent SDK with stru
 adding a manifest entry, not a sixth stage and not a stage per source. If a new source seems to need its own
 stage, that is a signal the manifest schema is missing a field; extend the schema rather than the pipeline.
 
-**Qualification runs before verification.** The registry pull and the disqualifier rules are free; Google
-Places is billed per request. Filtering first costs a little recall and saves most of the spend, and paid
+**Free before paid.** The registry pull and the free disqualifier rules run first; the Google
+Places check is billed per request. Filtering first costs a little recall and saves most of the spend, and paid
 calls are capped per run (500 Places calls) as a circuit breaker, not a budget target.
 
 **Authoring a manifest is the one genuinely agentic job.** `app/manifests/` carries an agent that takes a

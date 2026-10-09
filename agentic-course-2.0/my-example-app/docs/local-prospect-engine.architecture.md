@@ -70,7 +70,7 @@ through the paid steps. The batch size, not the pool size, sets the bill (~$25�
 Inside a batch the order is **free before paid, and cheaper paid before dearer paid**:
 
 1. **Free:** census predicates, then QCMobile `allowToOperate` and the revocations join, done in code, never by a model.
-2. **Cheapest paid:** Places verification (~$0.03 a candidate). It is also the evidence the next step needs: website, phone, business type.
+2. **Cheapest paid:** a Places **check** (Pro tier, inside the 5,000 a month free at a batch of 150). It confirms the census record is a real, operating business, and the response is the evidence the next step reads. It is **used and discarded, never stored** (D13).
 3. **Dearest paid:** **one** `classify_rollup` call per candidate covering every judgment rule (~$0.08, measured
    from the live `propose` run at ~$0.02 a turn).
 4. **Owner:** census `company_officer_1` first (present for 67%, free). `resolve_owner` runs only where it is absent.
@@ -151,13 +151,31 @@ That keeps M4 honest — there is no shadow CRM — while giving the system a me
   shape is: pull the bulk Company Census File, filter to DFW counties and active broker authority, then
   QCMobile per record for detail. Free, and licensed **public domain (CC PDM 1.0)** — the terms-of-use
   decision for this source is close to a formality, but still gets recorded at `manifest activate`.
-- **Google Places** — paid, per-request. Needed for address and phone verification and for the review-name
-  signal that often surfaces an owner. **Runs after the free filters and before the judgment call**
-  (revised 2026-10-09). Nothing paid touches a candidate a free filter would drop, and the cheaper paid step
-  feeds the dearer one its evidence. Text Search Pro is $32 / 1,000 after 5,000 free a month. Phone and
-  website may need a higher SKU, so confirm the SKU when planning T6.
-  Capped at 500 calls per run as a circuit breaker against a runaway loop; that is a safety valve, not a
-  budget target (see *Cost*).
+- **Google Places is a check, never a source** *(decided 2026-10-09, D13)*. The Maps Platform Terms §3.2.3(a)
+  forbid us to "pre-fetch, index, store, reshare, or rehost" Places content, or to "copy and save business
+  names, addresses, or user reviews". §3.2.3(b) allows no caching beyond the Service Specific Terms, which permit
+  **place IDs indefinitely** and lat/lng for 30 days. §3.2.3(c)(iv) bars Places lat/lng as input to
+  point-in-polygon analysis. So Places content never reaches `candidate` or HubSpot. Three rules:
+  1. **Look up within the run, never ahead of it.** Only the current batch, while it is being processed. Nothing
+     is fetched for later (no pre-fetch).
+  2. **Use and discard.** The response feeds the judgment call in the same run and is dropped. We keep only the
+     **place ID** and our own verdict on the census record.
+  3. **Places never discovers prospects.** Candidates come from a registry the manifest names, for every
+     vertical. Text Search used to *find* businesses and save them is an index.
+
+  The fields a person reads come from sources we may keep. **Address and phone come from the census** (phone is
+  present for 97%). **Website** comes from the census email domain (67%) or a web search. **Coordinates for
+  routing** come from the **US Census Geocoder** (free, public domain). The review-name owner signal is dropped
+  (reviews are named in the ban), and census `company_officer_1` covers 67%.
+  **Price:** businessStatus, name and address are the **Pro** tier ($32 per 1,000, 5,000 free a month). Phone and
+  website would have been Enterprise ($35 per 1,000, 1,000 free) and are no longer needed. Runs after the free
+  filters and before the judgment call. Capped at 500 calls a run as a circuit breaker, not a budget target
+  (see *Cost*).
+  **Still open (T6):** whether the stored verdict ("the census address matches") is our own conclusion or
+  derived Google content. It is defensible as the former. The zero-ambiguity fallback stores only the place ID
+  and a timestamp, so "verified" means "a place ID was found".
+- **US Census Geocoder** — free, public domain, no key. Turns the census address into the coordinates T8
+  clusters on. Licensed for storage, unlike Places.
 - **Secrets** — `.env`, never committed. The template's existing posture; nothing new.
 - **Auth** — single internal user. **No multi-tenant auth, no Supabase RLS for the MVP.** Building either now
   would be scaffolding for the "product later" path the PRD put in Non-goals.
@@ -313,7 +331,8 @@ Things this approach depends on that do not exist yet:
       what tracing would have given us. Leaning drop; revisit if the judgment nodes prove hard to debug.
 - [x] **Terms of use per source.** **Decided 2026-09-26:** recorded in the manifest at
       `lpe manifest activate <id> --accept-terms <sources>`; a source without the decision cannot be marked
-      active. FMCSA/QCMobile is public domain (CC PDM 1.0); Google Places still needs a read of its terms.
+      active. FMCSA/QCMobile is public domain (CC PDM 1.0). **Google Places terms read 2026-10-09:** storage is barred, so
+      Places is a check, never a source (D13, *Boundaries*).
 - [x] **Google Places cost ceiling per run** — **Decided 2026-09-26:** no ceiling, a circuit breaker. 500
       calls per run, per-run cost logged from T1, the ceiling set from observation rather than guess.
 - [x] **Funnel size and order** — **Decided 2026-10-09:** a backlog worked in weekly batches (start 150), not

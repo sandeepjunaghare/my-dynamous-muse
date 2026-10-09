@@ -710,3 +710,34 @@ manifests the hand check caught. The quality gate copies the check that actually
 inventing a review step.
 **Watch.** The dry-run makes T7 bigger, by a CLI command plus an activation precondition (likely a column, so
 a new migration). Re-size T7 when it's planned.
+
+---
+
+# Google Places: terms and pricing → D13 (2026-10-09)
+
+**Why:** open before T6. The terms were unread and the SKU was unconfirmed.
+**Finding:** the Maps Platform Terms §3.2.3(a) forbid us to "pre-fetch, index, store, reshare, or rehost" Places
+content, or to "copy and save business names, addresses, or user reviews". The only storage allowed is place IDs
+(indefinitely) and lat/lng (30 days), and Places lat/lng is barred from point-in-polygon analysis. T6, T8 and T9
+as written would have stored Places address, phone and website and sent them to HubSpot. Pricing was never the
+problem: phone and website are Enterprise ($35 per 1,000, 1,000 free), and the Pro tier is ~$0 at a batch of 150.
+
+- [x] **Decided (human): option A.** Places is a check, never a source. Three rules: look up within the run,
+      never ahead; use and discard, keeping only the place ID and our verdict; Places never discovers prospects.
+      Census for address and phone, the email domain or web search for website, the US Census Geocoder for
+      coordinates. The review-name owner signal is dropped
+- [x] Recorded: architecture *Recommended approach* step 2, *Boundaries* (Places rewritten, Census Geocoder
+      added), the terms open question; tickets **D13**, T6, T7, T8, the fire seed line, *Still open*;
+      `adding-a-vertical.md`; a `CLAUDE.md` ground rule
+- [ ] **T6 planning:** store the verdict, or only the place ID and a timestamp (the zero-ambiguity option)
+- [ ] **T12 follow-up:** the authoring agent's prompt should know rule 3, so it never proposes Places as a
+      vertical's discovery source. Check `app/manifests/prompts.py` and the seeded fire manifest's source list
+      before vertical #2
+- [ ] At `activate` for freight v3: if Places is declared, accept its terms on this basis
+
+## Review
+
+**Worked.** Reading the primary text (`curl` on the terms page) rather than a summary. The page-summariser
+returned noise twice; the extracted clause was unambiguous. Pricing and terms answered different questions,
+and only the terms changed the design.
+**Watch.** "Pre-fetch" for an unattended batch is a grey area. Rule 1 is the defensible reading, not a ruling.

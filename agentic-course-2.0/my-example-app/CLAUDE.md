@@ -60,6 +60,9 @@ client, so it builds in parallel with the whole sourcing line.
   writes, not task creation** — otherwise adopting the 22 existing hand-typed prospects would be refused
   outright. Adopted records get honest provenance (`retrieval_method = "manual_hubspot_entry"`), not an
   exemption: marking data unverifiable is as much the primitive's job as certifying it.
+- **Google Places is a check, never a source** (D13, its terms forbid storage). Look up only within the run;
+  use the response and discard it; keep only the place ID. Places never discovers prospects. Stored address
+  and phone come from the registry, and coordinates from the US Census Geocoder.
 - **Vertical is data, not code** — it lives in a versioned `vertical_manifest` row, never in a slice or an
   `if vertical ==`. Adding one → `.claude/references/adding-a-vertical.md`.
 - **Split store:** Supabase is machine state and never human-edited; HubSpot holds everything a person reads
