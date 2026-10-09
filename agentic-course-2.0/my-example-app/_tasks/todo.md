@@ -594,3 +594,38 @@ the external system (the SDK's stream; when HubSpot records a create).
 
 **Next time.** Read the whole work log before planning a wave, and append — never replace. For anything behind
 an external boundary, the review should ask first whether the fake behaves like the real thing.
+
+---
+
+# Funnel re-plan — before T7 (2026-10-09)
+
+**Why:** the ticket doc's funnel assumes ~600 census records → ~120 after disqualification → ~80 verified. Freight
+v3's free predicates leave **4,449** DFW broker candidates. Planned as written, T7's two judgment rules are ~8,800
+`classify_rollup` calls a run, and T6's paid verification sees thousands, not ~80.
+**Scope:** docs only — architecture *Recommended approach* / funnel, tickets T5–T7 (+ T6 sizing), no code.
+
+- [x] Read the current funnel: architecture doc, tickets T5–T7, PRD metrics and cost lines
+- [x] Measured free census signals on the 4,449 pool: active MC authority 95% (cuts ~200) · `prior_revoke_flag`
+      and `business_org_desc` ~always empty (useless) · MCS-150 filed within 2y only 17% · **`company_officer_1`
+      present 67%** · phone 97% · email 67%. Active MC + current MCS-150 = 680
+- [x] Priced the paid steps: Places Text Search Pro $32/1,000 after 5,000 free a month (phone/website may need a
+      higher SKU, so confirm at T6); a judgment call ~$0.08 (live `propose` measured ~$0.02/turn × ~4 turns)
+- [x] Proposed A (as written, ~$700/wk, ✗) · B (narrow to 680 on recency, drops 85% on a guess) · **C (backlog
+      queue, weekly batch)** → **human chose C**, Places before the judgment call (D8 revised), one judgment call
+      per candidate, census officer before `resolve_owner`, free data before any model call
+- [x] Updated: architecture *Recommended approach* (backlog paragraph), *Boundaries* (Places), *Cost* (measured
+      shape), *Open questions* (decided); tickets D8 (revised) + **D12** (new), measured funnel, T5 (backlog,
+      batch, free checks, text casts), T6 (before judgment, census owner first, SKU, no longer depends on T7),
+      T7 (evaluator needs, one call per candidate), graph (T7→T6 removed), wave 6 note, SPIKE-2 principal half;
+      `CLAUDE.md` working principle
+
+## Review
+
+**Worked.** Measuring before deciding. The census query API answered in minutes what the docs had guessed,
+and the guess was ~7× low. Reading the tickets before costing changed the frame. Suppression (T7) already made
+the pool a backlog, so the fix was batching, not a smaller pool. Using the live `propose` run's cost as the
+per-call anchor beat a token estimate.
+**Watch.** The batch size (150) and the ~20/week yield are estimates until T10's first runs. The judgment-call
+price is per agentic call with fetches. A bare classification without fetches would be cheaper. The census
+officer is a named principal, not proven to be the decision-maker, so M6 still needs checking.
+**Next.** Wave 4 (T7 ∥ T8, T13 if Spike 1 is closed) can be planned against these docs.

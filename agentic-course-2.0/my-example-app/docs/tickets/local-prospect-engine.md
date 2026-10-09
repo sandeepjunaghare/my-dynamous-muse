@@ -23,10 +23,11 @@ Previously assumptions; now settled. Change any of them and re-slice the affecte
 | D5 | **Done = Task complete OR matching activity logged after task creation**, ties breaking toward done. | T11 |
 | D6 | **Spike 1 runs alongside Waves 1–2 and ends in adoption** of the surviving 22. | Wave order, **T13** |
 | D7 | **No budget ceiling; a 500-call Places circuit breaker.** Per-run cost logged from T1. | T1, T6 |
-| D8 | **Qualification runs before verification** — nothing paid touches a candidate the free filters would drop. | T5, T6, T7 |
+| D8 | **Free before paid; cheaper paid before dearer paid** *(revised 2026-10-09)*. Nothing paid touches a candidate a free filter would drop. Places verification (~$0.03) runs before the `classify_rollup` judgment call (~$0.08) and feeds it evidence. Was: "qualification before verification". | T5, T6, T7 |
 | D9 | **Hosted Supabase (dev + prod), local Mac first then a small VPS.** Compose carries no Postgres. | T1 |
 | D10 | **GATE-A stays open deliberately** — the `$999 assessment` pipeline is not created; M3 renders *not configured*. | T10 |
 | D11 | **Tickets live here**, in-repo markdown. | Nothing structural |
+| D12 | **The run works a backlog in weekly batches** *(2026-10-09)*. Free filters run over the whole pool once (4,449 for freight v3) and persist it. Each run takes a fixed batch (start 150), best first, through the paid steps. **One** judgment call per candidate covers every judgment rule. Census `company_officer_1` comes before `resolve_owner`. | T5, T6, T7, T10 |
 
 ---
 
@@ -44,8 +45,11 @@ retrieval method, and **a field without provenance cannot be written to HubSpot*
 in T1, enforced at the boundary in T3 and T9. **The gate governs prospect field writes, not task creation** —
 otherwise T13 could never adopt a hand-typed record.
 
-**Expected funnel, one run:** ~600 census records → ~200 after free filters → ~120 after disqualification →
-**~80 verified (the only paid step)** → ~40 with a named owner → top 20, two route clusters.
+**Measured funnel (freight v3, 2026-10-09):** TX 377,926 → active 194,663 → DFW counties 45,855 → broker code
+4,518 → ≤10 power units **4,449 in the backlog** (all free). **Per weekly run (D12):** a batch of 150 → free
+QCMobile + revocation checks → Places verify → one judgment call → owner (census first) → ~20 qualified, two
+route clusters. ~$25–30 a run, set by the batch size. The original "~600 in, ~80 verified" estimate was ~7×
+low on the pool and is superseded.
 
 **Done, per ticket:** `uv run ruff check .` · `uv run mypy . && uv run pyright` · `uv run pytest` all green,
 zero suppressions.
@@ -132,6 +136,8 @@ declarative manifest, not code* and *Missing pieces* · PRD §6 portability tabl
 - Stage 1 of 5: `search_registry(manifest_source, query)` — generic, manifest-parameterized, never source-specific.
 - **FMCSA adapter, census-file-first.** QCMobile is a *lookup* API keyed on USDOT/MC, not a search-by-geography API — so: pull the bulk Company Census File, filter to DFW counties + active broker authority, then QCMobile per record for MC number, authority status, fleet size, BOC-3 filings. (E10: this is the exact judgment whose absence produced a 74-row file of BOC-3 process agents instead of brokers.)
 - Brief → `sourcing_run` → candidates persisted with provenance on every field.
+- **The backlog and the batch (D12, 2026-10-09).** The census filter runs over the whole pool once (4,449 for freight v3) and persists it. Each run then selects a **fixed batch** (setting, default 150) **best first**, with a deterministic order: current MCS-150 filing (within 2 years) first, then a named `company_officer_1`, then the stable tie-breaker. Selected candidates are marked so a candidate is never batched twice, and the pool works down run over run. **Test:** two runs over one fixture pool select disjoint batches in the same order every time.
+- **Free checks before anything paid (D8):** QCMobile `allowToOperate` and the revocations join run on the batch in code, not by a model. They need a free FMCSA webKey. **`power_units` and other numeric census fields arrive as text**, so cast them at the adapter.
 - **Portability test:** pointing the same stage at the fire manifest hits the fire source with **no code change** (stub source in tests).
 - **Determinism test:** same fixture input → identical candidate set and ordering across runs.
 - Recorded fixtures; no live network in tests.
@@ -148,7 +154,9 @@ E10 · **SPIKE-2 result** (below).
 
 **Scope / acceptance criteria** — *the two fields the ICP filter and M6 depend on get filled, or stay empty — never guessed.*
 - Stages 2 and 3: verify business identity (address, phone via Google Places) and resolve the owner/principal (review-name signal, registry principal, SOS filing). **`resolve_owner` is one of the two Agent SDK judgment nodes** — structured output, with a citation attached to every field it returns.
-- **Runs after qualification, not before** (D8) — nothing paid touches a candidate the free filters would have dropped.
+- **Runs after the free filters, before the judgment call** (D8, revised 2026-10-09). Nothing paid touches a candidate a free filter would drop. `verify_business` is the cheaper paid step (~$0.03), and its website, phone and business type are the evidence T7's single judgment call reads.
+- **Owner: census first** (D12). Census `company_officer_1` is a cited principal for 67% of the freight v3 pool, so `resolve_owner`, the judgment node, runs **only where it is absent**. That halves the hardest problem in the system before any model is called.
+- **Confirm the Places SKU when planning.** Text Search Pro is $32 / 1,000 after 5,000 free a month, but phone and website may need a higher tier.
 - **Per-run call budget enforced via `core/cost.py` and logged**, default cap 500 Places calls. Exceeding it marks the run *degraded* and stops enrichment — it does not crash and does not silently continue spending.
 - Every written field carries provenance; a field that cannot be cited is **left absent**, not inferred. This is the structural fix for E18 (a company name sitting in a first-name field is exactly a field nobody could cite).
 - Measured over the fixture sample: **≥70% named decision-maker (M6)**, **100% headcount-band fill or absent (M8)**. If SPIKE-2 confirms FMCSA cannot yield headcount for non-asset brokers, the ICP band leans on Places and web signals and *absent* is the honest common case.
@@ -156,15 +164,19 @@ E10 · **SPIKE-2 result** (below).
 **Per-ticket context:** architecture → *Missing pieces* ("owner resolution — the hardest single problem in the
 system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, not a ceiling* · E18 · M6/M8.
 **Files:** `app/tools/{verify_business,resolve_owner}.py`, `app/sourcing/sources/google_places.py`, `tests/`
-**Size:** ~1000–1400 lines · **Depends on:** T5, T7
+**Size:** ~1000–1400 lines · **Depends on:** T5 (no longer T7: verification now runs before the judgment call, D8)
 
 ---
 
 ### T7 — Qualification slice: disqualifiers, rollup classifier, priority score
 
 **Scope / acceptance criteria** — *the rules in a founder's head become rows, and a rejected rollup stays rejected.*
-- Disqualifier rule engine driven entirely by the manifest (no rule literals in the slice). Free — runs before anything billable.
-- Stage 4 of 5: `classify_rollup_vs_local` — manifest rules plus **the second Agent SDK judgment node**, with a citation attached to the verdict.
+- Disqualifier rule engine driven entirely by the manifest (no rule literals in the slice). Free, and runs before anything billable. **What the evaluator has to handle, from the freight v3 review:**
+  - **All the operators,** including `not_contains` and `not_in_set` (PRs #10, #11).
+  - **Casts:** census numerics such as `power_units` arrive as text.
+  - **A field's source:** `allowToOperate` lives in QCMobile, not the census, so a predicate needs to know which source its field comes from.
+  - **Joins:** `authority_revoked` is a join against the revocations dataset, so give it a mechanical path rather than a model call.
+- Stage 4 of 5: `classify_rollup_vs_local`, **the second Agent SDK judgment node**, with a citation attached to the verdict. **One call per candidate decides every judgment rule in the manifest** (D12), e.g. rollup, `self_employed_shell` and `authority_revoked`'s reason, never one call per rule. It reads T6's verified fields as evidence, since Places runs first (D8). ~$0.08 a candidate, measured.
 - `disqualification` table: candidate + the rule that fired + when. **Re-source suppression:** a disqualified candidate is not re-sourced next run — tested across two runs. This is the thing a HubSpot-only model cannot do.
 - Priority score: Intensity (1–5) × Automatable (1–5) = 1–25; ≥16 live, <9 dead (E9), computed from cited signals.
 - Fixture test: the four known rollups (Impact Fire, Summit Fire, Century Fire, Control Systems) classify as rollup; **<5% rollup false positives** (M6).
@@ -172,7 +184,7 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
 **Per-ticket context:** E7 · E9 · architecture → *Missing pieces* ("a rollup-vs-local classifier") · M6 ·
 PRD §4 WRONG condition (founder rejects ≥30% → qualification judgment cannot be encoded).
 **Files:** `app/qualification/*`, `app/tools/classify_rollup.py`, `alembic/versions/`, `tests/qualification/`
-**Size:** ~900–1300 lines · **Depends on:** T2, T4 · **Parallel with:** T5, T8 · **Blocks:** T6
+**Size:** ~900–1300 lines · **Depends on:** T2, T4 · **Parallel with:** T5, T6, T8. In the run, the judgment call consumes T6's verified fields; that is a data contract on `candidate` (T4), so it is not a build dependency.
 
 ---
 
@@ -301,7 +313,6 @@ graph TD
   T4 --> T5
   T2 --> T7
   T4 --> T7
-  T7 --> T6
   T5 --> T6
   T4 --> T8
   T3 --> T9
@@ -335,11 +346,13 @@ graph TD
 | **3** | **T4** ∥ **T11** ∥ **T12** | 3 worktrees | `sourcing/` · `cadence/` · `manifests/`. T11 needs no sourcing at all, so the cadence machine exists before the first list does |
 | **4** | **T7** ∥ **T8** ∥ **T13** | 3 worktrees | T13 once Spike 1 closes — the 22 enter the machine here |
 | **5** | **T5** ∥ **T9** | 2 worktrees | `sourcing/`+`tools/` vs `promotion/` |
-| **6** | **T6** | no | After T5 and T7 — verification runs on qualified candidates only (D8) |
+| **6** | **T6** | no | After T5. No longer waits for T7: verification now runs before the judgment call (D8, revised 2026-10-09) |
 | **7** | **T10** | no | Integration; plan it last, when the seams are real |
 
-**Note the reordering.** Qualification (T7) now precedes enrichment (T6), because verification is the paid
-step and must not touch candidates the free filters would drop. T11 moved early: it depends only on T1 and
+**Note the ordering** *(revised 2026-10-09)*. Within a run it goes free filters, then Places (T6), then one judgment
+call (T7), then owner (census first, then T6's `resolve_owner`): **free before paid, cheaper paid before
+dearer paid** (D8). T7's free rule engine still runs before anything billable; only the paid steps swapped,
+because Places is cheaper than a judgment call and is the evidence that call reads. T11 moved early: it depends only on T1 and
 T3, so the cadence machine can be working the existing 22 while the sourcing line is still being built.
 
 **The `app/tools/` parallelization seam.** Four tickets add one of the five stages each (T5→1, T6→2 and 3,
@@ -359,7 +372,7 @@ against a guess.
 | Gate | Question | Timebox | Blocks |
 |---|---|---|---|
 | SPIKE-1 | Is the constraint sourcing, or discipline? | 2 weeks | **T13.** Runs alongside Waves 1–2; ends in adoption either way. Its finding shifts wave order, not the starting point |
-| SPIKE-2 | Does FMCSA yield a named principal **and** a headcount band for DFW non-asset brokerages? | 1 day | **T5.** Run offline against the bulk census file. <50% principal yield → the freight manifest needs a second source from day one and M6's 70% needs re-basing. **The headcount half is expected to fail** — FMCSA's power-unit/driver fields describe carriers, not brokers |
+| SPIKE-2 | Does FMCSA yield a named principal **and** a headcount band for DFW non-asset brokerages? | 1 day | **T5.** Run offline against the bulk census file. <50% principal yield → the freight manifest needs a second source from day one and M6's 70% needs re-basing. **The headcount half is expected to fail** — FMCSA's power-unit/driver fields describe carriers, not brokers. **Principal half measured 2026-10-09:** census `company_officer_1` is present for **67%** of freight v3's 4,449 DFW pool, which clears the 50% bar. Whether those officers are the decision-maker M6 means is still unchecked, and the headcount half is not yet run |
 | SPIKE-3 | Does our HubSpot tier have sequences, or only tasks? | — | **ANSWERED.** Starter — no sequences, workflows capped. Forced D4 |
 | SPIKE-4 | Can we send without risking `compumatrice.com`? | — | **Out of MVP scope.** No ticket here sends. T11 drafts the email touch only |
 

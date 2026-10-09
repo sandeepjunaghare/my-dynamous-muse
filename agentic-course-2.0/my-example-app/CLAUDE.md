@@ -91,10 +91,12 @@ client, so it builds in parallel with the whole sourcing line.
   11 past due. The spike works those 22 by hand for two weeks; T1, T2 and T3 are built in parallel because
   they are needed under either outcome. When it ends, surviving prospects are **adopted** into the cadence
   machine — so the finding arrives with a lever attached rather than as an observation.
-- **Spend nothing until the free filters have run.** Qualification precedes verification: registry pull and
-  disqualifier rules are free, Google Places is not. Paid calls are capped per run (500 Places calls) as a
-  circuit breaker against a runaway loop — not as a budget target. Per-run cost is logged from T1 so the
-  first real run sets the ceiling instead of a guess.
+- **Free before paid; cheaper paid before dearer paid** (D8). The registry pull, disqualifier rules,
+  QCMobile and the revocations join are free and run first. Then Places (~$0.03 a candidate), then **one**
+  judgment call per candidate (~$0.08). **The run works a backlog in weekly batches** (D12): the free filters
+  persist the whole pool (4,449 for freight v3), and each run takes a fixed batch (start 150) through the paid
+  steps, so the batch size sets the bill. Paid calls are capped per run (500 Places calls) as a circuit breaker
+  against a runaway loop, not as a budget target. Per-run cost is logged from T1.
 - **Never silently answer an open question.** Architecture doc → *Open questions*, PRD §9. If a decision
   you're about to make sits on those lists unanswered, ask.
 

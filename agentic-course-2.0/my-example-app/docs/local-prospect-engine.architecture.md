@@ -60,6 +60,21 @@ against fixtures. The judgment that genuinely exists — *is this a national rol
 business?* — is isolated at two nodes where it can be evaluated, cached and cited. This keeps the whole
 stack, including the Agent SDK; it changes only who decides the order.
 
+**The run works a backlog, not the whole registry** *(revised 2026-10-09, after the freight v3 review)*. The
+original plan assumed ~600 census records per run. Measured against the real Company Census File, freight
+v3's free predicates leave **4,449** active DFW broker candidates. Every stage over every candidate every week
+would mean ~8,800 judgment calls (~$700) and a Places cap that trips on every run. So the free filters run
+over the whole pool and persist it as a **backlog**. Each weekly run then takes a **fixed batch, best first**,
+through the paid steps. The batch size, not the pool size, sets the bill (~$25–30 a week at a starting batch of
+150). Disqualified candidates are suppressed (T7), so the pool works down and new registrations top it up.
+Inside a batch the order is **free before paid, and cheaper paid before dearer paid**:
+
+1. **Free:** census predicates, then QCMobile `allowToOperate` and the revocations join, done in code, never by a model.
+2. **Cheapest paid:** Places verification (~$0.03 a candidate). It is also the evidence the next step needs: website, phone, business type.
+3. **Dearest paid:** **one** `classify_rollup` call per candidate covering every judgment rule (~$0.08, measured
+   from the live `propose` run at ~$0.02 a turn).
+4. **Owner:** census `company_officer_1` first (present for 67%, free). `resolve_owner` runs only where it is absent.
+
 **Where the agent does earn its keep: authoring manifests.** The open-ended work is not the weekly run, it is
 *"what is the authoritative registry for collision centers, and what disqualifies one?"* — a research task
 performed once per vertical. `app/manifests/` carries an agent that researches a brief and proposes a DRAFT
@@ -137,8 +152,10 @@ That keeps M4 honest — there is no shadow CRM — while giving the system a me
   QCMobile per record for detail. Free, and licensed **public domain (CC PDM 1.0)** — the terms-of-use
   decision for this source is close to a formality, but still gets recorded at `manifest activate`.
 - **Google Places** — paid, per-request. Needed for address and phone verification and for the review-name
-  signal that often surfaces an owner. **Runs after qualification, never before** — the registry pull and
-  disqualifier rules are free, so nothing paid touches a candidate the free filters would have dropped.
+  signal that often surfaces an owner. **Runs after the free filters and before the judgment call**
+  (revised 2026-10-09). Nothing paid touches a candidate a free filter would drop, and the cheaper paid step
+  feeds the dearer one its evidence. Text Search Pro is $32 / 1,000 after 5,000 free a month. Phone and
+  website may need a higher SKU, so confirm the SKU when planning T6.
   Capped at 500 calls per run as a circuit breaker against a runaway loop; that is a safety valve, not a
   budget target (see *Cost*).
 - **Secrets** — `.env`, never committed. The template's existing posture; nothing new.
@@ -161,9 +178,11 @@ editing a shared one.
 
 **Cost: a circuit breaker, not a ceiling.** No monthly budget is set; the first runs measure themselves, with
 per-run cost logged from the scaffold onward rather than bolted on at the enrichment ticket. The 500-call
-Places cap exists so a bug cannot run up a bill overnight. Expected shape at one run a week, ~20 qualified
-names out: roughly 600 census records in, ~200 after free filters, ~120 after disqualification, **~80
-verified**, ~40 with a named owner, top 20 clustered.
+Places cap exists so a bug cannot run up a bill overnight. ~~Expected shape: ~600 census records in, ~200 after
+free filters, ~120 after disqualification, ~80 verified~~ (superseded 2026-10-09). **Measured shape (freight
+v3, census file):** TX 377,926 → active 194,663 → DFW counties 45,855 → broker code 4,518 → ≤10 power units
+**4,449 in the backlog**. A weekly batch of **150** (tune from the first runs) goes through Places and one
+judgment call each, for ~20 qualified names out and ~$25–30 a run. At that rate the backlog lasts ~30 weeks.
 
 **Evidence grounding, generalized to field level.** The template mandates `evidence_grounding` before every
 response to prevent hallucination. Here the analogue is: **every prospect field carries source URL, retrieval
@@ -284,6 +303,10 @@ Things this approach depends on that do not exist yet:
       active. FMCSA/QCMobile is public domain (CC PDM 1.0); Google Places still needs a read of its terms.
 - [x] **Google Places cost ceiling per run** — **Decided 2026-09-26:** no ceiling, a circuit breaker. 500
       calls per run, per-run cost logged from T1, the ceiling set from observation rather than guess.
+- [x] **Funnel size and order** — **Decided 2026-10-09:** a backlog worked in weekly batches (start 150), not
+      a full pass. Free before paid, cheaper paid before dearer paid: Places before `classify_rollup`, which
+      revises D8. One judgment call per candidate. Census `company_officer_1` before `resolve_owner`. See
+      *Recommended approach*.
 - [ ] **Who reviews manifest *quality*, beyond terms of use?** New, and raised by the authoring agent: nothing
       currently catches a plausible-but-wrong disqualifier rule or a mis-chosen authoritative source. That
       failure is silent and produces a credible list of the wrong companies — which is E10 exactly.
