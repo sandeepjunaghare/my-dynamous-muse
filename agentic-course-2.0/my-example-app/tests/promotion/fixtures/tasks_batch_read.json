@@ -1,0 +1,35 @@
+{
+  "status": "COMPLETE",
+  "results": [
+    {
+      "id": "88001122",
+      "properties": {
+        "hs_createdate": "2026-09-28T14:00:01.000Z",
+        "hs_lastmodifieddate": "2026-09-29T16:12:40.311Z",
+        "hs_object_id": "88001122",
+        "hs_task_completion_date": "2026-09-29T16:12:40.000Z",
+        "hs_task_status": "COMPLETED",
+        "hs_timestamp": "2026-09-29T04:59:00.000Z"
+      },
+      "createdAt": "2026-09-28T14:00:01.000Z",
+      "updatedAt": "2026-09-29T16:12:40.311Z",
+      "archived": false
+    },
+    {
+      "id": "88001123",
+      "properties": {
+        "hs_createdate": "2026-09-28T14:00:02.000Z",
+        "hs_lastmodifieddate": "2026-09-28T14:00:02.000Z",
+        "hs_object_id": "88001123",
+        "hs_task_completion_date": null,
+        "hs_task_status": "NOT_STARTED",
+        "hs_timestamp": "2026-09-29T04:59:00.000Z"
+      },
+      "createdAt": "2026-09-28T14:00:02.000Z",
+      "updatedAt": "2026-09-28T14:00:02.000Z",
+      "archived": false
+    }
+  ],
+  "startedAt": "2026-09-30T13:00:00.102Z",
+  "completedAt": "2026-09-30T13:00:00.148Z"
+}

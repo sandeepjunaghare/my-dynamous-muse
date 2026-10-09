@@ -19,14 +19,21 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from app.cadence import models as cadence_models
 from app.core.config import get_settings
 from app.core.database import Base
 from app.manifests import models as manifest_models
+from app.sourcing import models as sourcing_models
 
 # Importing a slice's models is what puts its tables on Base.metadata. The tuple keeps the import
 # alive: ruff would otherwise remove it as unused, and autogenerate would silently see an empty
 # schema and propose dropping every table. Each new slice appends one import and one entry here.
-_REGISTERED_MODELS = (manifest_models.VerticalManifest,)
+_REGISTERED_MODELS = (
+    manifest_models.VerticalManifest,
+    sourcing_models.SourcingRun,
+    sourcing_models.Candidate,
+    cadence_models.CadenceState,
+)
 
 config = context.config
 

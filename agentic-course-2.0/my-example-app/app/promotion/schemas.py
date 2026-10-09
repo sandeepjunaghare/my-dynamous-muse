@@ -31,11 +31,19 @@ _REQUEST_CONFIG = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 class ObjectType(StrEnum):
-    """The CRM object types this gateway touches. The path segment and the value are the same."""
+    """The CRM object types this gateway touches. The path segment and the value are the same.
+
+    The four engagement types are **read-only** here: T11 reads them to decide whether a cadence
+    touch was done (D5). Nothing in this gateway creates a call, email, note or meeting.
+    """
 
     companies = "companies"
     contacts = "contacts"
     tasks = "tasks"
+    calls = "calls"
+    emails = "emails"
+    notes = "notes"
+    meetings = "meetings"
 
 
 class SearchOperator(StrEnum):
@@ -289,3 +297,92 @@ class TaskCreate(BaseModel):
         if self.owner_id is not None:
             properties["hubspot_owner_id"] = self.owner_id
         return properties
+
+
+class BatchReadInput(BaseModel):
+    """One record to read in a batch."""
+
+    model_config = _REQUEST_CONFIG
+
+    id: str
+
+
+class BatchReadRequest(BaseModel):
+    """The body of a ``batch/read``. HubSpot caps ``inputs`` at 100 per call."""
+
+    model_config = _REQUEST_CONFIG
+
+    properties: list[str]
+    inputs: list[BatchReadInput]
+
+
+class BatchReadResponse(BaseModel):
+    """A batch read's results.
+
+    An id that does not exist — or was archived — is simply **absent** from ``results`` (HubSpot
+    answers 207 and lists it under ``errors``, which is ignored here). The caller decides what an
+    absent record means; for a cadence task it means a human deleted it.
+    """
+
+    model_config = _RESPONSE_CONFIG
+
+    results: list[HubSpotObject] = Field(default_factory=list[HubSpotObject])
+
+
+class AssociatedObject(BaseModel):
+    """One associated record, as the dated associations endpoint returns it.
+
+    The dated surface follows v4 (``toObjectId``, an integer); v3 answered ``id``, a string. This
+    shape has not been exercised against the live portal, so both are accepted and normalized to a
+    string id rather than one of them failing a weekly run.
+    """
+
+    model_config = _RESPONSE_CONFIG
+
+    to_object_id: str | None = Field(default=None, validation_alias="toObjectId")
+    legacy_id: str | None = Field(default=None, validation_alias="id")
+
+    @field_validator("to_object_id", "legacy_id", mode="before")
+    @classmethod
+    def _stringify(cls, value: object) -> object:
+        """HubSpot ids are int64 on this endpoint and strings everywhere else."""
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
+
+    @property
+    def object_id(self) -> str | None:
+        """The associated record's id, whichever key carried it."""
+        return self.to_object_id if self.to_object_id is not None else self.legacy_id
+
+
+class PagingNext(BaseModel):
+    """The cursor to the next page."""
+
+    model_config = _RESPONSE_CONFIG
+
+    after: str | None = None
+
+
+class Paging(BaseModel):
+    """HubSpot's paging envelope."""
+
+    model_config = _RESPONSE_CONFIG
+
+    next: PagingNext | None = None
+
+
+class AssociationsPage(BaseModel):
+    """One page of a record's associations to one object type."""
+
+    model_config = _RESPONSE_CONFIG
+
+    results: list[AssociatedObject] = Field(default_factory=list[AssociatedObject])
+    paging: Paging | None = None
+
+    @property
+    def next_after(self) -> str | None:
+        """The cursor for the next page, or ``None`` on the last one."""
+        if self.paging is None or self.paging.next is None:
+            return None
+        return self.paging.next.after

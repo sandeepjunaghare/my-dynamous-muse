@@ -1,0 +1,31 @@
+{
+  "status": "COMPLETE",
+  "results": [
+    {
+      "id": "51230001",
+      "properties": {
+        "hs_createdate": "2026-09-29T15:02:11.000Z",
+        "hs_lastmodifieddate": "2026-09-29T15:02:11.000Z",
+        "hs_object_id": "51230001",
+        "hs_timestamp": "2026-09-29T15:00:00.000Z"
+      },
+      "createdAt": "2026-09-29T15:02:11.000Z",
+      "updatedAt": "2026-09-29T15:02:11.000Z",
+      "archived": false
+    },
+    {
+      "id": "51230002",
+      "properties": {
+        "hs_createdate": "2026-09-22T18:30:00.000Z",
+        "hs_lastmodifieddate": "2026-09-22T18:30:00.000Z",
+        "hs_object_id": "51230002",
+        "hs_timestamp": "2026-09-22T18:25:00.000Z"
+      },
+      "createdAt": "2026-09-22T18:30:00.000Z",
+      "updatedAt": "2026-09-22T18:30:00.000Z",
+      "archived": false
+    }
+  ],
+  "startedAt": "2026-09-30T13:00:01.002Z",
+  "completedAt": "2026-09-30T13:00:01.040Z"
+}
