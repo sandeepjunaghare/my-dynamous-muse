@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "toObjectId": 51230001,
+      "associationTypes": [{ "category": "HUBSPOT_DEFINED", "typeId": 193, "label": null }]
+    },
+    {
+      "toObjectId": 51230002,
+      "associationTypes": [{ "category": "HUBSPOT_DEFINED", "typeId": 193, "label": null }]
+    }
+  ],
+  "paging": {
+    "next": {
+      "after": "MjAyNi0wOS0yOQ%3D%3D",
+      "link": "https://api.hubapi.com/crm/objects/2026-09/contacts/400112233/associations/calls?after=MjAyNi0wOS0yOQ%3D%3D"
+    }
+  }
+}

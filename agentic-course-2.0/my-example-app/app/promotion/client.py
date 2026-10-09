@@ -21,7 +21,7 @@ import asyncio
 import random
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import cast
 
@@ -39,8 +39,12 @@ from app.promotion.exceptions import (
 )
 from app.promotion.schemas import (
     Association,
+    AssociationsPage,
     AssociationTarget,
     AssociationType,
+    BatchReadInput,
+    BatchReadRequest,
+    BatchReadResponse,
     ExistingProperty,
     HubSpotErrorBody,
     HubSpotObject,
@@ -84,6 +88,12 @@ _LOCKED_RETRY_SECONDS = 2.0
 _LOCKED_MAX_ATTEMPTS = 2
 
 _DAILY_POLICY = "DAILY"
+
+# HubSpot's cap on inputs per batch call.
+_BATCH_READ_LIMIT = 100
+# The associations endpoint's maximum page size, and a circuit breaker on the walk.
+_ASSOCIATION_PAGE_SIZE = 500
+_ASSOCIATION_MAX_PAGES = 20
 
 # Spelled out rather than taken from the enum httpx ships: its members carry a
 # (value, phrase) pair through a custom `__new__`, which Pyright strict reads as a tuple and
@@ -564,6 +574,77 @@ class HubSpotClient:
             company_id=company_id,
         )
         return HubSpotObject.model_validate(response.json())
+
+    async def batch_read(
+        self,
+        object_type: ObjectType,
+        ids: Sequence[str],
+        properties: Sequence[str],
+    ) -> list[HubSpotObject]:
+        """Read many records of one type, 100 per call.
+
+        **A POST, but a read** — so a 5xx is retried, unlike a create: reading twice cannot
+        duplicate anything. Ids that do not exist (deleted, archived) are absent from the result
+        rather than an error; what an absence means is the caller's policy, not transport's.
+        """
+        unique_ids = list(dict.fromkeys(ids))
+        results: list[HubSpotObject] = []
+        for start in range(0, len(unique_ids), _BATCH_READ_LIMIT):
+            chunk = unique_ids[start : start + _BATCH_READ_LIMIT]
+            body = BatchReadRequest(
+                properties=list(properties),
+                inputs=[BatchReadInput(id=object_id) for object_id in chunk],
+            )
+            response = await self._request(
+                "POST",
+                f"/crm/objects/{API_VERSION}/{object_type.value}/batch/read",
+                json_body=body.model_dump(by_alias=True, exclude_none=True),
+                retry_on_server_error=True,
+            )
+            results.extend(BatchReadResponse.model_validate(response.json()).results)
+        return results
+
+    async def list_associated_ids(
+        self,
+        from_type: ObjectType,
+        object_id: str,
+        to_type: ObjectType,
+    ) -> list[str]:
+        """Every id of ``to_type`` associated with one record, following the paging cursor.
+
+        There is no "activities since X" endpoint, and ``hs_timestamp`` is not a server-side
+        filter on batch read — so the cadence's activity read is this walk plus a batch read,
+        compared client-side. The page cap is a circuit breaker against a cursor that never ends,
+        not a real limit: 20 pages of 500 is 10,000 engagements on one contact.
+        """
+        found: list[str] = []
+        after: str | None = None
+        for _ in range(_ASSOCIATION_MAX_PAGES):
+            query = f"limit={_ASSOCIATION_PAGE_SIZE}"
+            if after is not None:
+                query += f"&after={after}"
+            response = await self._request(
+                "GET",
+                f"/crm/objects/{API_VERSION}/{from_type.value}/{object_id}/associations/"
+                f"{to_type.value}?{query}",
+                retry_on_server_error=True,
+            )
+            page = AssociationsPage.model_validate(response.json())
+            found.extend(
+                associated.object_id
+                for associated in page.results
+                if associated.object_id is not None
+            )
+            after = page.next_after
+            if after is None:
+                return list(dict.fromkeys(found))
+        logger.warning(
+            "promotion.hubspot.associations_capped",
+            from_type=from_type.value,
+            to_type=to_type.value,
+            pages=_ASSOCIATION_MAX_PAGES,
+        )
+        return list(dict.fromkeys(found))
 
     async def aclose(self) -> None:
         """Close the underlying connection pool."""

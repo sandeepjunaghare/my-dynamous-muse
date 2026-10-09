@@ -64,7 +64,7 @@ react to rejection, and **search responses carry no rate-limit headers at all** 
 |---|---|---|
 | 429, `TEN_SECONDLY_ROLLING` | yes, bounded backoff | burst limit; the request never executed |
 | 429, `DAILY` | **no** | 250,000 calls/day is a bug, not load — fail loudly |
-| 5xx on GET / search | yes | idempotent |
+| 5xx on GET / search / batch read | yes | idempotent |
 | **5xx on POST create** | **no** | HubSpot may have created it and failed to answer |
 | 5xx on PATCH update | yes | idempotent by value |
 | Timeout on a create | **no** | same ambiguity as the 5xx |
@@ -86,12 +86,14 @@ that is **T9's `promotion` ledger**, not this module.
 
 - **Sequences** — portal 244766495 is Sales Hub Starter (Spike 3). There is no sequences API, which
   is why `app/cadence/` owns the three-touch state machine. A test asserts no such method exists.
-- **Activity reads** — deciding "was this touch done" is cadence policy (D5), not transport. T11
-  adds the read methods here; it does not need a second client. **A sizing note for T11's planner:**
-  there is no single "activities since X" endpoint. The path is walk associations
-  (`/crm/objects/{v}/contacts/{id}/associations/{calls|emails|notes|meetings}`), batch-read those
-  engagements for `hs_timestamp`, then compare client-side — `hs_timestamp` is not a server-side
-  filter on batch-read. That is two or three round trips per prospect, not one.
+- **Activity *policy*** — deciding "was this touch done" is cadence policy (D5), not transport, and
+  lives in `app/cadence/sync.py`. T11 added the two **read** methods it needs here, so there is
+  still one client: `batch_read()` (`POST .../{type}/batch/read`, 100 ids per call, retried on 5xx
+  because it is a read) and `list_associated_ids()` (the association walk, following the paging
+  cursor). There is no single "activities since X" endpoint and `hs_timestamp` is not a server-side
+  filter on batch read, so the comparison happens client-side — a handful of round trips per
+  prospect, not one. The engagement types (`calls`, `emails`, `notes`, `meetings`) are on
+  `ObjectType` for reading only; nothing here creates one.
 - **Deals** — the `$999 assessment` pipeline does not exist and is deliberately not being created
   (D13 / GATE-A). The token reads deals for T10's Friday report; nothing here writes one.
 - **Batch endpoints** — ~20 promotions a week against 100 requests/10 s. Revisit if a run ever
