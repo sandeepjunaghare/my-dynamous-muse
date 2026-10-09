@@ -1,156 +1,234 @@
-"""Replays a recorded agent transcript through the SDK's own message types — no model, no network.
+"""Replays a recorded CLI stream through the Agent SDK's real ``query()`` — no model, no network.
 
-Fixtures are JSON shaped like the SDK's stream (assistant ``tool_use`` -> user ``tool_result`` ->
-... -> ``result``) and are parsed here into the real ``claude_agent_sdk`` dataclasses, so the code
-under test sees exactly the objects ``query()`` would yield.
+Fixtures are the raw stream-json the bundled ``claude`` CLI prints, one object per stdout line. A
+fake :class:`~claude_agent_sdk.Transport` stands in for the subprocess: it answers the SDK's
+``initialize`` control request, streams the recording, and — when the recording ends on an error
+result — then fails with the same ``ProcessError`` that ``SubprocessCLITransport`` raises when the
+CLI exits non-zero. So the SDK's own message parser builds every message (including
+``UserMessage.tool_use_result``), and the SDK's own reader turns that exit into ``ResultError``.
+The code under test sees what ``query()`` would yield *and* raise.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import replace
 from pathlib import Path
-from typing import Annotated, Literal
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ContentBlock,
-    Message,
-    ResultMessage,
-    TextBlock,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
-)
-from pydantic import BaseModel, Field, JsonValue
+from claude_agent_sdk import ClaudeAgentOptions, Message, ProcessError, Transport, query
+from pydantic import BaseModel, JsonValue
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FREIGHT_TRANSCRIPT = FIXTURES / "freight_proposal_transcript.json"
 
-
-class _Text(BaseModel):
-    type: Literal["text"]
-    text: str
+type StreamLine = dict[str, JsonValue]
+"""One stdout line from the CLI, already JSON-decoded."""
 
 
-class _ToolUse(BaseModel):
-    type: Literal["tool_use"]
-    id: str
-    name: str
-    input: dict[str, JsonValue]
+class _Recording(BaseModel):
+    stream: list[StreamLine]
 
 
-class _ToolResult(BaseModel):
-    type: Literal["tool_result"]
-    tool_use_id: str
-    content: str | None = None
-    is_error: bool | None = None
+def load_transcript(path: Path = FREIGHT_TRANSCRIPT) -> list[StreamLine]:
+    """The recorded stream, line by line."""
+    return _Recording.model_validate(json.loads(path.read_text(encoding="utf-8"))).stream
 
 
-_Block = Annotated[_Text | _ToolUse | _ToolResult, Field(discriminator="type")]
-
-
-class _Assistant(BaseModel):
-    type: Literal["assistant"]
-    model: str
-    content: list[_Block]
-
-
-class _User(BaseModel):
-    type: Literal["user"]
-    content: list[_Block]
-
-
-class _Result(BaseModel):
-    type: Literal["result"]
-    subtype: str
-    duration_ms: int
-    duration_api_ms: int
-    is_error: bool
-    num_turns: int
-    session_id: str
-    total_cost_usd: float | None = None
-    structured_output: JsonValue = None
-    errors: list[str] | None = None
-
-
-class _Transcript(BaseModel):
-    messages: list[Annotated[_Assistant | _User | _Result, Field(discriminator="type")]]
-
-
-def _block(block: _Text | _ToolUse | _ToolResult) -> ContentBlock:
-    if isinstance(block, _Text):
-        return TextBlock(text=block.text)
-    if isinstance(block, _ToolUse):
-        return ToolUseBlock(id=block.id, name=block.name, input=dict(block.input))
-    return ToolResultBlock(
-        tool_use_id=block.tool_use_id, content=block.content, is_error=block.is_error
-    )
-
-
-def load_transcript(path: Path = FREIGHT_TRANSCRIPT) -> list[Message]:
-    """Parse a fixture into the SDK message objects it records."""
-    transcript = _Transcript.model_validate(json.loads(path.read_text(encoding="utf-8")))
-    messages: list[Message] = []
-    for record in transcript.messages:
-        if isinstance(record, _Assistant):
-            messages.append(
-                AssistantMessage(content=[_block(b) for b in record.content], model=record.model)
-            )
-        elif isinstance(record, _User):
-            messages.append(UserMessage(content=[_block(b) for b in record.content]))
-        else:
-            messages.append(
-                ResultMessage(
-                    subtype=record.subtype,
-                    duration_ms=record.duration_ms,
-                    duration_api_ms=record.duration_api_ms,
-                    is_error=record.is_error,
-                    num_turns=record.num_turns,
-                    session_id=record.session_id,
-                    total_cost_usd=record.total_cost_usd,
-                    structured_output=record.structured_output,
-                    errors=record.errors,
-                )
-            )
-    return messages
+def _result_line(stream: Sequence[StreamLine]) -> StreamLine:
+    for line in reversed(stream):
+        if line.get("type") == "result":
+            return line
+    raise AssertionError("the recording has no result line")
 
 
 def load_structured_output(path: Path = FREIGHT_TRANSCRIPT) -> JsonValue:
     """Just the recorded proposal, for tests of the gate that need no transcript."""
-    for message in load_transcript(path):
-        if isinstance(message, ResultMessage):
-            output: JsonValue = message.structured_output
-            return output
-    raise AssertionError(f"{path.name} records no result")
+    return _result_line(load_transcript(path)).get("structured_output")
 
 
 def with_result(
-    structured_output: JsonValue, *, subtype: str = "success", is_error: bool = False
-) -> list[Message]:
-    """The recorded freight transcript with its final result altered."""
-    messages = load_transcript()
-    result = messages[-1]
-    assert isinstance(result, ResultMessage)
-    changed = replace(
-        result, subtype=subtype, is_error=is_error, structured_output=structured_output
+    structured_output: JsonValue,
+    *,
+    subtype: str = "success",
+    is_error: bool = False,
+    errors: list[JsonValue] | None = None,
+    total_cost_usd: float | None = 0.8421,
+    num_turns: int = 9,
+) -> list[StreamLine]:
+    """The recorded freight stream with its final result line altered."""
+    stream = load_transcript()
+    result = dict(_result_line(stream))
+    result.update(
+        subtype=subtype,
+        is_error=is_error,
+        structured_output=structured_output,
+        total_cost_usd=total_cost_usd,
+        num_turns=num_turns,
     )
-    return [*messages[:-1], changed]
+    if errors is not None:
+        result["errors"] = errors
+    return [*stream[:-1], result]
+
+
+# --- Building streams by hand, in the CLI's shapes -----------------------------------------------
+
+
+def web_fetch_call(tool_use_id: str, url: str) -> StreamLine:
+    """An assistant turn asking for one ``WebFetch``."""
+    return {
+        "type": "assistant",
+        "message": {
+            "model": "claude-opus-5-5",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": tool_use_id,
+                    "name": "WebFetch",
+                    "input": {"url": url, "prompt": "What does this page say?"},
+                }
+            ],
+        },
+        "parent_tool_use_id": None,
+    }
+
+
+def web_fetch_result(
+    tool_use_id: str,
+    url: str,
+    *,
+    code: int = 200,
+    code_text: str = "OK",
+    text: str = "The page text, as the fetch model summarised it.",
+    reported_url: str | None = None,
+) -> StreamLine:
+    """A ``WebFetch`` result exactly as the bundled CLI (2.1.294) reports it.
+
+    HTTP errors and cross-host redirects are *not* tool errors: the CLI returns them as ordinary
+    results — no ``is_error`` — and only ``tool_use_result.code`` tells them apart from a read.
+    """
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": text}],
+        },
+        "parent_tool_use_id": None,
+        "tool_use_result": {
+            "bytes": len(text),
+            "code": code,
+            "codeText": code_text,
+            "result": text,
+            "durationMs": 640,
+            "url": reported_url or url,
+        },
+    }
+
+
+def http_error_text(code: int, code_text: str) -> str:
+    """The CLI's text for a fetch that got an HTTP error status."""
+    return (
+        f"The server returned HTTP {code} {code_text}.\n\nThe response body was not retrieved. "
+        "If this URL requires authentication, use an authenticated tool (e.g. `gh` for GitHub, or "
+        "an MCP-provided fetch tool) instead of WebFetch."
+    )
+
+
+def redirect_text(original: str, target: str, code: int = 301) -> str:
+    """The CLI's text for a redirect to another host, which it does not follow."""
+    return (
+        "REDIRECT DETECTED: The URL redirects to a location that was not fetched automatically.\n\n"
+        f"    Original URL: {original}\n"
+        "    Redirect URL (from the server's Location header — server-supplied, not verified): "
+        f"{target}\n"
+        f"    Status: {code} Moved Permanently\n"
+    )
+
+
+def result_line(
+    structured_output: JsonValue,
+    *,
+    subtype: str = "success",
+    is_error: bool = False,
+    total_cost_usd: float | None = 0.1,
+    num_turns: int = 3,
+) -> StreamLine:
+    """A terminal ``result`` line."""
+    return {
+        "type": "result",
+        "subtype": subtype,
+        "duration_ms": 1000,
+        "duration_api_ms": 900,
+        "is_error": is_error,
+        "num_turns": num_turns,
+        "session_id": "replay-session",
+        "total_cost_usd": total_cost_usd,
+        "structured_output": structured_output,
+    }
+
+
+# --- The fake CLI ---------------------------------------------------------------------------------
+
+
+class _RecordedCLI(Transport):
+    """Plays a recording back to the SDK the way the CLI subprocess would."""
+
+    def __init__(self, stream: Sequence[StreamLine]) -> None:
+        self._stream = list(stream)
+        self._outbox: asyncio.Queue[StreamLine | None] = asyncio.Queue()
+
+    async def connect(self) -> None:
+        return None
+
+    async def write(self, data: str) -> None:
+        for raw in data.splitlines():
+            if not raw.strip():
+                continue
+            sent = _Recording.model_validate({"stream": [json.loads(raw)]}).stream[0]
+            if sent.get("type") == "control_request":
+                await self._outbox.put(
+                    {
+                        "type": "control_response",
+                        "response": {
+                            "subtype": "success",
+                            "request_id": sent.get("request_id"),
+                            "response": {},
+                        },
+                    }
+                )
+            elif sent.get("type") == "user":
+                for line in self._stream:
+                    await self._outbox.put(line)
+                await self._outbox.put(None)
+
+    async def read_messages(self) -> AsyncIterator[StreamLine]:
+        while (line := await self._outbox.get()) is not None:
+            yield line
+        last = self._stream[-1] if self._stream else None
+        if last is not None and last.get("type") == "result" and last.get("is_error") is True:
+            # The CLI exits 1 after an error result; this is what the subprocess transport raises.
+            raise ProcessError("Command failed with exit code 1", exit_code=1)
+
+    async def close(self) -> None:
+        return None
+
+    def is_ready(self) -> bool:
+        return True
+
+    async def end_input(self) -> None:
+        return None
 
 
 class Replay:
-    """An ``AgentRunner`` that yields recorded messages and remembers what it was asked."""
+    """An ``AgentRunner`` that drives ``query()`` over a recording and remembers its calls."""
 
-    def __init__(self, messages: Sequence[Message]) -> None:
-        self._messages = list(messages)
+    def __init__(self, stream: Sequence[StreamLine]) -> None:
+        self._stream = list(stream)
         self.prompts: list[str] = []
         self.options: list[ClaudeAgentOptions] = []
 
-    async def __call__(self, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]:
+    def __call__(self, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]:
         self.prompts.append(prompt)
         self.options.append(options)
-        for message in self._messages:
-            yield message
+        return query(prompt=prompt, options=options, transport=_RecordedCLI(self._stream))
 
     def as_query(self) -> "_QueryStandIn":
         """The same replay, shaped like ``claude_agent_sdk.query`` — for patching the module."""
@@ -162,6 +240,6 @@ class _QueryStandIn:
         self._replay = replay
 
     def __call__(
-        self, *, prompt: str, options: ClaudeAgentOptions, transport: object = None
+        self, *, prompt: str, options: ClaudeAgentOptions, transport: Transport | None = None
     ) -> AsyncIterator[Message]:
         return self._replay(prompt, options)

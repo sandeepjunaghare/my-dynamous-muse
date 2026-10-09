@@ -23,6 +23,7 @@ from app.core.database import dispose_engine, get_sessionmaker
 from app.manifests.agent import run_agent
 from app.manifests.proposal import DraftProposal, build_draft
 from app.manifests.schemas import (
+    SLUG_MAX_LENGTH,
     SLUG_PATTERN,
     ManifestBody,
     ManifestResponse,
@@ -48,9 +49,10 @@ would catch it has not been decided — so the reviewer is told, every time, tha
 
 def _slug(raw: str) -> str:
     """argparse type for ``--vertical``: the same lowercase slug the manifest schema demands."""
-    if re.fullmatch(SLUG_PATTERN, raw) is None:
+    if re.fullmatch(SLUG_PATTERN, raw) is None or len(raw) > SLUG_MAX_LENGTH:
         raise argparse.ArgumentTypeError(
-            f"{raw!r} is not a lowercase slug (e.g. collision_centers)"
+            f"{raw!r} is not a lowercase slug of at most {SLUG_MAX_LENGTH} characters "
+            "(e.g. collision_centers)"
         )
     return raw
 
@@ -184,11 +186,11 @@ async def _run_propose(brief: str, vertical: str | None) -> int:
 
     manifest = await _with_session(operation)
     _render(manifest)
-    _print_proposal_review(draft, cost)
+    _print_proposal_review(draft, cost, known_cost=agent_run.cost_usd is not None)
     return 0
 
 
-def _print_proposal_review(draft: DraftProposal, cost: RunCost) -> None:
+def _print_proposal_review(draft: DraftProposal, cost: RunCost, *, known_cost: bool) -> None:
     """What the reviewer needs beyond the row itself: evidence, gaps, open decisions, cost."""
     print("\nevidence quoted by the agent:")
     for field in draft.cited:
@@ -206,8 +208,9 @@ def _print_proposal_review(draft: DraftProposal, cost: RunCost) -> None:
         where = question.terms_url or "the agent did not find published terms; locate them"
         print(f"  - {question.source_name}: have you read and do you accept its terms? -> {where}")
 
+    spent = f"${cost.total_usd()}" if known_cost else "unknown (the SDK reported no cost)"
     print(
-        f"\nagent run cost: ${cost.total_usd()} over {cost.total_calls()} turn(s)"
+        f"\nagent run cost: {spent} over {cost.total_calls()} turn(s)"
         " (logged as core.cost.call_recorded)"
     )
     print(f"\n{QUALITY_REVIEW_NOTE}")

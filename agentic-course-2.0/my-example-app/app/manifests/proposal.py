@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from app.core.logging import get_logger
 from app.manifests.exceptions import ManifestProposalIncompleteError
 from app.manifests.schemas import (
+    SLUG_MAX_LENGTH,
     SLUG_PATTERN,
     DisqualifierRule,
     IcpBand,
@@ -183,7 +184,7 @@ def normalize_url(url: str) -> str:
 
     Scheme and host are case-insensitive and a fragment never names a different page; a trailing
     slash is how the same page is written two ways. Query strings are kept — they often do select
-    a different record.
+    a different record. Raises ValueError for a URL that does not parse.
     """
     parts = urlsplit(url.strip())
     path = parts.path.rstrip("/")
@@ -197,7 +198,16 @@ class _Gate:
         # The first successful read of a page is the retrieval being cited.
         self._reads: dict[str, PageRead] = {}
         for read in reads:
-            self._reads.setdefault(normalize_url(read.url), read)
+            try:
+                key = normalize_url(read.url)
+            except ValueError:
+                # Unreachable through WebFetch, which refuses a URL it cannot parse — but a read
+                # that cannot be compared can never back a citation, so skip it rather than crash.
+                logger.warning(
+                    "manifests.proposal.read_skipped", url=read.url, reason="unparseable"
+                )
+                continue
+            self._reads.setdefault(key, read)
         self.cited: list[CitedField] = []
         self.omitted: list[OmittedField] = []
 
@@ -213,7 +223,13 @@ class _Gate:
             self.omit(label, "no citation offered")
             return None
 
-        read = self._reads.get(normalize_url(citation.url))
+        try:
+            key = normalize_url(citation.url)
+        except ValueError:
+            # One malformed, model-supplied URL costs one field — never the paid-for proposal.
+            self.omit(label, f"citation URL {citation.url!r} is not parseable")
+            return None
+        read = self._reads.get(key)
         if read is None:
             self.omit(label, f"cites {citation.url}, which the agent never successfully fetched")
             return None
@@ -255,10 +271,11 @@ def build_draft(
     gate = _Gate(reads)
 
     vertical = vertical_override or proposal.vertical
-    if re.fullmatch(SLUG_PATTERN, vertical) is None:
+    if re.fullmatch(SLUG_PATTERN, vertical) is None or len(vertical) > SLUG_MAX_LENGTH:
+        logger.warning("manifests.proposal.draft_rejected", reason="invalid_vertical")
         raise ManifestProposalIncompleteError(
             f"the agent proposed {vertical!r} as the vertical name, which is not a lowercase slug "
-            "— re-run with --vertical <slug>",
+            f"of at most {SLUG_MAX_LENGTH} characters — re-run with --vertical <slug>",
             missing_fields=("vertical",),
         )
 
@@ -364,6 +381,12 @@ def build_draft(
     )
     if missing or icp_band is None or vocabulary is None:
         reasons = "; ".join(f"{entry.label}: {entry.reason}" for entry in gate.omitted)
+        logger.warning(
+            "manifests.proposal.draft_rejected",
+            reason="missing_required_fields",
+            missing_fields=list(missing),
+            omitted_fields=len(gate.omitted),
+        )
         raise ManifestProposalIncompleteError(
             f"no draft written — the agent could not cite {', '.join(missing)}, which every "
             f"manifest requires ({reasons})",

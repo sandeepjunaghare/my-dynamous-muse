@@ -12,6 +12,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,8 +53,8 @@ class Settings(BaseSettings):
     manifest_agent_model: str = "claude-opus-5-5"
     # Circuit breakers against a runaway research loop, not budget targets — the same stance as
     # the Places cap (D7). Re-set both from the first real run's logged cost and turn count.
-    manifest_agent_max_turns: int = 40
-    manifest_agent_max_budget_usd: Decimal = Decimal("5.00")
+    manifest_agent_max_turns: int = Field(default=40, gt=0)
+    manifest_agent_max_budget_usd: Decimal = Field(default=Decimal("5.00"), gt=0)
 
 
 @lru_cache

@@ -161,6 +161,28 @@ class TestTheGate:
         draft = build_draft(proposal, _read(REGISTRY))
         assert draft.body.disqualifier_rules == ()
         assert draft.omitted[0].label == "disqualifier_rules[rollup]"
+        assert (
+            draft.omitted[0].reason == f"cites {OTHER}, which the agent never successfully fetched"
+        )
+
+    @pytest.mark.parametrize("bad_url", ["http://[x", "https://[::1/registry"])
+    def test_a_malformed_citation_url_is_omitted_not_fatal(self, bad_url: str) -> None:
+        """`urlsplit` raises on these; one bad field must not cost the whole paid-for proposal."""
+        proposal = _proposal(
+            disqualifier_rules=[
+                ProposedRule(
+                    id="rollup", kind=RuleKind.judgment, description="d", citation=_cite(bad_url)
+                )
+            ]
+        )
+        draft = build_draft(proposal, _read(REGISTRY))
+        assert draft.body.disqualifier_rules == ()
+        assert draft.omitted[0].label == "disqualifier_rules[rollup]"
+        assert draft.omitted[0].reason == f"citation URL {bad_url!r} is not parseable"
+
+    def test_an_unparseable_read_is_skipped_not_fatal(self) -> None:
+        draft = build_draft(_proposal(), _read("http://[x", REGISTRY))
+        assert draft.omitted == ()
 
     def test_the_stored_url_is_the_one_fetched(self) -> None:
         """A cited URL differing only by slash or fragment matches; the fetched spelling is kept."""
@@ -193,6 +215,8 @@ class TestTheGate:
         proposal = proposal.model_copy(update={"sources": [*proposal.sources, bad]})
         draft = build_draft(proposal, _read(REGISTRY))
         assert draft.body.source_names() == ("registry",)
+        assert draft.omitted[0].label == "sources[Not A Slug]"
+        assert draft.omitted[0].reason.startswith("refused by the manifest schema:")
 
     def test_the_vertical_override_wins(self) -> None:
         assert build_draft(_proposal(), _read(REGISTRY), vertical_override="gadgets").vertical == (
@@ -222,6 +246,13 @@ class TestNothingIsWrittenWithoutTheRequiredFields:
         with pytest.raises(ManifestProposalIncompleteError) as exc_info:
             build_draft(_proposal(vertical="Collision Centers"), _read(REGISTRY))
         assert exc_info.value.missing_fields == ("vertical",)
+
+    def test_a_vertical_slug_too_long_for_its_column_is_refused(self) -> None:
+        """Refused before the write, not as a database error after the run was paid for."""
+        with pytest.raises(ManifestProposalIncompleteError) as exc_info:
+            build_draft(_proposal(vertical="w" * 65), _read(REGISTRY))
+        assert exc_info.value.missing_fields == ("vertical",)
+        assert build_draft(_proposal(vertical="w" * 64), _read(REGISTRY)).vertical == "w" * 64
 
 
 class TestNormalizeUrl:
