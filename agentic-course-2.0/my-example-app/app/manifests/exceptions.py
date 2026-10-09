@@ -86,3 +86,36 @@ class UnknownSourceError(ManifestError):
         super().__init__(message)
         self.vertical = vertical
         self.unknown_sources = unknown_sources
+
+
+class ManifestAgentError(ManifestError):
+    """The authoring agent's run did not produce a usable proposal.
+
+    Covers the SDK failing to start, the run ending in an error result (turn or budget cap hit,
+    API failure), and a result carrying no structured proposal. Nothing is written in any of
+    these cases. 502: an upstream dependency failed, not the caller's request.
+    """
+
+    default_code: ClassVar[str] = "manifest_agent_failed"
+    status_code: ClassVar[int] = 502
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+class ManifestProposalIncompleteError(ManifestError):
+    """The agent could not cite a field a manifest cannot exist without.
+
+    ``ManifestBody`` requires at least one source, an ICP band and a vocabulary. An uncited
+    proposal for one of those is dropped like any other uncited field — and then there is no
+    manifest left to write. Refusing is the honest outcome; a placeholder would be a citation
+    nobody made.
+    """
+
+    default_code: ClassVar[str] = "manifest_proposal_incomplete"
+    status_code: ClassVar[int] = 422
+
+    def __init__(self, message: str, *, missing_fields: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.missing_fields = missing_fields

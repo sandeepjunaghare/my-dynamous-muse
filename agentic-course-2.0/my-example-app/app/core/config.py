@@ -8,9 +8,11 @@ service into a surprising state. ``extra="forbid"`` turns a typo'd variable into
 failure instead of a silently ignored line in ``.env``.
 """
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +49,16 @@ class Settings(BaseSettings):
     # unassigned — out of everyone's "My tasks", which is how E15's tasks went unworked — so the
     # cadence warns about it on every enrol and sync. Blank counts as unset.
     hubspot_default_owner_id: str | None = None
+
+    # Manifest-authoring agent (T12). The key is optional: when unset, the Agent SDK falls back to
+    # whatever credential its bundled CLI already resolves. Declared so that a key placed in `.env`
+    # is not refused by `extra="forbid"`.
+    anthropic_api_key: str | None = None
+    manifest_agent_model: str = "claude-opus-5-5"
+    # Circuit breakers against a runaway research loop, not budget targets — the same stance as
+    # the Places cap (D7). Re-set both from the first real run's logged cost and turn count.
+    manifest_agent_max_turns: int = Field(default=40, gt=0)
+    manifest_agent_max_budget_usd: Decimal = Field(default=Decimal("5.00"), gt=0)
 
 
 @lru_cache

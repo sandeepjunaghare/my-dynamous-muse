@@ -30,6 +30,9 @@ from app.shared.provenance import ProvenancedValue
 SLUG_PATTERN = r"^[a-z][a-z0-9_]*$"
 """Identifiers a person types on the CLI (``--accept-terms fmcsa,places``) — lowercase slugs."""
 
+SLUG_MAX_LENGTH = 64
+"""The longest slug the ``vertical_manifest.vertical`` column (``String(64)``) can hold."""
+
 
 class SourceKind(StrEnum):
     """How a declared source is read.

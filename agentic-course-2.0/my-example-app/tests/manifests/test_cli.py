@@ -29,14 +29,24 @@ class TestUsageErrors:
 
     def test_an_unknown_command_exits_two(self) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            main(["manifest", "propose", "collision centers, DFW"])
+            main(["manifest", "frobnicate"])
         assert exc_info.value.code == 2
 
-    def test_propose_is_not_offered(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """T12 owns `propose`; an empty command in --help reads as a broken feature."""
+    def test_propose_is_offered(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """T12 shipped `propose`; it belongs in --help now that it does something."""
         with pytest.raises(SystemExit):
             main(["manifest", "--help"])
-        assert "propose" not in capsys.readouterr().out
+        assert "propose" in capsys.readouterr().out
+
+    def test_propose_without_a_brief_exits_two(self) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["manifest", "propose"])
+        assert exc_info.value.code == 2
+
+    def test_propose_refuses_a_vertical_that_is_not_a_slug(self) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["manifest", "propose", "collision centers", "--vertical", "Collision Centers"])
+        assert exc_info.value.code == 2
 
 
 class TestDatabaseRefusals:

@@ -68,6 +68,44 @@ def committed_draft(cli_database: str) -> Iterator[tuple[UUID, str]]:
         asyncio.run(remove())
 
 
+@pytest.fixture
+def throwaway_vertical(cli_database: str) -> Iterator[str]:
+    """A vertical name for a CLI test that *creates* rows; every row under it is removed after."""
+    vertical = a_vertical()
+    try:
+        yield vertical
+    finally:
+        asyncio.run(_delete_vertical(cli_database, vertical))
+
+
+async def _delete_vertical(url: str, vertical: str) -> None:
+    engine = create_async_engine(url)
+    try:
+        async with AsyncSession(engine) as session:
+            await session.execute(
+                text("delete from vertical_manifest where vertical = :vertical"),
+                {"vertical": vertical},
+            )
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+def load_committed_rows(url: str, vertical: str) -> list[tuple[str, ManifestBody]]:
+    """Every committed row for one vertical, as (status, body), outside any test transaction."""
+
+    async def read() -> list[tuple[str, ManifestBody]]:
+        engine = create_async_engine(url)
+        try:
+            async with AsyncSession(engine) as session:
+                rows = await ManifestRepository(session).list(vertical=vertical)
+                return [(row.status, ManifestBody.model_validate(row.body)) for row in rows]
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(read())
+
+
 def load_committed_body(url: str, manifest_id: UUID) -> tuple[str, ManifestBody]:
     """Read one committed row's status and body, outside any test transaction."""
 

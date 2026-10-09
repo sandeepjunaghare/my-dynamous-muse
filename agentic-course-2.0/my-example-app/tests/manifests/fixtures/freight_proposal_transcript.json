@@ -1,0 +1,372 @@
+{
+  "_comment": "Synthetic replay of one `lpe manifest propose \"freight brokerages, DFW\"` run, written as the raw stream-json the bundled CLI prints (one JSON object per stdout line). tests/manifests/replay.py feeds it through the SDK's real query() and message parser via a fake Transport. WebFetch results carry the CLI's own structured output in tool_use_result ({bytes, code, codeText, result, durationMs, url}); an HTTP error is an ordinary result with code 403 and no is_error, exactly as CLI 2.1.294 returns it. The WebSearch tool_use_result is abbreviated: nothing reads it. Replace this file with a recording of the first live run. It deliberately contains four fields the citation gate must drop: a source cited only from a search result, a rule with no citation, a predicate rule the schema refuses, and a signal citing a fetch that got HTTP 403.",
+  "stream": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "model": "claude-opus-5-5",
+      "tools": [
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_servers": [],
+      "permissionMode": "dontAsk",
+      "cwd": "/app"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-5-5",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll find the regulator of record for freight brokers first."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "WebSearch",
+            "input": {
+              "query": "authoritative registry of licensed freight brokers United States"
+            }
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": "Web search results: 1. FMCSA - Get Operating Authority (MC Number) https://www.fmcsa.dot.gov/registration/get-mc-number-authority-operate 2. FMCSA Company Census File https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx 3. DAT Load Board directory https://www.dat.com/load-boards"
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "tool_use_result": {
+        "query": "authoritative registry of licensed freight brokers United States",
+        "durationSeconds": 1.4
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-5-5",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_02",
+            "name": "WebFetch",
+            "input": {
+              "url": "https://www.fmcsa.dot.gov/registration/get-mc-number-authority-operate",
+              "prompt": "Who must obtain broker operating authority, and what records does FMCSA keep?"
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_03",
+            "name": "WebFetch",
+            "input": {
+              "url": "https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx",
+              "prompt": "What does the census file contain and how is it published?"
+            }
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_02",
+            "content": "Brokers arranging transportation of regulated commodities for compensation must obtain broker operating authority (an MC number) and file a BOC-3 and a surety bond (BMC-84/85). FMCSA revokes authority that lapses."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "tool_use_result": {
+        "bytes": 48213,
+        "code": 200,
+        "codeText": "OK",
+        "result": "Brokers arranging transportation of regulated commodities for compensation must obtain broker operating authority (an MC number) and file a BOC-3 and a surety bond (BMC-84/85). FMCSA revokes authority that lapses.",
+        "durationMs": 912,
+        "url": "https://www.fmcsa.dot.gov/registration/get-mc-number-authority-operate"
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_03",
+            "content": "The Company Census File lists every registered entity with its USDOT number, physical address, carrier operation, number of power units and drivers. Published monthly as a downloadable dataset."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "tool_use_result": {
+        "bytes": 48213,
+        "code": 200,
+        "codeText": "OK",
+        "result": "The Company Census File lists every registered entity with its USDOT number, physical address, carrier operation, number of power units and drivers. Published monthly as a downloadable dataset.",
+        "durationMs": 912,
+        "url": "https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx"
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-5-5",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_04",
+            "name": "WebFetch",
+            "input": {
+              "url": "https://safer.fmcsa.dot.gov/CompanySnapshot.aspx",
+              "prompt": "Which fields distinguish a carrier from a broker?"
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_05",
+            "name": "WebFetch",
+            "input": {
+              "url": "https://www.freightcaviar.com/broker-tms-survey",
+              "prompt": "Which TMS do small brokerages use?"
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_06",
+            "name": "WebFetch",
+            "input": {
+              "url": "https://www.bls.gov/ooh/office-and-administrative-support/cargo-and-freight-agents.htm",
+              "prompt": "Describe the daily work and typical employer size of freight agents."
+            }
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_04",
+            "content": "The snapshot shows Entity Type (CARRIER, BROKER), Operating Authority Status, Power Units and Drivers. An entity with power units operates its own equipment."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "tool_use_result": {
+        "bytes": 48213,
+        "code": 200,
+        "codeText": "OK",
+        "result": "The snapshot shows Entity Type (CARRIER, BROKER), Operating Authority Status, Power Units and Drivers. An entity with power units operates its own equipment.",
+        "durationMs": 912,
+        "url": "https://safer.fmcsa.dot.gov/CompanySnapshot.aspx"
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_05",
+            "content": "The server returned HTTP 403 Forbidden.\n\nThe response body was not retrieved. If this URL requires authentication, use an authenticated tool (e.g. `gh` for GitHub, or an MCP-provided fetch tool) instead of WebFetch."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "tool_use_result": {
+        "bytes": 0,
+        "code": 403,
+        "codeText": "Forbidden",
+        "result": "The server returned HTTP 403 Forbidden.\n\nThe response body was not retrieved. If this URL requires authentication, use an authenticated tool (e.g. `gh` for GitHub, or an MCP-provided fetch tool) instead of WebFetch.",
+        "durationMs": 912,
+        "url": "https://www.freightcaviar.com/broker-tms-survey"
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_06",
+            "content": "Cargo and freight agents arrange shipments, track loads and lanes, collect carrier packets and certificates of insurance (COIs), make check calls and handle detention claims. Most work in offices of freight brokerages and 3PLs."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "tool_use_result": {
+        "bytes": 48213,
+        "code": 200,
+        "codeText": "OK",
+        "result": "Cargo and freight agents arrange shipments, track loads and lanes, collect carrier packets and certificates of insurance (COIs), make check calls and handle detention claims. Most work in offices of freight brokerages and 3PLs.",
+        "durationMs": 912,
+        "url": "https://www.bls.gov/ooh/office-and-administrative-support/cargo-and-freight-agents.htm"
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-5-5",
+        "content": [
+          {
+            "type": "text",
+            "text": "I have enough to propose the manifest."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "duration_ms": 184000,
+      "duration_api_ms": 171000,
+      "is_error": false,
+      "num_turns": 9,
+      "session_id": "4b0c6a52-2f1e-4f7e-9a3c-0d6f1e2a7b11",
+      "total_cost_usd": 0.8421,
+      "structured_output": {
+        "vertical": "freight",
+        "sources": [
+          {
+            "name": "fmcsa",
+            "kind": "bulk_file",
+            "description": "FMCSA Company Census File, filtered to DFW counties and active broker authority; SAFER/QCMobile for per-record authority status.",
+            "base_url": "https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx",
+            "rate_limit_per_minute": null,
+            "terms_of_use_url": "https://www.fmcsa.dot.gov/policies",
+            "citation": {
+              "url": "https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx/",
+              "quote": "The Company Census File lists every registered entity with its USDOT number, physical address, carrier operation"
+            }
+          },
+          {
+            "name": "dat_directory",
+            "kind": "web_lookup",
+            "description": "DAT load board directory of brokers.",
+            "base_url": "https://www.dat.com/load-boards",
+            "citation": {
+              "url": "https://www.dat.com/load-boards",
+              "quote": "DAT Load Board directory"
+            }
+          }
+        ],
+        "disqualifier_rules": [
+          {
+            "id": "asset_based_carrier",
+            "kind": "predicate",
+            "description": "Asset-based carriers operate their own equipment and are not the ICP; the target is non-asset brokerages.",
+            "field": "power_units",
+            "operator": "greater_than",
+            "value": 0,
+            "citation": {
+              "url": "https://safer.fmcsa.dot.gov/CompanySnapshot.aspx",
+              "quote": "An entity with power units operates its own equipment."
+            }
+          },
+          {
+            "id": "double_brokering_risk",
+            "kind": "judgment",
+            "description": "Lapsed or revoked authority and missing bond filings suggest double-brokering risk.",
+            "citation": {
+              "url": "https://www.fmcsa.dot.gov/registration/get-mc-number-authority-operate#bonds",
+              "quote": "file a BOC-3 and a surety bond (BMC-84/85). FMCSA revokes authority that lapses."
+            }
+          },
+          {
+            "id": "freight_forwarder_only",
+            "kind": "judgment",
+            "description": "Freight forwarders without broker authority.",
+            "citation": null
+          },
+          {
+            "id": "lapsed_authority",
+            "kind": "predicate",
+            "description": "Authority not active.",
+            "field": "authority_status",
+            "citation": {
+              "url": "https://www.fmcsa.dot.gov/registration/get-mc-number-authority-operate",
+              "quote": "FMCSA revokes authority that lapses."
+            }
+          }
+        ],
+        "qualifying_signals": [
+          {
+            "id": "tms_and_api",
+            "question": "which TMS, and does it have an API",
+            "feeds": "automatable",
+            "citation": {
+              "url": "https://www.freightcaviar.com/broker-tms-survey",
+              "quote": "Most small brokerages run a cloud TMS."
+            }
+          },
+          {
+            "id": "manual_check_calls",
+            "question": "how many check calls a day are made by hand",
+            "feeds": "intensity",
+            "citation": {
+              "url": "https://www.bls.gov/ooh/office-and-administrative-support/cargo-and-freight-agents.htm",
+              "quote": "make check calls and handle detention claims"
+            }
+          }
+        ],
+        "icp_band": {
+          "headcount_min": 20,
+          "headcount_max": 200,
+          "requires_office_function": true,
+          "citation": {
+            "url": "https://www.bls.gov/ooh/office-and-administrative-support/cargo-and-freight-agents.htm",
+            "quote": "Most work in offices of freight brokerages and 3PLs."
+          }
+        },
+        "vocabulary": {
+          "terms": [
+            "loads",
+            "lanes",
+            "carrier packets",
+            "COIs",
+            "check calls",
+            "detention"
+          ],
+          "citation": {
+            "url": "https://www.bls.gov/ooh/office-and-administrative-support/cargo-and-freight-agents.htm",
+            "quote": "track loads and lanes, collect carrier packets and certificates of insurance (COIs), make check calls and handle detention claims"
+          }
+        }
+      }
+    }
+  ]
+}
