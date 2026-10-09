@@ -23,6 +23,15 @@ class TestFieldOwners:
         """Conservative: an undeclared field can be filled by anyone and overwritten by no one."""
         assert not any(owns(stage, "owner_name") for stage in PipelineStage)
 
+    @pytest.mark.parametrize("field", ["registry_id", "legal_name", "dba_name", "address", "phone"])
+    def test_the_registry_owns_identity_and_contact(self, field: str) -> None:
+        """D13: the census is the source of address and phone; nothing overwrites it."""
+        assert owns(PipelineStage.search_registry, field)
+
+    @pytest.mark.parametrize("field", ["website", "business_check"])
+    def test_verification_owns_the_check_and_the_website(self, field: str) -> None:
+        assert owns(PipelineStage.verify_business, field)
+
     def test_the_stages_are_the_architecture_docs_five_in_order(self) -> None:
         assert [stage.value for stage in PipelineStage] == [
             "search_registry",

@@ -806,3 +806,34 @@ each with a test that failed first. The Medium was a dry run racing a real sync 
 "deleted". **Lesson for test doubles:** an ORM `update()` also refreshes the session's copy, so a test
 simulating "another process changed the row" needs `synchronize_session=False`. The first L4 test passed on the
 broken code.
+
+---
+
+# Before T8: "owned ≠ verified", redone for D13 (2026-10-09)
+
+**Why:** the T4 review's item had T8 tell a verified address by `retrieval_method == web_lookup`, because
+`verify_business` would overwrite the census address with the Places one. D13 bans storing Places content, so
+the address is always the census copy and `retrieval_method` can no longer tell verified from not. Verification
+is now a separate fact. **Decided (human): option A.** We store the place ID and when it was checked, nothing
+else. "Verified" means Places found this business from the census name and address. This closes the T6 open
+item from D13.
+
+## Tasks
+
+- [x] `stages.py`: `address` and `phone` → `search_registry`; `website` stays `verify_business`;
+      `business_check` → `verify_business`; module docstring says owning ≠ verifying
+- [x] `schemas.py`: `PlaceCheck` (frozen, non-blank `place_id`); `CandidateFields.business_check`;
+      `has_verified_address()`; the **D13 guard** refuses any other field cited to `places.googleapis.com`,
+      `maps.googleapis.com`, `maps.google.com`, `maps.app.goo.gl` or `google.com/maps` (Google search is allowed)
+- [x] Tests: 15 new (business check, truth table, guard, ownership). The pre-D13 tests that stored a Places phone
+      are rewritten around a web-searched website. **Mutation-checked:** handing phone back to `verify_business`
+      fails 3 tests, and disabling the guard fails 5
+- [x] `unprovenanced_fields()` now also lists `business_check` when absent: honest, and T9 decides what is required
+- [x] Docs: sourcing README (ownership table, *Verified is a field, not a source*, the guard); T8 and T6 tickets;
+      the architecture doc's open T6 item closed
+- [x] Validation: ruff, mypy, pyright clean; **587 passed with the database**, 400 / 187 skipped without;
+      `alembic check` clean (no migration: JSONB)
+- [x] PR #13 + fresh-eyes review (`.claude/code-reviews/pr-13-review.md`): 0 Critical, 0 High, 1 Medium, 4 Low.
+      M1 (a `model_copy` bypassed the D13 guard; reproduced) fixed by re-validating in `upsert_candidate`. L1
+      (4 host forms missed) fixed. L3 tests and L4 docs added. L2 (tie the check to the address) deferred to
+      T6 with a note. 604 passed with the database

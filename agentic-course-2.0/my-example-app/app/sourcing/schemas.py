@@ -6,15 +6,21 @@ cite. ``None`` is what "unprovenanced" means here: the workbench may hold a cand
 fields (T6 fills owner and headcount long after sourcing), and ``is_promotable`` refuses each one
 until a citation exists. An uncited raw value would be the exact thing the primitive was built to
 make unrepresentable.
+
+**D13: Google Places is a check, never a source.** Its terms forbid storing Places content, so the
+only thing a candidate keeps from Places is the place ID, in ``business_check``. Every other field
+refuses a Google Maps citation, so copying Places content into a candidate fails validation rather
+than reaching HubSpot.
 """
 
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Self
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.cost import BillableKind, RunCost
 from app.manifests.schemas import SLUG_PATTERN, IcpBand
@@ -91,6 +97,51 @@ class PostalAddress(BaseModel):
     postal_code: str = Field(min_length=1)
 
 
+class PlaceCheck(BaseModel):
+    """What a Google Places check keeps: the place ID, and nothing else (D13, option A).
+
+    The terms let a place ID be stored indefinitely and bar storing the content behind it. Its
+    citation's ``retrieved_at`` is when the check ran. "Verified" means Places found this business
+    from the registry's name and address; it is not a claim that the two addresses match.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    place_id: str = Field(min_length=1)
+
+    @field_validator("place_id")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("place_id must not be blank")
+        return value.strip()
+
+
+_GOOGLE_MAPS_HOSTS = frozenset(
+    {"places.googleapis.com", "maps.googleapis.com", "maps.google.com", "maps.app.goo.gl"}
+)
+
+
+def _is_google_maps(url: str) -> bool:
+    """Whether ``url`` points at Google Maps Platform content.
+
+    Google *search* is not Maps: a website found by a web search may well be cited to google.com.
+    Only Maps hosts, and the ``/maps`` paths of google.com and goo.gl, count.
+
+    A tripwire for our own adapters, so it is lenient about form: a URL without a scheme is parsed
+    as a host, and the host's case, port, userinfo and trailing dot are ignored. It is a deny-list
+    of known Maps hosts, so a Maps hostname not on it would pass.
+    """
+    stripped = url.strip()
+    parts = urlsplit(stripped if "//" in stripped else f"//{stripped}")
+    host = (parts.hostname or "").rstrip(".")
+    path = parts.path.lower()
+    if host in _GOOGLE_MAPS_HOSTS:
+        return True
+    is_google = host == "google.com" or host.endswith(".google.com")
+    return (is_google or host == "goo.gl") and (path == "/maps" or path.startswith("/maps/"))
+
+
 class CandidateFields(BaseModel):
     """A sourced business's identity, every field carrying its own provenance.
 
@@ -113,6 +164,9 @@ class CandidateFields(BaseModel):
     address: ProvenancedValue[PostalAddress] | None = None
     phone: ProvenancedValue[str] | None = None
     website: ProvenancedValue[str] | None = None
+    business_check: ProvenancedValue[PlaceCheck] | None = None
+    """The Google Places check of this record (T6): the place ID, cited to Places. Absent means
+    never checked, or checked and not found."""
 
     @field_validator("registry_id")
     @classmethod
@@ -133,6 +187,30 @@ class CandidateFields(BaseModel):
             return value
         # The citation is unchanged — the same source said the same thing, minus its padding.
         return value.model_copy(update={"value": stripped})
+
+    @model_validator(mode="after")
+    def _no_places_content(self) -> Self:
+        """D13: only ``business_check`` may cite Google Maps; any other field doing so is copied
+        Places content, which the Maps Platform Terms §3.2.3(a) forbid us to store."""
+        for name in type(self).model_fields:
+            if name == "business_check":
+                continue
+            cited = getattr(self, name)
+            if isinstance(cited, ProvenancedValue) and _is_google_maps(cited.source_url):
+                raise ValueError(
+                    f"{name} is cited to Google Maps ({cited.source_url}); Places content "
+                    "cannot be stored (D13). Keep only the place ID, in business_check"
+                )
+        return self
+
+    def has_verified_address(self) -> bool:
+        """Whether this candidate has an address **and** a business check that found it.
+
+        The rule T8 clusters on: a candidate without one is excluded, never geocoded from a guess.
+        The address is the registry's copy either way (D13); verification is the separate fact
+        that Places found the business, not a different address.
+        """
+        return self.address is not None and self.business_check is not None
 
     def unprovenanced_fields(self) -> tuple[str, ...]:
         """The fields with no citation, in declaration order.

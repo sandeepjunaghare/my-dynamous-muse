@@ -34,14 +34,14 @@ from app.sourcing.service import SourcingService
 from tests.conftest import requires_db
 from tests.manifests.builders import a_body, a_vertical
 from tests.sourcing.builders import (
-    PLACES_URL,
     REGISTRY,
+    SEARCH_RESULT_URL,
     VERIFY,
     a_brief,
     a_candidate,
     an_active_manifest,
+    looked_up,
     sourced,
-    verified,
 )
 
 pytestmark = requires_db
@@ -123,20 +123,27 @@ class TestRecordCandidates:
         assert "phone" in candidate.fields.unprovenanced_fields()
 
     async def test_the_writing_stage_reaches_the_merge(self, db_session: AsyncSession) -> None:
-        """Field ownership holds through the service: a registry retry keeps the verified phone."""
+        """Ownership holds through the service: a registry retry keeps the searched website."""
         service = SourcingService(db_session)
         run = await _started(db_session)
-        await service.record_candidates(run.id, [a_candidate()], stage=REGISTRY)
+        guess = CandidateFields(
+            registry_id=sourced("1234567"), website=sourced("https://acme.test")
+        )
+        await service.record_candidates(run.id, [guess], stage=REGISTRY)
         await service.record_candidates(
             run.id,
-            [CandidateFields(registry_id=sourced("1234567"), phone=verified("+1-817-555-0199"))],
+            [
+                CandidateFields(
+                    registry_id=sourced("1234567"), website=looked_up("https://acme2.test")
+                )
+            ],
             stage=VERIFY,
         )
 
-        [retried] = await service.record_candidates(run.id, [a_candidate()], stage=REGISTRY)
+        [retried] = await service.record_candidates(run.id, [guess], stage=REGISTRY)
 
-        assert retried.fields.phone is not None
-        assert retried.fields.phone.source_url == PLACES_URL
+        assert retried.fields.website is not None
+        assert retried.fields.website.source_url == SEARCH_RESULT_URL
 
     async def test_listing_an_unknown_run_is_refused(self, db_session: AsyncSession) -> None:
         with pytest.raises(SourcingRunNotFoundError):
