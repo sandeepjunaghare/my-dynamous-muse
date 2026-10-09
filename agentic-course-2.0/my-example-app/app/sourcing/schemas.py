@@ -51,6 +51,9 @@ class RunOutcome(StrEnum):
     failed = RunStatus.failed.value
 
 
+REGISTRY_ID_MAX_LENGTH = 128
+"""The ``candidate.registry_id`` column's width, enforced first by :class:`CandidateFields`."""
+
 StageName = Annotated[str, Field(pattern=SLUG_PATTERN, max_length=64)]
 """A count's key — the pipeline stage that produced it, e.g. ``sourced`` or ``disqualified``."""
 
@@ -113,11 +116,23 @@ class CandidateFields(BaseModel):
 
     @field_validator("registry_id")
     @classmethod
-    def _reject_blank_registry_id(cls, value: ProvenancedValue[str]) -> ProvenancedValue[str]:
-        """A blank id cannot key an upsert, and would collapse every blank record into one row."""
-        if not value.value.strip():
+    def _normalise_registry_id(cls, value: ProvenancedValue[str]) -> ProvenancedValue[str]:
+        """Strip the id, and refuse one that is blank or longer than its column.
+
+        It is half the upsert key, so ``" 555 "`` and ``"555"`` must be the same key or one carrier
+        becomes two rows. A blank id would collapse every blank record into one row. And an id the
+        ``String(128)`` column cannot hold must fail *here*, as a ``ValidationError`` before any
+        write, not as a ``DBAPIError`` that aborts the rest of an atomic batch.
+        """
+        stripped = value.value.strip()
+        if not stripped:
             raise ValueError("registry_id must not be blank")
-        return value
+        if len(stripped) > REGISTRY_ID_MAX_LENGTH:
+            raise ValueError(f"registry_id must be at most {REGISTRY_ID_MAX_LENGTH} characters")
+        if stripped == value.value:
+            return value
+        # The citation is unchanged — the same source said the same thing, minus its padding.
+        return value.model_copy(update={"value": stripped})
 
     def unprovenanced_fields(self) -> tuple[str, ...]:
         """The fields with no citation, in declaration order.

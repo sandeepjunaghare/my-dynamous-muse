@@ -29,6 +29,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.manifests.models import VerticalManifest
+from app.sourcing.schemas import REGISTRY_ID_MAX_LENGTH
 
 
 class SourcingRun(Base):
@@ -108,7 +109,7 @@ class Candidate(Base):
         ForeignKey(SourcingRun.id),
         nullable=False,
     )
-    registry_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    registry_id: Mapped[str] = mapped_column(String(REGISTRY_ID_MAX_LENGTH), nullable=False)
 
     fields: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     """A ``CandidateFields``, dumped with ``mode="json", exclude_none=True`` — absent fields are

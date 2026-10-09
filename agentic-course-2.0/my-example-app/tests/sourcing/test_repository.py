@@ -244,6 +244,30 @@ class TestUpsert:
 
         assert [candidate.registry_id for candidate in listed] == ["100", "200", "300"]
 
+    async def test_padding_does_not_make_a_second_row(self, db_session: AsyncSession) -> None:
+        """The same carrier read twice — once from a padded CSV column — is one candidate."""
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+
+        first = await repository.upsert_candidate(run.id, a_candidate("555"))
+        second = await repository.upsert_candidate(run.id, a_candidate(" 555 "))
+
+        assert second.id == first.id
+        assert second.registry_id == "555"
+        assert len(await repository.list_candidates(run.id)) == 1
+
+    async def test_a_registry_id_at_the_column_limit_persists(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The schema's limit and the column's agree: the longest id the schema allows fits."""
+        run = await _a_run(db_session)
+
+        stored = await SourcingRepository(db_session).upsert_candidate(
+            run.id, a_candidate("9" * 128)
+        )
+
+        assert len(stored.registry_id) == 128
+
 
 class TestDatabaseInvariants:
     async def test_a_duplicate_key_is_refused_by_a_plain_insert(

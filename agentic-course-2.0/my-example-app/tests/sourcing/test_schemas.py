@@ -69,6 +69,22 @@ class TestCandidateFields:
         with pytest.raises(ValidationError, match="registry_id must not be blank"):
             CandidateFields(registry_id=sourced("   "))
 
+    def test_the_registry_id_is_stripped(self) -> None:
+        """It is the upsert key: " 555 " and "555" are one carrier, so they must be one row."""
+        candidate = CandidateFields(registry_id=sourced(" 555\t"))
+        assert candidate.registry_id.value == "555"
+        assert candidate.registry_id.source_url == sourced("555").source_url
+
+    def test_a_registry_id_longer_than_its_column_is_refused(self) -> None:
+        """Refused here, as a ValidationError — not as a DBAPIError that aborts the whole batch."""
+        with pytest.raises(ValidationError, match="at most 128 characters"):
+            CandidateFields(registry_id=sourced("9" * 129))
+
+    def test_a_registry_id_at_the_limit_is_accepted(self) -> None:
+        """The limit counts the stripped value — padding does not push a valid id over it."""
+        candidate = CandidateFields(registry_id=sourced(f"  {'9' * 128}  "))
+        assert len(candidate.registry_id.value) == 128
+
     def test_an_unknown_field_is_refused(self) -> None:
         """A key the schema does not know is a typo or a drift — loud, not silently dropped."""
         payload = a_candidate().model_dump(mode="json")
