@@ -21,7 +21,8 @@ used, its base URL, and its published rate limit if it states one.
 - disqualifier_rules: what removes a business from consideration. Use kind "predicate" only when \
 the rule is a mechanical comparison on a field the source actually publishes (give field, \
 operator, value); use kind "judgment" when deciding needs judgment across weak signals (then give \
-neither field nor operator).
+neither field nor operator). To remove what lacks a code, use "not_contains" with that code; never \
+enumerate the values to exclude, because a list misses every value you did not see.
 - qualifying_signals: the questions whose answers make a business a better prospect, each feeding \
 one score axis: "intensity" (how painful the operational problem is) or "automatable" (how \
 tractable it is to automate).
