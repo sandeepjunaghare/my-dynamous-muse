@@ -146,6 +146,24 @@ class TestLeafValidation:
                 }
             )
 
+    def test_a_rule_can_exclude_by_absence(self) -> None:
+        """FMCSA's ``carship`` combines codes (``C;B``, ``F;S;B``…). Without a negated contains, the
+        only way to say "no broker code" was to list every non-broker combination, and the live
+        freight proposal missed about 1,400 Texas records doing exactly that."""
+        rule = DisqualifierRule.model_validate(
+            {
+                "id": "no_broker_entity_type",
+                "kind": RuleKind.predicate,
+                "description": "d",
+                "field": "carship",
+                "operator": "not_contains",
+                "value": "B",
+            }
+        )
+
+        assert rule.operator is RuleOperator.not_contains
+        assert DisqualifierRule.model_validate_json(rule.model_dump_json()) == rule
+
     def test_a_predicate_rule_needs_a_field_and_an_operator(self) -> None:
         with pytest.raises(ValidationError) as exc_info:
             DisqualifierRule.model_validate(

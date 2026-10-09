@@ -76,6 +76,9 @@ class RuleOperator(StrEnum):
     equals = "equals"
     not_equals = "not_equals"
     contains = "contains"
+    not_contains = "not_contains"
+    """Exclude by absence. A code field that combines values (FMCSA's ``carship``: ``C;B``) can
+    otherwise only be negated by listing every combination — which misses the ones nobody listed."""
     in_set = "in_set"
     greater_than = "greater_than"
     less_than = "less_than"
