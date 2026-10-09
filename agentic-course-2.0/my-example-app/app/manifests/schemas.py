@@ -80,6 +80,9 @@ class RuleOperator(StrEnum):
     """Exclude by absence. A code field that combines values (FMCSA's ``carship``: ``C;B``) can
     otherwise only be negated by listing every combination — which misses the ones nobody listed."""
     in_set = "in_set"
+    not_in_set = "not_in_set"
+    """Exclude everything outside a named set — "not in the eleven DFW counties". ``in_set`` alone
+    would remove the very candidates the set names."""
     greater_than = "greater_than"
     less_than = "less_than"
     is_true = "is_true"

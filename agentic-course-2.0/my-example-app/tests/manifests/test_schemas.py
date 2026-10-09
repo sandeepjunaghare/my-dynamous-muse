@@ -164,6 +164,23 @@ class TestLeafValidation:
         assert rule.operator is RuleOperator.not_contains
         assert DisqualifierRule.model_validate_json(rule.model_dump_json()) == rule
 
+    def test_a_rule_can_exclude_outside_a_set(self) -> None:
+        """ "Not in the DFW counties" is a geography rule. With only ``in_set``, the rule could name
+        the metro but would remove exactly the candidates it was meant to keep."""
+        rule = DisqualifierRule.model_validate(
+            {
+                "id": "outside_dfw_metro",
+                "kind": RuleKind.predicate,
+                "description": "d",
+                "field": "phy_cnty",
+                "operator": "not_in_set",
+                "value": ("113", "439"),
+            }
+        )
+
+        assert rule.operator is RuleOperator.not_in_set
+        assert DisqualifierRule.model_validate_json(rule.model_dump_json()) == rule
+
     def test_a_predicate_rule_needs_a_field_and_an_operator(self) -> None:
         with pytest.raises(ValidationError) as exc_info:
             DisqualifierRule.model_validate(
