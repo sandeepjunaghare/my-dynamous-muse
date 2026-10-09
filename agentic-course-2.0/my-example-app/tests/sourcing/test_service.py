@@ -2,9 +2,15 @@
 
 ``db_session`` joins an outer transaction with ``create_savepoint``, so the service's
 ``commit()`` is real and still rolled back at the end of each test.
+
+That same savepoint makes an uncommitted write look committed to every read in the test, so the
+transaction contract ("the repository flushes; the service commits") is checked separately, by
+counting calls to ``commit`` (``TestTransactionBoundary``).
 """
 
+from collections.abc import Iterator
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -16,7 +22,14 @@ from app.manifests.exceptions import ActiveManifestNotFoundError
 from app.manifests.repository import ManifestRepository
 from app.shared.provenance import is_promotable
 from app.sourcing.exceptions import SourcingRunNotFoundError, SourcingRunNotRunningError
-from app.sourcing.schemas import CandidateFields, RunOutcome, RunStatus, SourcingRunResponse
+from app.sourcing.repository import SourcingRepository
+from app.sourcing.schemas import (
+    CandidateFields,
+    RunCostSummary,
+    RunOutcome,
+    RunStatus,
+    SourcingRunResponse,
+)
 from app.sourcing.service import SourcingService
 from tests.conftest import requires_db
 from tests.manifests.builders import a_body, a_vertical
@@ -193,3 +206,79 @@ class TestFinishRun:
             await SourcingService(db_session).finish_run(
                 uuid4(), RunOutcome.completed, counts={}, cost=RunCost()
             )
+
+
+@pytest.fixture
+def commits(db_session: AsyncSession) -> Iterator[MagicMock | AsyncMock]:
+    """The session's real ``commit``, wrapped so each call is counted."""
+    with patch.object(db_session, "commit", wraps=db_session.commit) as spy:
+        yield spy
+
+
+class TestTransactionBoundary:
+    """The repository flushes; the service commits, exactly once per write.
+
+    Reads cannot prove this: inside the test's savepoint an uncommitted write reads back as if it
+    were committed. Removing a service ``commit()``, or adding one to the repository, fails here.
+    """
+
+    async def test_start_run_commits_once(
+        self, db_session: AsyncSession, commits: MagicMock | AsyncMock
+    ) -> None:
+        _, vertical = await an_active_manifest(db_session)
+
+        await SourcingService(db_session).start_run(a_brief(vertical))
+
+        assert commits.call_count == 1
+
+    async def test_record_candidates_commits_once_per_batch(
+        self, db_session: AsyncSession, commits: MagicMock | AsyncMock
+    ) -> None:
+        """Once for the batch, after the last upsert — that is what makes the batch atomic."""
+        service = SourcingService(db_session)
+        run = await _started(db_session)
+        commits.reset_mock()
+
+        batch = [a_candidate("100"), a_candidate("200"), a_candidate("300")]
+        await service.record_candidates(run.id, batch, stage=REGISTRY)
+
+        assert commits.call_count == 1
+
+    async def test_finish_run_commits_once(
+        self, db_session: AsyncSession, commits: MagicMock | AsyncMock
+    ) -> None:
+        service = SourcingService(db_session)
+        run = await _started(db_session)
+        commits.reset_mock()
+
+        await service.finish_run(run.id, RunOutcome.completed, counts={}, cost=RunCost())
+
+        assert commits.call_count == 1
+
+    async def test_a_refused_write_commits_nothing(
+        self, db_session: AsyncSession, commits: MagicMock | AsyncMock
+    ) -> None:
+        with pytest.raises(SourcingRunNotFoundError):
+            await SourcingService(db_session).record_candidates(
+                uuid4(), [a_candidate()], stage=REGISTRY
+            )
+
+        assert commits.call_count == 0
+
+    async def test_the_repository_never_commits(
+        self, db_session: AsyncSession, commits: MagicMock | AsyncMock
+    ) -> None:
+        """Every repository method, reads and writes alike, leaves the boundary to the service."""
+        manifest_id, vertical = await an_active_manifest(db_session)
+        repository = SourcingRepository(db_session)
+
+        run = await repository.create_run(a_brief(vertical), manifest_id)
+        candidate = await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+        await repository.get_run(run.id)
+        await repository.get_candidate(candidate.id)
+        await repository.list_candidates(run.id)
+        await repository.mark_finished(
+            run, RunOutcome.completed, {}, RunCostSummary.from_run_cost(RunCost()), None
+        )
+
+        assert commits.call_count == 0
