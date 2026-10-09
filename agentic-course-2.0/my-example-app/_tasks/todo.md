@@ -519,13 +519,34 @@ legitimately, nothing real had run them — and dev has now applied them. Any ch
       `+asyncpg`, so check the prefix after any rotation
 - [ ] **Dev pauses when idle** (free tier, ~7 days). Expect `tenant/user … not found` after a quiet week, and
       restore from the dashboard; it matters once the daily cadence sync runs against dev
-- [ ] **Add `HUBSPOT_DEFAULT_OWNER_ID` to `.env`** — unset, cadence tasks are unassigned (E15) and every sync warns
-- [ ] **Install the daily launchd job** — command in `app/cadence/README.md`
-- [ ] **One read-only HubSpot GET** of a known contact's task/engagement associations — confirms the response
-      shape and that the `lpe-cadence:` key survives in the task body (T11's H1 fix depends on it)
-- [ ] **Confirm the advisory lock through the session-mode pooler** (5432); transaction mode would break it
-- [ ] **One live `propose` run** (≤ $5) — record it as T12's fixture; confirm same-host-redirect handling
-- [ ] **The live-portal provisioning run** (T3) — still the one outstanding one-way door, unchanged
+- [x] **`HUBSPOT_DEFAULT_OWNER_ID` in `.env`** — done 2026-10-09 (Sandeep, owner `86826215`; owners read via the
+      HubSpot connector). The HubSpot credential is now a **Service Key** (legacy private apps are being phased
+      out), still read from `HUBSPOT_PRIVATE_APP_TOKEN`; same `Bearer` header, no code change
+- [x] **Daily launchd job installed** — 2026-10-09. `~/Library/LaunchAgents/com.compumatrice.lpe.cadence-sync.plist`,
+      07:00 daily, log at `~/Library/Logs/lpe/cadence-sync.log`. A `launchctl kickstart` run exited 0 (0 live)
+- [x] **Read-only HubSpot check** — 2026-10-09, through the app's own client: tasks search, tasks→contact and
+      contact→tasks/calls/emails/notes/meetings associations, batch reads; every call 200, the association
+      body parsed (no `associations_unrecognised`), `hs_timestamp` is ISO-8601. **Still unconfirmed:** that
+      the `lpe-cadence:` key survives in a task body — no cadence task exists yet; check on the first one
+- [x] **Advisory lock through the session pooler** — 2026-10-09: with the lock held on dev, a second
+      `lpe cadence sync` skipped and exited 0
+- [x] **One live `propose` run** — 2026-10-09, `propose --vertical freight "freight brokerages and non-asset 3PLs,
+      DFW"` → **freight v2 DRAFT** `866929c2-df6f-49ab-9588-aadd32efda67` on dev. **$0.78, 36 of 40 turns.**
+      Acceptance holds live: FMCSA named (census, QCMobile, authority history, revocations) and an
+      `asset_based_carrier` exclusion. 18 fetches counted as reads; **6 refused** (four `http_403`, two
+      `http_302`) and none of them cited — PR #8's Critical fix confirmed against the real CLI. A same-host
+      redirect ending in 200 did not occur, so that path is still unexercised.
+  - [ ] **Turn cap is tight**: 36 of 40. Raise `MANIFEST_AGENT_MAX_TURNS` (e.g. 60) before vertical #2; budget is ample
+  - [ ] **Quality, before anyone activates v2** (the open question, now concrete): `no_broker_entity_type` lists the
+        `carship` values to *exclude*, so any unlisted combination without a `B` passes; the DFW metro has no
+        cited boundary; the ICP band (6–50) rests on one benchmark survey; three sources' terms point at
+        `project-open-data.cio.gov/unknown-license/`
+  - [ ] **Not yet a fixture**: the CLI does not save its transcript, so the live run cannot replace T12's synthetic
+        fixture without a small recording hook
+  - [ ] Cosmetic: cost prints as `$0.7817127400000001` — round it
+- [x] **The live-portal provisioning run** (T3) — **done 2026-10-09.** Run 1 created the `lpe` group on companies
+      and contacts, five properties on companies and three on contacts; run 2 issued no writes (all
+      `property_present` / `group_present`, no drift). AC2's "a second run no-ops" is now proven live
 
 ## Carried into Wave 4
 
