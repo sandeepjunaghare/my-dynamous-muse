@@ -6,8 +6,10 @@ service relies on are refused **by the database** — a check in the service can
 slice nobody has written yet.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import ScalarResult, select, text
@@ -15,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cost import BillableKind, RunCost
-from app.shared.provenance import RetrievalMethod, is_promotable
+from app.shared.provenance import ProvenancedValue, RetrievalMethod, is_promotable
 from app.sourcing.models import Candidate, SourcingRun
 from app.sourcing.repository import SourcingRepository
 from app.sourcing.schemas import (
@@ -28,6 +30,7 @@ from app.sourcing.schemas import (
 from tests.conftest import requires_db
 from tests.sourcing.builders import (
     PLACES_URL,
+    QCMOBILE_URL,
     REGISTRY,
     VERIFY,
     a_brief,
@@ -132,6 +135,30 @@ class TestProvenanceRoundTrip:
         assert loaded.phone.retrieval_method is RetrievalMethod.registry_api
         assert loaded.address is not None
         assert loaded.address.value.postal_code == "76011"
+
+    async def test_a_precise_non_utc_timestamp_survives_the_round_trip(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Microseconds and a non-UTC zone: normalised to the same instant in UTC, nothing lost."""
+        run = await _a_run(db_session)
+        chicago = datetime(2026, 10, 1, 9, 30, 15, 123456, tzinfo=ZoneInfo("America/Chicago"))
+        original = CandidateFields(
+            registry_id=ProvenancedValue(
+                value="7654321",
+                source_url=QCMOBILE_URL,
+                retrieved_at=chicago,
+                retrieval_method=RetrievalMethod.registry_api,
+            )
+        )
+
+        stored = await SourcingRepository(db_session).upsert_candidate(
+            run.id, original, stage=REGISTRY
+        )
+        loaded = await _reload(db_session, stored.id)
+
+        assert loaded.registry_id.retrieved_at == chicago
+        assert loaded.registry_id.retrieved_at.microsecond == 123456
+        assert loaded.registry_id.retrieved_at.tzinfo is UTC
 
     async def test_an_unprovenanced_field_is_storable_but_not_promotable(
         self, db_session: AsyncSession
@@ -471,7 +498,7 @@ class TestDatabaseInvariants:
                 status=RunStatus.running.value,
             )
         )
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError, match="sourcing_run_manifest_id_fkey"):
             await db_session.flush()
 
     async def test_candidates_are_stored_in_their_own_table(self, db_session: AsyncSession) -> None:
