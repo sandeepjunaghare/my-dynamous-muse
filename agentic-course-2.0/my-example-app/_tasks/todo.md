@@ -541,6 +541,22 @@ legitimately, nothing real had run them — and dev has now applied them. Any ch
         `carship` values to *exclude*, so any unlisted combination without a `B` passes; the DFW metro has no
         cited boundary; the ICP band (6–50) rests on one benchmark survey; three sources' terms point at
         `project-open-data.cio.gov/unknown-license/`
+  - [x] **Disqualifier review → freight v3 DRAFT** `ecdc1c8e-f6d3-4eec-81a7-6a80cacb70d3` (2026-10-09). Checked against
+        the census file's real values (FMCSA publishes no column definitions). Rule language gained
+        `not_contains` (PR #10) and `not_in_set` (PR #11): both rules v2 needed meant "exclude by absence".
+        v3 = v2 with three rules rewritten, cited `manual_research`: `outside_dfw_metro` → `phy_cnty not_in_set`
+        the 11 counties of OMB's 2023 CBSA 19100 (codes checked against Census's FIPS file); `no_broker_entity_type`
+        → `carship not_contains 'B'`; `asset_based_carrier` → `power_units greater_than 10` (ATA's small-fleet line,
+        91.5% of carriers run ≤10). DFW boundary: the human chose the 11 counties for now, more later.
+        **Census funnel with v3's free predicates:** TX 377,926 → active 194,663 → DFW 45,855 → broker code 4,518
+        → ≤10 units **4,449**. That is ~7× the ticket doc's "~600", before QCMobile and the two judgment rules
+  - [ ] **For T7's evaluator:** `power_units` is **text** in the census dataset (a numeric compare 400s without a
+        cast); predicates need a source per field (`allowToOperate` is QCMobile, not census); `authority_revoked`
+        is a join, kept as judgment only because the rule shape cannot say "join"
+  - [ ] **For T5–T7 sizing:** two judgment rules × ~4,400 candidates is ~8,800 `classify_rollup` calls a run unless
+        something cheaper runs first — re-plan the funnel order before T7
+  - [ ] Never activate freight v1 (its `carrier_operation equals 'asset_based'` matches nothing; real values are
+        A/B/C) or v2 (superseded by v3)
   - [ ] **Not yet a fixture**: the CLI does not save its transcript, so the live run cannot replace T12's synthetic
         fixture without a small recording hook
   - [ ] Cosmetic: cost prints as `$0.7817127400000001` — round it
