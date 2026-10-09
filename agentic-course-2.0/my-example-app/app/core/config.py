@@ -56,8 +56,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     manifest_agent_model: str = "claude-opus-5-5"
     # Circuit breakers against a runaway research loop, not budget targets — the same stance as
-    # the Places cap (D7). Re-set both from the first real run's logged cost and turn count.
-    manifest_agent_max_turns: int = Field(default=40, gt=0)
+    # the Places cap (D7). The first live run (freight v2, 2026-10-09) took 36 turns and $0.78, so
+    # turns, not dollars, were the binding cap; the budget is the real runaway guard.
+    manifest_agent_max_turns: int = Field(default=60, gt=0)
     manifest_agent_max_budget_usd: Decimal = Field(default=Decimal("5.00"), gt=0)
 
 

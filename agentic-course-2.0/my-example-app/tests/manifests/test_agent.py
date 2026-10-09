@@ -246,7 +246,7 @@ class TestFailedRuns:
         ("subtype", "cap_text"),
         [
             ("error_max_budget_usd", "hit its budget cap ($5.00)"),
-            ("error_max_turns", "hit its turn cap (40 turns)"),
+            ("error_max_turns", "hit its turn cap (60 turns)"),
         ],
     )
     async def test_a_capped_run_writes_nothing_but_still_costs(

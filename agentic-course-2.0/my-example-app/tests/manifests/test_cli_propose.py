@@ -128,7 +128,7 @@ class TestProposeWritesNothingOnFailure:
     @pytest.mark.parametrize(
         ("subtype", "cap_text"),
         [
-            ("error_max_turns", "error: the authoring agent hit its turn cap (40 turns)"),
+            ("error_max_turns", "error: the authoring agent hit its turn cap (60 turns)"),
             ("error_max_budget_usd", "error: the authoring agent hit its budget cap ($5.00)"),
         ],
     )
