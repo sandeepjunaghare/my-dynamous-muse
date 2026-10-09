@@ -833,4 +833,7 @@ item from D13.
       the architecture doc's open T6 item closed
 - [x] Validation: ruff, mypy, pyright clean; **587 passed with the database**, 400 / 187 skipped without;
       `alembic check` clean (no migration: JSONB)
-- [ ] PR + fresh-eyes review
+- [x] PR #13 + fresh-eyes review (`.claude/code-reviews/pr-13-review.md`): 0 Critical, 0 High, 1 Medium, 4 Low.
+      M1 (a `model_copy` bypassed the D13 guard; reproduced) fixed by re-validating in `upsert_candidate`. L1
+      (4 host forms missed) fixed. L3 tests and L4 docs added. L2 (tie the check to the address) deferred to
+      T6 with a note. 604 passed with the database

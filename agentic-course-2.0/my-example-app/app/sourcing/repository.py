@@ -113,6 +113,10 @@ class SourcingRepository:
         hands back the object it already holds for that primary key, stale, instead of the row the
         database just wrote.
         """
+        # Re-validated here, at the write: `model_copy(update=...)` skips validators, so a model can
+        # reach this point carrying what `CandidateFields` refuses (Places content, D13). Stored,
+        # such a row would also fail to load and take the whole run's reads down with it.
+        fields = CandidateFields.model_validate(fields.model_dump(mode="json"))
         incoming = fields.model_dump(mode="json", exclude_none=True)
         owned = {name: value for name, value in incoming.items() if owns(stage, name)}
         fill = {name: value for name, value in incoming.items() if not owns(stage, name)}

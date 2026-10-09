@@ -126,14 +126,20 @@ def _is_google_maps(url: str) -> bool:
     """Whether ``url`` points at Google Maps Platform content.
 
     Google *search* is not Maps: a website found by a web search may well be cited to google.com.
-    Only Maps hosts, and google.com's ``/maps`` paths, count.
+    Only Maps hosts, and the ``/maps`` paths of google.com and goo.gl, count.
+
+    A tripwire for our own adapters, so it is lenient about form: a URL without a scheme is parsed
+    as a host, and the host's case, port, userinfo and trailing dot are ignored. It is a deny-list
+    of known Maps hosts, so a Maps hostname not on it would pass.
     """
-    parts = urlsplit(url)
-    host = (parts.hostname or "").lower()
+    stripped = url.strip()
+    parts = urlsplit(stripped if "//" in stripped else f"//{stripped}")
+    host = (parts.hostname or "").rstrip(".")
+    path = parts.path.lower()
     if host in _GOOGLE_MAPS_HOSTS:
         return True
     is_google = host == "google.com" or host.endswith(".google.com")
-    return is_google and parts.path.startswith("/maps")
+    return (is_google or host == "goo.gl") and (path == "/maps" or path.startswith("/maps/"))
 
 
 class CandidateFields(BaseModel):

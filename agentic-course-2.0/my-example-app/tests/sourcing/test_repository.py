@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import ScalarResult, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,7 @@ from app.sourcing.models import Candidate, SourcingRun
 from app.sourcing.repository import SourcingRepository
 from app.sourcing.schemas import (
     CandidateFields,
+    PostalAddress,
     RunCostSummary,
     RunOutcome,
     RunStatus,
@@ -435,6 +437,91 @@ class TestFieldOwnership:
         assert fields.business_check.source_url == PLACES_URL
         assert fields.address is not None
         assert fields.address.retrieval_method is RetrievalMethod.bulk_file, "still the census copy"
+
+
+class TestTheD13GuardAtTheWrite:
+    """Review M1: the guard must hold at the write, not only where a model is constructed."""
+
+    async def test_places_content_slipped_in_by_model_copy_is_refused_at_the_write(
+        self, db_session: AsyncSession
+    ) -> None:
+        """``model_copy(update=...)`` skips validators, so the write is where the guard must run.
+
+        Stored, such a row would also fail to load and take its whole run's reads down with it.
+        """
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        smuggled = a_candidate().model_copy(
+            update={"phone": sourced("+1-817-555-0199", PLACES_URL, RetrievalMethod.web_lookup)}
+        )
+
+        with pytest.raises(ValidationError, match="D13"):
+            await repository.upsert_candidate(run.id, smuggled, stage=REGISTRY)
+
+        assert list(await repository.list_candidates(run.id)) == []
+
+
+class TestOwnershipOfTheCheck:
+    """Review L3: the merge, through SQL, for the new field and the moved address."""
+
+    async def test_verification_re_decides_its_own_check(self, db_session: AsyncSession) -> None:
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), business_check=place_checked("ChIJ-a")),
+            stage=VERIFY,
+        )
+
+        merged = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), business_check=place_checked("ChIJ-b")),
+            stage=VERIFY,
+        )
+
+        fields = CandidateFields.model_validate(merged.fields)
+        assert fields.business_check is not None
+        assert fields.business_check.value.place_id == "ChIJ-b"
+
+    async def test_another_stage_cannot_replace_the_check(self, db_session: AsyncSession) -> None:
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), business_check=place_checked("ChIJ-a")),
+            stage=VERIFY,
+        )
+
+        merged = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), business_check=place_checked("ChIJ-z")),
+            stage=REGISTRY,
+        )
+
+        fields = CandidateFields.model_validate(merged.fields)
+        assert fields.business_check is not None
+        assert fields.business_check.value.place_id == "ChIJ-a"
+
+    async def test_verification_cannot_replace_the_census_address(
+        self, db_session: AsyncSession
+    ) -> None:
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+        elsewhere = PostalAddress(
+            street="1 Elsewhere Rd", city="Dallas", state="TX", postal_code="75201"
+        )
+
+        merged = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), address=looked_up(elsewhere)),
+            stage=VERIFY,
+        )
+
+        fields = CandidateFields.model_validate(merged.fields)
+        assert fields.address is not None
+        assert fields.address.value.street == "2100 Olympic Dr"
+        assert fields.address.retrieval_method is RetrievalMethod.bulk_file
 
 
 class TestDatabaseInvariants:

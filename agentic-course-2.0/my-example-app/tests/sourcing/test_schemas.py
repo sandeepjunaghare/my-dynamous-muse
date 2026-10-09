@@ -195,6 +195,16 @@ class TestBusinessCheck:
             "https://maps.googleapis.com/maps/api/place/details/json?place_id=x",
             "https://www.google.com/maps/place/?q=place_id:ChIJ-x",
             "https://maps.google.com/?cid=123",
+            # Review L1: forms the first guard missed.
+            "https://maps.google.com./place/x",
+            "maps.google.com/place/x",
+            "//maps.google.com/place/x",
+            "https://www.google.com/Maps/place/x",
+            "HTTPS://MAPS.GOOGLE.COM/x",
+            "https://goo.gl/maps/abc123",
+            "https://maps.app.goo.gl/abc123",
+            "https://example.com@maps.google.com/x",
+            "https://maps.google.com:443/x",
         ],
     )
     def test_no_other_field_may_cite_google_maps(self, url: str) -> None:
@@ -214,6 +224,22 @@ class TestBusinessCheck:
                 registry_id=sourced("1234567"),
                 address=sourced(address, PLACES_URL, RetrievalMethod.web_lookup),
             )
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.google.com/search?q=acme+freight",
+            "https://goo.gl/xyz",
+            "https://www.acmefreight.test/maps",
+            "https://notgoogle.com/maps",
+        ],
+    )
+    def test_google_urls_that_are_not_maps_are_allowed(self, url: str) -> None:
+        fields = CandidateFields(
+            registry_id=sourced("1234567"),
+            website=sourced("https://acmefreight.test", url, RetrievalMethod.web_lookup),
+        )
+        assert fields.website is not None
 
     def test_a_website_from_a_web_search_is_fine(self) -> None:
         """Google the search engine is not Google Maps: only Maps content is barred."""

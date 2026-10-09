@@ -50,7 +50,7 @@ absent, not inferred*. So a candidate with a missing phone is **storable but not
 ```python
 candidate.fields.phone  # None
 is_promotable(candidate.fields.phone)  # False — HubSpot may not receive it
-candidate.fields.unprovenanced_fields()  # ("phone", "website")
+candidate.fields.unprovenanced_fields()  # ("phone", "website", "business_check")
 ```
 
 T9 decides which fields promotion requires. This slice only reports which fields are missing.
@@ -90,10 +90,12 @@ T8 clusters on: an address **and** a check that found the business. The address 
 census copy. "Verified" means Places found the business from the census name and address, not that
 a second address matched (D13, option A).
 
-**The D13 guard.** `CandidateFields` refuses any other field cited to a Google Maps URL
-(`places.googleapis.com`, `maps.googleapis.com`, `maps.google.com`, `google.com/maps`). Copying Places
-content into a candidate fails validation, so it can never reach HubSpot. Google *search* results are
-not Maps content and are allowed.
+**The D13 guard.** `CandidateFields` refuses any other field cited to Google Maps:
+`places.googleapis.com`, `maps.googleapis.com`, `maps.google.com`, `maps.app.goo.gl`, and the `/maps`
+paths of `google.com` and `goo.gl`. Case, port, userinfo, a trailing dot and a missing scheme do not
+hide a host. It runs when a model is built **and again in `upsert_candidate`**, because
+`model_copy(update=...)` skips validators. A deny-list of known hosts is a tripwire for our own
+adapters, not a proof: a Maps host not on it would pass. Google *search* results are allowed.
 
 - The **owning** stage overwrites its own field. A retried stage re-decides its own fact.
 - **Any other** stage only *fills* a field that is empty. It never replaces a stored citation, so a
@@ -130,5 +132,5 @@ editable.
 ## Cross-slice reads
 
 - **Reads** `manifests`: `ManifestService.get_active` and the `IcpBand` type. It never writes there.
-- **Read by** T7 (FKs `disqualification` → `candidate`), T8 (reads `fields.address`) and T9 (FKs the
+- **Read by** T7 (FKs `disqualification` → `candidate`), T8 (filters on `fields.has_verified_address()`) and T9 (FKs the
   promotion ledger → `candidate` and gates every field on `is_promotable`).
