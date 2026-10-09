@@ -5,19 +5,25 @@ surface*). ``show`` renders every citation so a person can judge what was resear
 ``activate`` is the single door to ACTIVE, which is also where the per-source terms-of-use decision
 is recorded.
 
-``propose`` is **T12's**, and is deliberately absent rather than stubbed: a subcommand that appears
-in ``--help`` and then raises reads as a broken feature.
+``propose`` runs the authoring agent (T12) and writes what it found as a **DRAFT** — never ACTIVE.
+It prints the draft with every citation, what was left out and why, the terms-of-use question per
+source, and a standing note that manifest *quality* review is still an open question.
 """
 
 import argparse
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cost import RunCost
 from app.core.database import dispose_engine, get_sessionmaker
+from app.manifests.agent import run_agent
+from app.manifests.proposal import DraftProposal, build_draft
 from app.manifests.schemas import (
+    SLUG_PATTERN,
     ManifestBody,
     ManifestResponse,
     ManifestStatus,
@@ -29,9 +35,28 @@ from app.shared.provenance import ProvenancedValue
 ACTOR_UNSPECIFIED = "cli"
 """Recorded as ``decided_by`` when nobody is named. Single internal user; no auth in the MVP."""
 
+QUALITY_REVIEW_NOTE = (
+    "NOTE: manifest quality review beyond terms of use is still an open question (architecture "
+    "doc -> Open questions). Nothing has checked that these disqualifier rules are right or that "
+    "these sources are the authoritative ones; `activate` records terms of use only. Whoever "
+    "activates this draft should check the disqualifiers and the sources against the citations "
+    "above first."
+)
+"""Printed on every proposal. A plausible-but-wrong rule fails silently (E10), and the gate that
+would catch it has not been decided — so the reviewer is told, every time, that it is theirs."""
+
+
+def _slug(raw: str) -> str:
+    """argparse type for ``--vertical``: the same lowercase slug the manifest schema demands."""
+    if re.fullmatch(SLUG_PATTERN, raw) is None:
+        raise argparse.ArgumentTypeError(
+            f"{raw!r} is not a lowercase slug (e.g. collision_centers)"
+        )
+    return raw
+
 
 def register(parser: argparse.ArgumentParser) -> None:
-    """Add ``list``, ``show`` and ``activate`` to the ``manifest`` command's parser."""
+    """Add ``list``, ``show``, ``propose`` and ``activate`` to the ``manifest`` command's parser."""
     subcommands = parser.add_subparsers(dest="manifest_command", required=True)
 
     list_parser = subcommands.add_parser("list", help="list manifests")
@@ -45,6 +70,18 @@ def register(parser: argparse.ArgumentParser) -> None:
 
     show_parser = subcommands.add_parser("show", help="render one manifest with every citation")
     show_parser.add_argument("manifest_id", type=UUID, help="the manifest's id")
+
+    propose_parser = subcommands.add_parser(
+        "propose",
+        help="research a brief with the authoring agent and write a cited DRAFT manifest",
+    )
+    propose_parser.add_argument("brief", help='e.g. "collision centers, DFW"')
+    propose_parser.add_argument(
+        "--vertical",
+        type=_slug,
+        default=None,
+        help="the vertical's slug; when omitted the agent proposes one",
+    )
 
     activate_parser = subcommands.add_parser(
         "activate",
@@ -76,6 +113,11 @@ def dispatch(args: argparse.Namespace) -> int:
     if subcommand == "show":
         manifest_id: UUID = args.manifest_id
         return asyncio.run(_run_show(manifest_id))
+
+    if subcommand == "propose":
+        brief: str = args.brief
+        proposed_vertical: str | None = args.vertical
+        return asyncio.run(_run_propose(brief, proposed_vertical))
 
     if subcommand == "activate":
         target_id: UUID = args.manifest_id
@@ -125,6 +167,50 @@ async def _run_show(manifest_id: UUID) -> int:
     manifest = await _with_session(operation)
     _render(manifest)
     return 0
+
+
+async def _run_propose(brief: str, vertical: str | None) -> int:
+    """Research, gate every field on its citation, then write one DRAFT.
+
+    The agent runs with **no database session open**: a research loop takes minutes, and holding a
+    pooled connection across it buys nothing. The write is one short session afterwards.
+    """
+    cost = RunCost()
+    agent_run = await run_agent(brief, cost=cost, vertical=vertical)
+    draft = build_draft(agent_run.proposal, agent_run.reads, vertical_override=vertical)
+
+    async def operation(session: AsyncSession) -> ManifestResponse:
+        return await ManifestService(session).create_draft(draft.vertical, draft.body)
+
+    manifest = await _with_session(operation)
+    _render(manifest)
+    _print_proposal_review(draft, cost)
+    return 0
+
+
+def _print_proposal_review(draft: DraftProposal, cost: RunCost) -> None:
+    """What the reviewer needs beyond the row itself: evidence, gaps, open decisions, cost."""
+    print("\nevidence quoted by the agent:")
+    for field in draft.cited:
+        print(f'  - {field.label}: "{field.quote}"')
+        print(f"    {field.url}")
+
+    print("\nleft out (no usable citation):")
+    if not draft.omitted:
+        print("  - nothing")
+    for omitted in draft.omitted:
+        print(f"  - {omitted.label}: {omitted.reason}")
+
+    print("\nterms-of-use questions (answered only at `lpe manifest activate --accept-terms`):")
+    for question in draft.terms_questions:
+        where = question.terms_url or "the agent did not find published terms; locate them"
+        print(f"  - {question.source_name}: have you read and do you accept its terms? -> {where}")
+
+    print(
+        f"\nagent run cost: ${cost.total_usd()} over {cost.total_calls()} turn(s)"
+        " (logged as core.cost.call_recorded)"
+    )
+    print(f"\n{QUALITY_REVIEW_NOTE}")
 
 
 async def _run_activate(manifest_id: UUID, accept_terms: str, actor: str) -> int:

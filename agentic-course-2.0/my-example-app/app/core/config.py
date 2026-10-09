@@ -8,6 +8,7 @@ service into a surprising state. ``extra="forbid"`` turns a typo'd variable into
 failure instead of a silently ignored line in ``.env``.
 """
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -43,6 +44,16 @@ class Settings(BaseSettings):
 
     # Integrations. Optional at T1 — T3 is what first needs a token.
     hubspot_private_app_token: str | None = None
+
+    # Manifest-authoring agent (T12). The key is optional: when unset, the Agent SDK falls back to
+    # whatever credential its bundled CLI already resolves. Declared so that a key placed in `.env`
+    # is not refused by `extra="forbid"`.
+    anthropic_api_key: str | None = None
+    manifest_agent_model: str = "claude-opus-5-5"
+    # Circuit breakers against a runaway research loop, not budget targets — the same stance as
+    # the Places cap (D7). Re-set both from the first real run's logged cost and turn count.
+    manifest_agent_max_turns: int = 40
+    manifest_agent_max_budget_usd: Decimal = Decimal("5.00")
 
 
 @lru_cache
