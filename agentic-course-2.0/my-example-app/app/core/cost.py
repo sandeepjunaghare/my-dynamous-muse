@@ -9,7 +9,7 @@ Deliberately storage-agnostic: a :class:`RunCost` accumulates in memory for the 
 and T4 persists the totals onto ``sourcing_run``.
 """
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
 from app.core.exceptions import CostLimitExceededError
@@ -26,6 +26,15 @@ class BillableKind(StrEnum):
 
     anthropic_tokens = "anthropic_tokens"
     """An Agent SDK call at a judgment node or in the manifest-authoring agent (T6, T12)."""
+
+
+def format_usd(usd: Decimal) -> str:
+    """Render dollars for a person, rounded to the cent.
+
+    Display only: logs and persisted totals keep the exact value, which arrives from the SDK as a
+    float carried into a Decimal (``0.7817127400000001``).
+    """
+    return f"${usd.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}"
 
 
 class RunCost:

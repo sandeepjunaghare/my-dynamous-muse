@@ -42,7 +42,7 @@ from claude_agent_sdk import (
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.core.config import Settings, get_settings
-from app.core.cost import BillableKind, RunCost
+from app.core.cost import BillableKind, RunCost, format_usd
 from app.core.logging import get_logger
 from app.manifests.exceptions import ManifestAgentError
 from app.manifests.prompts import SYSTEM_PROMPT, build_user_prompt
@@ -219,7 +219,7 @@ def _record_cost(cost: RunCost, result: ResultMessage | None) -> Decimal | None:
 
 
 def _usd_text(usd: Decimal | None) -> str:
-    return "an unknown amount" if usd is None else f"${usd}"
+    return "an unknown amount" if usd is None else format_usd(usd)
 
 
 def _failure_message(result: ResultMessage, usd: Decimal | None, settings: Settings) -> str:
@@ -232,8 +232,9 @@ def _failure_message(result: ResultMessage, usd: Decimal | None, settings: Setti
             "MANIFEST_AGENT_MAX_TURNS"
         )
     if result.subtype == "error_max_budget_usd":
+        cap = format_usd(settings.manifest_agent_max_budget_usd)
         return (
-            f"the authoring agent hit its budget cap (${settings.manifest_agent_max_budget_usd}) "
+            f"the authoring agent hit its budget cap ({cap}) "
             f"{spent}; nothing was written — narrow the brief, or raise "
             "MANIFEST_AGENT_MAX_BUDGET_USD"
         )

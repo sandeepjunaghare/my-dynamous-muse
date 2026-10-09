@@ -158,7 +158,7 @@ class TestProposeWritesNothingOnFailure:
         assert main(["manifest", "propose", "freight"]) == 1
         err = capsys.readouterr().err
         assert cap_text in err
-        assert "having spent $0.8421" in err
+        assert "having spent $0.84" in err
         assert "could not run" not in err  # not the generic SDK failure
         assert recorded == [Decimal("0.8421")]  # the spend goes through RunCost on this path too
         assert "Traceback" not in err

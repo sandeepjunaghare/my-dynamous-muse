@@ -18,7 +18,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cost import RunCost
+from app.core.cost import RunCost, format_usd
 from app.core.database import dispose_engine, get_sessionmaker
 from app.manifests.agent import run_agent
 from app.manifests.proposal import DraftProposal, build_draft
@@ -208,7 +208,7 @@ def _print_proposal_review(draft: DraftProposal, cost: RunCost, *, known_cost: b
         where = question.terms_url or "the agent did not find published terms; locate them"
         print(f"  - {question.source_name}: have you read and do you accept its terms? -> {where}")
 
-    spent = f"${cost.total_usd()}" if known_cost else "unknown (the SDK reported no cost)"
+    spent = format_usd(cost.total_usd()) if known_cost else "unknown (the SDK reported no cost)"
     print(
         f"\nagent run cost: {spent} over {cost.total_calls()} turn(s)"
         " (logged as core.cost.call_recorded)"

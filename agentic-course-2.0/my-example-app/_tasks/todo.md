@@ -559,7 +559,8 @@ legitimately, nothing real had run them — and dev has now applied them. Any ch
         A/B/C) or v2 (superseded by v3)
   - [ ] **Not yet a fixture**: the CLI does not save its transcript, so the live run cannot replace T12's synthetic
         fixture without a small recording hook
-  - [ ] Cosmetic: cost prints as `$0.7817127400000001` — round it
+  - [x] Cosmetic: cost prints as `$0.7817127400000001`. **Done 2026-10-09:** `core.cost.format_usd` rounds
+        to the cent, half up, for display only; logs keep the exact value
 - [x] **The live-portal provisioning run** (T3) — **done 2026-10-09.** Run 1 created the `lpe` group on companies
       and contacts, five properties on companies and three on contacts; run 2 issued no writes (all
       `property_present` / `group_present`, no drift). AC2's "a second run no-ops" is now proven live

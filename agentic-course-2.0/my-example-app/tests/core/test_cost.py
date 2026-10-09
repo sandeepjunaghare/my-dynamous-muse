@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.core.cost import BillableKind, RunCost
+from app.core.cost import BillableKind, RunCost, format_usd
 from app.core.exceptions import CostLimitExceededError
 
 
@@ -99,3 +99,18 @@ class TestCap:
         assert error.cap == 500
         assert error.recorded == 500
         assert error.code == "cost_limit_exceeded"
+
+
+class TestFormatUsd:
+    @pytest.mark.parametrize(
+        ("usd", "text"),
+        [
+            # The SDK's float cost, carried into a Decimal: the live T12 run printed all of this.
+            (Decimal("0.7817127400000001"), "$0.78"),
+            (Decimal("0.845"), "$0.85"),  # half up, not banker's rounding
+            (Decimal("5"), "$5.00"),
+            (Decimal("0.004"), "$0.00"),
+        ],
+    )
+    def test_rounds_to_cents_for_display(self, usd: Decimal, text: str) -> None:
+        assert format_usd(usd) == text
