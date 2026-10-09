@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.cadence.routes import router as cadence_router
 from app.core.config import get_settings
 from app.core.database import dispose_engine
 from app.core.dependencies import SettingsDep
@@ -64,6 +65,7 @@ app = FastAPI(
 )
 app.add_middleware(RequestContextMiddleware)
 app.include_router(manifests_router)
+app.include_router(cadence_router)
 
 
 def _error_response(status_code: int, payload: ErrorResponse) -> JSONResponse:

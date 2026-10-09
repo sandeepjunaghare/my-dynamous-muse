@@ -19,6 +19,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from app.cadence import models as cadence_models
 from app.core.config import get_settings
 from app.core.database import Base
 from app.manifests import models as manifest_models
@@ -31,6 +32,7 @@ _REGISTERED_MODELS = (
     manifest_models.VerticalManifest,
     sourcing_models.SourcingRun,
     sourcing_models.Candidate,
+    cadence_models.CadenceState,
 )
 
 config = context.config

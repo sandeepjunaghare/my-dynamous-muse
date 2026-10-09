@@ -16,6 +16,7 @@ from collections.abc import Sequence
 import structlog
 from sqlalchemy.exc import IntegrityError
 
+from app.cadence import cli as cadence_cli
 from app.core.exceptions import LocalProspectEngineError
 from app.core.logging import setup_logging
 from app.manifests import cli as manifests_cli
@@ -58,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     manifests_cli.register(
         commands.add_parser("manifest", help="review and activate vertical manifests")
     )
+    cadence_cli.register(commands.add_parser("cadence", help="sync the cadence; list overdue"))
     return parser
 
 
@@ -75,6 +77,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if command == "manifest":
             return manifests_cli.dispatch(args)
+        if command == "cadence":
+            return cadence_cli.dispatch(args)
     except LocalProspectEngineError as exc:
         # A deliberate failure is a message, not a stack trace: every one of these is something a
         # person can act on (read the terms, fix the id, activate a draft first).
