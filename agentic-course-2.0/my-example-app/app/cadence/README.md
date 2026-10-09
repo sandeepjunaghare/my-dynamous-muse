@@ -167,7 +167,9 @@ would create and when it is due, or that it would park. A row with an interrupte
 whether its task was found (and would be adopted) or would be created. A sync decides first (reads,
 then the pure `plan_advance`) and only then applies, and a dry run stops after deciding, so what it
 prints is what the next sync does, given the same HubSpot state. It takes no lock, so it can run
-while a real sync does.
+while a real sync does. It plans every prospect from **one moment**, the rows and the task batch as
+read at its start, so a sync landing mid-run makes its output stale, never false. It also reports
+overdue touches without logging `touch_overdue`, so alerts see each real sync once.
 
 ## Parking by hand
 

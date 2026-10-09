@@ -799,3 +799,10 @@ commit later. **Run the database tier before any push that changes output text.*
 signal: 162 skipped means 162 tests did not look.
 **Watch.** A dry run plans with "no task" for an interrupted create it would make. That equals a fresh open
 task only because an open task closes nothing, which `find_signal` guarantees today.
+
+**PR #12 review (2026-10-09):** fresh-eyes review by the `code-reviewer` agent, report in
+`.claude/code-reviews/pr-12-review.md`. 0 Critical, 0 High, 1 Medium, 6 Low. All fixed except one CLI test,
+each with a test that failed first. The Medium was a dry run racing a real sync and calling a moved task
+"deleted". **Lesson for test doubles:** an ORM `update()` also refreshes the session's copy, so a test
+simulating "another process changed the row" needs `synchronize_session=False`. The first L4 test passed on the
+broken code.

@@ -132,7 +132,7 @@ async def _run_dry_run() -> int:
     advancing = sum(1 for plan in report.plans if plan.changed)
     print(
         f"checked {report.checked} · would advance {advancing} · "
-        f"unchanged {report.checked - advancing - len(report.failures)}"
+        f"unchanged {len(report.plans) - advancing} · failed {len(report.failures)}"
     )
     for failure in report.failures:
         print(f"contact {failure.hubspot_contact_id}: failed ({failure.code}) — {failure.error}")
@@ -147,6 +147,8 @@ def _print_plan(plan: ProspectPlan) -> None:
         lines.append(f"interrupted task create: found task {plan.pending_task_id}, would adopt it")
     elif plan.pending_task is PendingTask.would_create:
         lines.append("interrupted task create: no task found, would create it")
+        if plan.pending_task_superseded:
+            lines.append("  …and leave it open, since its touch is already logged — close it then")
     lines.extend(f"would close {_label(step)} — {_closed_by(step)}" for step in plan.steps)
     if plan.parks:
         lines.append("would park — the cadence is finished")

@@ -242,7 +242,7 @@ class TestPark:
         assert f"parked {contact_id} at 1/3 call" in out
         assert f"open task {task_id}" in out
         assert "close it in HubSpot" in out
-        assert "note" in out, "the reason belongs in HubSpot, so say so"
+        assert "as a note on the contact in HubSpot" in out, "the reason belongs in HubSpot"
         assert asyncio.run(_status_of(cli_database, contact_id)) == ("parked", "call", None)
 
     def test_parking_twice_is_one_error_line(
@@ -277,3 +277,32 @@ class TestPark:
         monkeypatch.setenv("HUBSPOT_PRIVATE_APP_TOKEN", "")
 
         assert main(["cadence", "park", contact_id]) == 0
+
+    def test_park_while_a_sync_runs_is_one_error_line(
+        self,
+        committed_live: tuple[str, str],
+        cli_database: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        contact_id, _ = committed_live
+
+        async def park_while_locked() -> int:
+            engine = create_async_engine(cli_database)
+            try:
+                async with engine.connect() as other:
+                    await other.execute(
+                        text("select pg_advisory_lock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                    )
+                    try:
+                        return await asyncio.to_thread(main, ["cadence", "park", contact_id])
+                    finally:
+                        await other.execute(
+                            text("select pg_advisory_unlock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                        )
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(park_while_locked()) == 1
+        err = capsys.readouterr().err
+        assert "a cadence sync is running" in err
+        assert asyncio.run(_status_of(cli_database, contact_id))[0] == "live"

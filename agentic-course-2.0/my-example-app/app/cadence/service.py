@@ -24,6 +24,7 @@ Each prospect is **decided** first (HubSpot reads, then the pure :func:`plan_adv
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from uuid import UUID
 
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
@@ -89,6 +90,39 @@ def default_owner_id() -> str | None:
     if owner is None or not owner.strip():
         return None
     return owner.strip()
+
+
+@dataclass(frozen=True)
+class _RowView:
+    """The fields a decision reads from a cadence row, captured as plain values at one moment.
+
+    A dry run plans every prospect from the rows as ``list_live`` read them, the same moment as the
+    task batch. Re-reading a row that a concurrent sync has since advanced would pair it with a
+    batch that never saw its new task, and report a task deleted that was not. Plain values also
+    survive the rollback a failed prospect triggers, which expires every loaded row.
+    """
+
+    state_id: UUID
+    contact_id: str
+    cycle: int
+    touch: Touch
+    task_id: str | None
+    pending_key: str | None
+    anchor_at: datetime
+    anchor_ref: str | None
+
+    @classmethod
+    def of(cls, state: CadenceState) -> "_RowView":
+        return cls(
+            state_id=state.id,
+            contact_id=state.hubspot_contact_id,
+            cycle=state.cycle,
+            touch=Touch(state.touch),
+            task_id=state.hubspot_task_id,
+            pending_key=state.pending_task_key,
+            anchor_at=state.anchor_at,
+            anchor_ref=state.anchor_ref,
+        )
 
 
 @dataclass(frozen=True)
@@ -226,25 +260,28 @@ class CadenceService:
             logger.warning("cadence.sync.owner_unset")
             report.warnings.append(OWNER_UNSET_WARNING)
 
-        states = list(await self._repository.list_live())
-        # Plain values, captured now: a rollback after a failed prospect expires every loaded row.
-        work = [(state.id, state.hubspot_contact_id) for state in states]
-        task_ids = [state.hubspot_task_id for state in states if state.hubspot_task_id is not None]
+        # Plain values, captured now, in one read with the task batch below. See `_RowView`.
+        work = [_RowView.of(state) for state in await self._repository.list_live()]
+        task_ids = [row.task_id for row in work if row.task_id is not None]
         logger.info("cadence.sync.run_started", live=len(work), dry_run=dry_run)
 
         if work:
             client = self._hubspot()
             reader = OutcomeReader(client)
             tasks = await reader.tasks(task_ids)
-            for state_id, contact_id in work:
-                report.checked += 1
+            for row in work:
+                contact_id = row.contact_id
                 try:
-                    state = await self._repository.get(state_id)
+                    if dry_run:
+                        report.checked += 1
+                        report.plans.append(await self._plan_one(row, tasks, reader, now))
+                        continue
+                    # A real sync writes, so it works from the row as it is now. Under the run lock
+                    # only `park` could have changed it, and `park` takes the same lock.
+                    state = await self._repository.get(row.state_id)
                     if state is None or state.status != CadenceStatus.live.value:
                         continue
-                    if dry_run:
-                        report.plans.append(await self._plan_one(state, tasks, reader, now))
-                        continue
+                    report.checked += 1
                     result = await self._sync_one(state, tasks, reader, client, now, default_owner)
                 except HubSpotError as exc:
                     await self._record_failure(report, contact_id, exc.code, exc.message)
@@ -274,7 +311,9 @@ class CadenceService:
                     report.pending_tasks_adopted.append(result.adopted_task_id)
 
         report.overdue = await self.overdue(now)
-        for touch in report.overdue:
+        # A rehearsal reports overdue touches but does not log them: whatever alerts on the event
+        # should see each real sync once, not every dry run as well.
+        for touch in [] if dry_run else report.overdue:
             logger.warning(
                 "cadence.sync.touch_overdue",
                 contact_id=touch.hubspot_contact_id,
@@ -318,7 +357,7 @@ class CadenceService:
         contact_id = state.hubspot_contact_id
         owner = state.hubspot_owner_id or default_owner
         result = _ProspectResult()
-        decision = await self._decide(state, tasks, reader, now)
+        decision = await self._decide(_RowView.of(state), tasks, reader, now)
         task = decision.task
         if decision.pending_key is not None:
             task = await self._resolve_pending(
@@ -381,7 +420,7 @@ class CadenceService:
 
     async def _decide(
         self,
-        state: CadenceState,
+        row: _RowView,
         tasks: Mapping[str, TaskSnapshot],
         reader: OutcomeReader,
         now: datetime,
@@ -393,26 +432,25 @@ class CadenceService:
         the same plan the fresh, open task the real sync then creates would give: an open task
         closes nothing.
         """
-        contact_id = state.hubspot_contact_id
-        key = state.pending_task_key
+        key = row.pending_key
         if key is not None:
-            task = await reader.find_task_by_key(contact_id, key)
+            task = await reader.find_task_by_key(row.contact_id, key)
         else:
-            task = None if state.hubspot_task_id is None else tasks.get(state.hubspot_task_id)
-        activities = await reader.activities(contact_id, since=state.anchor_at)
-        position = CadencePosition(cycle=state.cycle, touch=Touch(state.touch))
-        plan = plan_advance(position, state.anchor_at, state.anchor_ref, task, activities, now)
+            task = None if row.task_id is None else tasks.get(row.task_id)
+        activities = await reader.activities(row.contact_id, since=row.anchor_at)
+        position = CadencePosition(cycle=row.cycle, touch=row.touch)
+        plan = plan_advance(position, row.anchor_at, row.anchor_ref, task, activities, now)
         return _Decision(task=task, pending_key=key, plan=plan)
 
     async def _plan_one(
         self,
-        state: CadenceState,
+        row: _RowView,
         tasks: Mapping[str, TaskSnapshot],
         reader: OutcomeReader,
         now: datetime,
     ) -> ProspectPlan:
         """A dry run's view of one prospect: the decision, rendered, and nothing applied."""
-        decision = await self._decide(state, tasks, reader, now)
+        decision = await self._decide(row, tasks, reader, now)
         plan, task = decision.plan, decision.task
         pending: PendingTask | None = None
         pending_task_id: str | None = None
@@ -420,13 +458,14 @@ class CadenceService:
             pending = PendingTask.would_create if task is None else PendingTask.found
             pending_task_id = None if task is None else task.task_id
         return ProspectPlan(
-            hubspot_contact_id=state.hubspot_contact_id,
+            hubspot_contact_id=row.contact_id,
             steps=list(plan.steps),
             next_position=plan.next_position,
             next_due_at=plan.next_due_at,
             parks=plan.parks,
             pending_task=pending,
             pending_task_id=pending_task_id,
+            pending_task_superseded=pending is PendingTask.would_create and plan.changed,
             superseded_task_id=(
                 task.task_id if plan.changed and task is not None and not task.completed else None
             ),

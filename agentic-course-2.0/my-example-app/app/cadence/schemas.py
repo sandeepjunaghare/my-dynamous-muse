@@ -143,6 +143,9 @@ class ProspectPlan(BaseModel):
     pending_task: PendingTask | None = None
     pending_task_id: str | None = None
     """The task a ``found`` pending create would adopt."""
+    pending_task_superseded: bool = False
+    """A ``would_create`` task whose touch logged activity already closes: the real sync creates
+    it and then lists it under ``open_tasks_superseded``, for a person to close."""
     superseded_task_id: str | None = None
     """An open task whose touch logged activity would close. Left alone, as in a real sync."""
     task_missing: bool = False
