@@ -15,13 +15,22 @@ from app.manifests.schemas import IcpBand
 from app.shared.provenance import ProvenancedValue, RetrievalMethod, is_promotable
 from app.sourcing.schemas import (
     CandidateFields,
+    PlaceCheck,
+    PostalAddress,
     RunCostSummary,
     RunOutcome,
     RunStatus,
     RunTotals,
     SourcingBrief,
 )
-from tests.sourcing.builders import a_brief, a_candidate, sourced
+from tests.sourcing.builders import (
+    PLACES_URL,
+    a_brief,
+    a_candidate,
+    looked_up,
+    place_checked,
+    sourced,
+)
 
 BAND = IcpBand(headcount_min=20, headcount_max=200, requires_office_function=True)
 
@@ -101,7 +110,7 @@ class TestCandidateFields:
 
     def test_unprovenanced_fields_names_exactly_the_absent_ones(self) -> None:
         candidate = a_candidate(with_phone=False)
-        assert candidate.unprovenanced_fields() == ("phone", "website")
+        assert candidate.unprovenanced_fields() == ("phone", "website", "business_check")
 
     def test_a_fully_cited_candidate_has_none(self) -> None:
         candidate = CandidateFields(
@@ -111,6 +120,7 @@ class TestCandidateFields:
             address=a_candidate().address,
             phone=sourced("1"),
             website=sourced("https://example.com"),
+            business_check=place_checked(),
         )
         assert candidate.unprovenanced_fields() == ()
 
@@ -150,6 +160,67 @@ class TestCandidateFields:
         assert restored.legal_name is not None
         assert restored.legal_name.retrieval_method is RetrievalMethod.bulk_file
         assert restored.phone is None
+
+
+class TestBusinessCheck:
+    """D13: Places is a check, never a source. The place ID is all a candidate keeps from it."""
+
+    def test_a_verified_address_needs_the_address_and_a_check(self) -> None:
+        checked = a_candidate().model_copy(update={"business_check": place_checked()})
+        assert checked.has_verified_address() is True
+
+    def test_an_address_never_checked_is_not_verified(self) -> None:
+        """The census address alone is cited, but nobody has confirmed the business is there."""
+        assert a_candidate().has_verified_address() is False
+
+    def test_a_check_without_an_address_verifies_nothing(self) -> None:
+        bare = CandidateFields(registry_id=sourced("1234567"), business_check=place_checked())
+        assert bare.has_verified_address() is False
+
+    def test_a_blank_place_id_is_refused(self) -> None:
+        with pytest.raises(ValidationError):
+            PlaceCheck(place_id="  ")
+
+    def test_the_check_survives_the_json_trip(self) -> None:
+        checked = a_candidate().model_copy(update={"business_check": place_checked("ChIJ-x")})
+        restored = CandidateFields.model_validate(checked.model_dump(mode="json"))
+        assert restored.business_check is not None
+        assert restored.business_check.value.place_id == "ChIJ-x"
+        assert restored.business_check.source_url == PLACES_URL
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            PLACES_URL,
+            "https://maps.googleapis.com/maps/api/place/details/json?place_id=x",
+            "https://www.google.com/maps/place/?q=place_id:ChIJ-x",
+            "https://maps.google.com/?cid=123",
+        ],
+    )
+    def test_no_other_field_may_cite_google_maps(self, url: str) -> None:
+        """The structure guard D13 asked for: copying Places content into a field fails here."""
+        with pytest.raises(ValidationError, match="D13"):
+            CandidateFields(
+                registry_id=sourced("1234567"),
+                phone=sourced("+1-817-555-0199", url, RetrievalMethod.web_lookup),
+            )
+
+    def test_an_address_cited_to_places_is_refused(self) -> None:
+        address = PostalAddress(
+            street="2100 Olympic Dr", city="Arlington", state="TX", postal_code="76011"
+        )
+        with pytest.raises(ValidationError, match="D13"):
+            CandidateFields(
+                registry_id=sourced("1234567"),
+                address=sourced(address, PLACES_URL, RetrievalMethod.web_lookup),
+            )
+
+    def test_a_website_from_a_web_search_is_fine(self) -> None:
+        """Google the search engine is not Google Maps: only Maps content is barred."""
+        fields = CandidateFields(
+            registry_id=sourced("1234567"), website=looked_up("https://x.test")
+        )
+        assert fields.website is not None
 
 
 class TestRunStatus:

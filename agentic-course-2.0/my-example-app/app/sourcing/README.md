@@ -73,14 +73,31 @@ built directly through the ORM can store a raw, uncited value, and that one row 
 
 | Field | Owner |
 |---|---|
-| `registry_id` · `legal_name` · `dba_name` | `search_registry` |
-| `address` · `phone` · `website` | `verify_business` |
+| `registry_id` · `legal_name` · `dba_name` · `address` · `phone` | `search_registry` |
+| `website` · `business_check` | `verify_business` |
 
 `resolve_owner`, `classify_rollup` and `cluster_routes` own none yet. T6's owner fields add their rows.
 
+**D13 moved address and phone to the registry** (2026-10-09). Google Places is a check, never a
+source: its terms forbid storing Places content, so the census copy is the one we keep and nothing
+replaces it. The website starts as the census email domain and a web search replaces it.
+
+## Verified is a field, not a source
+
+**Owning a field is not verifying it.** A Places check stores only the place ID, in `business_check`
+(cited to Places, `retrieved_at` = when it ran). `CandidateFields.has_verified_address()` is the rule
+T8 clusters on: an address **and** a check that found the business. The address itself stays the
+census copy. "Verified" means Places found the business from the census name and address, not that
+a second address matched (D13, option A).
+
+**The D13 guard.** `CandidateFields` refuses any other field cited to a Google Maps URL
+(`places.googleapis.com`, `maps.googleapis.com`, `maps.google.com`, `google.com/maps`). Copying Places
+content into a candidate fails validation, so it can never reach HubSpot. Google *search* results are
+not Maps content and are allowed.
+
 - The **owning** stage overwrites its own field. A retried stage re-decides its own fact.
 - **Any other** stage only *fills* a field that is empty. It never replaces a stored citation, so a
-  retried registry stage cannot downgrade a Places-verified phone.
+  retried registry stage cannot put its email-domain guess back over a searched website.
 - A field the incoming write does not carry **keeps its citation**. Absent fields are dumped as absent
   keys (`exclude_none=True`), never as JSON `null`, and that is what makes the merge safe.
 - In SQL the stored value becomes `fill || existing || owned`: last key wins, so owned fields beat what

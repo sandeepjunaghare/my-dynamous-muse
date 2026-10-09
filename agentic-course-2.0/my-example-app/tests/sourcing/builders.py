@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.manifests.repository import ManifestRepository
 from app.manifests.schemas import IcpBand
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
-from app.sourcing.schemas import CandidateFields, PostalAddress, SourcingBrief
+from app.sourcing.schemas import CandidateFields, PlaceCheck, PostalAddress, SourcingBrief
 from app.sourcing.stages import PipelineStage
 from tests.manifests.builders import a_body, a_vertical
 
@@ -16,12 +16,15 @@ RETRIEVED_AT = datetime(2026, 10, 1, 14, 30, tzinfo=UTC)
 CENSUS_URL = "https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx"
 QCMOBILE_URL = "https://mobile.fmcsa.dot.gov/qc/services/carriers/1234567"
 PLACES_URL = "https://places.googleapis.com/v1/places/ChIJ-acme-logistics"
+"""Where a business check is cited. Under D13 nothing else may cite Google Places."""
+SEARCH_RESULT_URL = "https://www.acmefreight.test/contact"
+"""A web-search hit, the D13 source for a website."""
 
 REGISTRY = PipelineStage.search_registry
 """The stage that owns identity fields; what every plain sourcing write in these suites is."""
 
 VERIFY = PipelineStage.verify_business
-"""The stage that owns contact fields: address, phone, website."""
+"""The stage that owns the business check and the website (D13)."""
 
 
 def sourced[T](
@@ -38,9 +41,14 @@ def sourced[T](
     )
 
 
-def verified[T](value: T) -> ProvenancedValue[T]:
-    """Cite a value the way ``verify_business`` would, from Google Places."""
-    return sourced(value, PLACES_URL, RetrievalMethod.web_lookup)
+def looked_up[T](value: T) -> ProvenancedValue[T]:
+    """Cite a value the way ``verify_business`` would from a web search (D13: never from Places)."""
+    return sourced(value, SEARCH_RESULT_URL, RetrievalMethod.web_lookup)
+
+
+def place_checked(place_id: str = "ChIJ-acme-logistics") -> ProvenancedValue[PlaceCheck]:
+    """The one thing ``verify_business`` may keep from Google Places: the place ID (D13)."""
+    return sourced(PlaceCheck(place_id=place_id), PLACES_URL, RetrievalMethod.web_lookup)
 
 
 def a_brief(vertical: str | None = None) -> SourcingBrief:

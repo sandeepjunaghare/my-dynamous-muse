@@ -171,9 +171,10 @@ That keeps M4 honest — there is no shadow CRM — while giving the system a me
   website would have been Enterprise ($35 per 1,000, 1,000 free) and are no longer needed. Runs after the free
   filters and before the judgment call. Capped at 500 calls a run as a circuit breaker, not a budget target
   (see *Cost*).
-  **Still open (T6):** whether the stored verdict ("the census address matches") is our own conclusion or
-  derived Google content. It is defensible as the former. The zero-ambiguity fallback stores only the place ID
-  and a timestamp, so "verified" means "a place ID was found".
+  **Decided 2026-10-09 (option A):** store **only the place ID** and when it was checked, in
+  `CandidateFields.business_check`. "Verified" means Places found the business from the census name and
+  address. No verdict derived from Google content is stored. Address and phone are owned by the registry
+  stage, and `CandidateFields` refuses any other field cited to Google Maps.
 - **US Census Geocoder** — free, public domain, no key. Turns the census address into the coordinates T8
   clusters on. Licensed for storage, unlike Places.
 - **Secrets** — `.env`, never committed. The template's existing posture; nothing new.

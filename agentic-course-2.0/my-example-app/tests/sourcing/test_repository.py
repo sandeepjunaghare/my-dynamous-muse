@@ -32,12 +32,14 @@ from tests.sourcing.builders import (
     PLACES_URL,
     QCMOBILE_URL,
     REGISTRY,
+    SEARCH_RESULT_URL,
     VERIFY,
     a_brief,
     a_candidate,
     an_active_manifest,
+    looked_up,
+    place_checked,
     sourced,
-    verified,
 )
 
 pytestmark = requires_db
@@ -174,7 +176,7 @@ class TestProvenanceRoundTrip:
         assert loaded.phone is None
         assert is_promotable(loaded.phone) is False
         assert is_promotable(loaded.legal_name) is True
-        assert loaded.unprovenanced_fields() == ("phone", "website")
+        assert loaded.unprovenanced_fields() == ("phone", "website", "business_check")
 
     async def test_absent_fields_are_absent_keys_not_nulls(self, db_session: AsyncSession) -> None:
         """What lets the upsert merge without erasing — see ``upsert_candidate``."""
@@ -310,58 +312,84 @@ class TestUpsert:
 
 
 class TestFieldOwnership:
-    """Each field has one owning stage; any other stage may fill it, never overwrite a citation."""
+    """Each field has one owning stage; any other stage may fill it, never overwrite a citation.
 
-    async def test_a_retried_registry_stage_cannot_overwrite_a_verified_phone(
+    D13 moved the contact fields to the registry: the census is their source, and Places content is
+    never stored, so verification has nothing to replace them with.
+    """
+
+    async def test_verification_cannot_overwrite_the_census_phone(
         self, db_session: AsyncSession
     ) -> None:
-        """The review's case: a registry retry after verification must not downgrade the phone."""
-        repository = SourcingRepository(db_session)
-        run = await _a_run(db_session)
-        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
-        await repository.upsert_candidate(
-            run.id,
-            CandidateFields(registry_id=sourced("1234567"), phone=verified("+1-817-555-0199")),
-            stage=VERIFY,
-        )
-
-        retried = await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
-
-        fields = CandidateFields.model_validate(retried.fields)
-        assert fields.phone is not None
-        assert fields.phone.value == "+1-817-555-0199"
-        assert fields.phone.source_url == PLACES_URL
-        assert fields.phone.retrieval_method is RetrievalMethod.web_lookup
-
-    async def test_the_owning_stage_overwrites_the_registrys_placeholder(
-        self, db_session: AsyncSession
-    ) -> None:
-        """The registry's phone fills the empty field; verification, its owner, replaces it."""
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
         await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
         merged = await repository.upsert_candidate(
             run.id,
-            CandidateFields(registry_id=sourced("1234567"), phone=verified("+1-817-555-0199")),
+            CandidateFields(registry_id=sourced("1234567"), phone=looked_up("+1-817-555-0199")),
             stage=VERIFY,
         )
 
         fields = CandidateFields.model_validate(merged.fields)
         assert fields.phone is not None
-        assert fields.phone.source_url == PLACES_URL
+        assert fields.phone.value == "+1-817-555-0100"
+        assert fields.phone.source_url == QCMOBILE_URL
+
+    async def test_a_retried_registry_stage_re_decides_its_own_phone(
+        self, db_session: AsyncSession
+    ) -> None:
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+
+        retried = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), phone=sourced("+1-817-555-0142")),
+            stage=REGISTRY,
+        )
+
+        fields = CandidateFields.model_validate(retried.fields)
+        assert fields.phone is not None
+        assert fields.phone.value == "+1-817-555-0142"
+
+    async def test_a_web_search_replaces_the_registrys_website_guess_and_keeps_it(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The census email domain fills the website; verification, its owner, replaces it, and a
+        registry retry cannot put the guess back."""
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        guess = CandidateFields(
+            registry_id=sourced("1234567"), website=sourced("https://acme.test")
+        )
+        await repository.upsert_candidate(run.id, guess, stage=REGISTRY)
+        await repository.upsert_candidate(
+            run.id,
+            CandidateFields(
+                registry_id=sourced("1234567"), website=looked_up("https://acmefreight.test")
+            ),
+            stage=VERIFY,
+        )
+
+        retried = await repository.upsert_candidate(run.id, guess, stage=REGISTRY)
+
+        fields = CandidateFields.model_validate(retried.fields)
+        assert fields.website is not None
+        assert fields.website.value == "https://acmefreight.test"
+        assert fields.website.source_url == SEARCH_RESULT_URL
 
     async def test_a_non_owning_stage_cannot_overwrite_the_legal_name(
         self, db_session: AsyncSession
     ) -> None:
-        """Places' display name is not a legal name: the registry's citation stands."""
+        """A web search's name is not a legal name: the registry's citation stands."""
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
         await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
         merged = await repository.upsert_candidate(
             run.id,
-            CandidateFields(registry_id=sourced("1234567"), legal_name=verified("Acme (Places)")),
+            CandidateFields(registry_id=sourced("1234567"), legal_name=looked_up("Acme (web)")),
             stage=VERIFY,
         )
 
@@ -378,7 +406,7 @@ class TestFieldOwnership:
 
         merged = await repository.upsert_candidate(
             run.id,
-            CandidateFields(registry_id=sourced("1234567"), website=verified("https://acme.test")),
+            CandidateFields(registry_id=sourced("1234567"), website=sourced("https://acme.test")),
             stage=REGISTRY,
         )
 
@@ -386,6 +414,27 @@ class TestFieldOwnership:
         assert fields.website is not None
         assert fields.website.value == "https://acme.test"
         assert fields.phone is None
+
+    async def test_the_business_check_merges_onto_the_census_record(
+        self, db_session: AsyncSession
+    ) -> None:
+        """T6 writes only the check; T8 then reads a verified address off the merged candidate."""
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+
+        merged = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), business_check=place_checked()),
+            stage=VERIFY,
+        )
+
+        fields = CandidateFields.model_validate(merged.fields)
+        assert fields.has_verified_address() is True
+        assert fields.business_check is not None
+        assert fields.business_check.source_url == PLACES_URL
+        assert fields.address is not None
+        assert fields.address.retrieval_method is RetrievalMethod.bulk_file, "still the census copy"
 
 
 class TestDatabaseInvariants:
