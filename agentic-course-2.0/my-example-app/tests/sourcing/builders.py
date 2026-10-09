@@ -9,11 +9,19 @@ from app.manifests.repository import ManifestRepository
 from app.manifests.schemas import IcpBand
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
 from app.sourcing.schemas import CandidateFields, PostalAddress, SourcingBrief
+from app.sourcing.stages import PipelineStage
 from tests.manifests.builders import a_body, a_vertical
 
 RETRIEVED_AT = datetime(2026, 10, 1, 14, 30, tzinfo=UTC)
 CENSUS_URL = "https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx"
 QCMOBILE_URL = "https://mobile.fmcsa.dot.gov/qc/services/carriers/1234567"
+PLACES_URL = "https://places.googleapis.com/v1/places/ChIJ-acme-logistics"
+
+REGISTRY = PipelineStage.search_registry
+"""The stage that owns identity fields; what every plain sourcing write in these suites is."""
+
+VERIFY = PipelineStage.verify_business
+"""The stage that owns contact fields: address, phone, website."""
 
 
 def sourced[T](
@@ -28,6 +36,11 @@ def sourced[T](
         retrieved_at=RETRIEVED_AT,
         retrieval_method=method,
     )
+
+
+def verified[T](value: T) -> ProvenancedValue[T]:
+    """Cite a value the way ``verify_business`` would, from Google Places."""
+    return sourced(value, PLACES_URL, RetrievalMethod.web_lookup)
 
 
 def a_brief(vertical: str | None = None) -> SourcingBrief:

@@ -8,8 +8,8 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import func, literal, select
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -21,6 +21,7 @@ from app.sourcing.schemas import (
     RunStatus,
     SourcingBrief,
 )
+from app.sourcing.stages import PipelineStage, owns
 
 logger = get_logger(__name__)
 
@@ -82,31 +83,49 @@ class SourcingRepository:
             total_usd=str(cost.total_usd()),
         )
 
-    async def upsert_candidate(self, run_id: UUID, fields: CandidateFields) -> Candidate:
+    async def upsert_candidate(
+        self,
+        run_id: UUID,
+        fields: CandidateFields,
+        *,
+        stage: PipelineStage,
+    ) -> Candidate:
         """Insert a candidate, or merge into the one this run already holds for the registry id.
 
-        **Merge, not replace.** The stored ``fields`` is ``existing || incoming``: a field the
-        incoming write carries overwrites the stored one, and a field it does not carry keeps its
-        citation.
-        That works only because absent fields are dumped as absent keys (``exclude_none=True``) —
-        dumped as JSON ``null`` they would erase every citation the incoming write did not repeat.
-        The same input twice therefore leaves the same row with the same content.
+        **Merge by field ownership** (``app/sourcing/stages.py``). On conflict the stored ``fields``
+        becomes ``fill || existing || owned``:
+
+        - ``owned``: incoming fields that ``stage`` owns. They go last, so they win, and a stage
+          may overwrite its own fact.
+        - ``existing``: what is stored now. It beats every field ``stage`` does not own, so a
+          citation another stage wrote is never replaced.
+        - ``fill``: incoming fields ``stage`` does not own. They go first, so they land only
+          where ``existing`` has no key, which fills an empty field and nothing else.
+
+        A field the incoming write does not carry keeps its citation whoever owns it. That works
+        only because absent fields are dumped as absent keys (``exclude_none=True``); dumped as
+        JSON ``null`` they would erase it. The same input twice therefore leaves the same row with
+        the same content.
+
+        ``stage`` is required and keyword-only, so a caller cannot forget to say who is writing.
 
         ``populate_existing`` matters on the second call: without it the session's identity map
         hands back the object it already holds for that primary key, stale, instead of the row the
         database just wrote.
         """
+        incoming = fields.model_dump(mode="json", exclude_none=True)
+        owned = {name: value for name, value in incoming.items() if owns(stage, name)}
+        fill = {name: value for name, value in incoming.items() if not owns(stage, name)}
+
         inserting = insert(Candidate).values(
             run_id=run_id,
             registry_id=fields.registry_id.value,
-            fields=fields.model_dump(mode="json", exclude_none=True),
+            fields=incoming,
         )
+        merged = literal(fill, JSONB).op("||")(Candidate.fields).op("||")(literal(owned, JSONB))
         upserting = inserting.on_conflict_do_update(
             constraint="uq_candidate_run_registry_id",
-            set_={
-                "fields": Candidate.fields.op("||")(inserting.excluded["fields"]),
-                "updated_at": func.now(),
-            },
+            set_={"fields": merged, "updated_at": func.now()},
         ).returning(Candidate)
 
         result = await self._session.scalars(
@@ -119,7 +138,10 @@ class SourcingRepository:
             run_id=str(run_id),
             candidate_id=str(candidate.id),
             registry_id=candidate.registry_id,
-            unprovenanced_fields=list(fields.unprovenanced_fields()),
+            stage=stage.value,
+            owned_fields=sorted(owned),
+            fill_only_fields=sorted(fill),
+            incoming_unprovenanced_fields=list(fields.unprovenanced_fields()),
         )
         return candidate
 

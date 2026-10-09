@@ -16,11 +16,20 @@ from app.manifests.exceptions import ActiveManifestNotFoundError
 from app.manifests.repository import ManifestRepository
 from app.shared.provenance import is_promotable
 from app.sourcing.exceptions import SourcingRunNotFoundError, SourcingRunNotRunningError
-from app.sourcing.schemas import RunOutcome, RunStatus, SourcingRunResponse
+from app.sourcing.schemas import CandidateFields, RunOutcome, RunStatus, SourcingRunResponse
 from app.sourcing.service import SourcingService
 from tests.conftest import requires_db
 from tests.manifests.builders import a_body, a_vertical
-from tests.sourcing.builders import a_brief, a_candidate, an_active_manifest
+from tests.sourcing.builders import (
+    PLACES_URL,
+    REGISTRY,
+    VERIFY,
+    a_brief,
+    a_candidate,
+    an_active_manifest,
+    sourced,
+    verified,
+)
 
 pytestmark = requires_db
 
@@ -60,7 +69,9 @@ class TestStartRun:
 class TestRecordCandidates:
     async def test_an_unknown_run_is_refused(self, db_session: AsyncSession) -> None:
         with pytest.raises(SourcingRunNotFoundError):
-            await SourcingService(db_session).record_candidates(uuid4(), [a_candidate()])
+            await SourcingService(db_session).record_candidates(
+                uuid4(), [a_candidate()], stage=REGISTRY
+            )
 
     async def test_a_finished_run_is_refused(self, db_session: AsyncSession) -> None:
         service = SourcingService(db_session)
@@ -68,7 +79,7 @@ class TestRecordCandidates:
         await service.finish_run(run.id, RunOutcome.completed, counts={}, cost=RunCost())
 
         with pytest.raises(SourcingRunNotRunningError) as refused:
-            await service.record_candidates(run.id, [a_candidate()])
+            await service.record_candidates(run.id, [a_candidate()], stage=REGISTRY)
         assert refused.value.status == RunStatus.completed.value
 
     async def test_recording_twice_is_idempotent(self, db_session: AsyncSession) -> None:
@@ -76,8 +87,8 @@ class TestRecordCandidates:
         run = await _started(db_session)
         batch = [a_candidate("200"), a_candidate("100")]
 
-        first = await service.record_candidates(run.id, batch)
-        second = await service.record_candidates(run.id, batch)
+        first = await service.record_candidates(run.id, batch, stage=REGISTRY)
+        second = await service.record_candidates(run.id, batch, stage=REGISTRY)
 
         assert [c.id for c in first] == [c.id for c in second]
         assert [c.fields for c in first] == [c.fields for c in second]
@@ -89,7 +100,7 @@ class TestRecordCandidates:
         service = SourcingService(db_session)
         run = await _started(db_session)
 
-        await service.record_candidates(run.id, [a_candidate(with_phone=False)])
+        await service.record_candidates(run.id, [a_candidate(with_phone=False)], stage=REGISTRY)
         db_session.expunge_all()
         [candidate] = await service.list_candidates(run.id)
 
@@ -97,6 +108,22 @@ class TestRecordCandidates:
         assert is_promotable(candidate.fields.phone) is False
         assert is_promotable(candidate.fields.legal_name) is True
         assert "phone" in candidate.fields.unprovenanced_fields()
+
+    async def test_the_writing_stage_reaches_the_merge(self, db_session: AsyncSession) -> None:
+        """Field ownership holds through the service: a registry retry keeps the verified phone."""
+        service = SourcingService(db_session)
+        run = await _started(db_session)
+        await service.record_candidates(run.id, [a_candidate()], stage=REGISTRY)
+        await service.record_candidates(
+            run.id,
+            [CandidateFields(registry_id=sourced("1234567"), phone=verified("+1-817-555-0199"))],
+            stage=VERIFY,
+        )
+
+        [retried] = await service.record_candidates(run.id, [a_candidate()], stage=REGISTRY)
+
+        assert retried.fields.phone is not None
+        assert retried.fields.phone.source_url == PLACES_URL
 
     async def test_listing_an_unknown_run_is_refused(self, db_session: AsyncSession) -> None:
         with pytest.raises(SourcingRunNotFoundError):

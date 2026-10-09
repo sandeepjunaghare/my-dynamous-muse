@@ -26,7 +26,16 @@ from app.sourcing.schemas import (
     SourcingRunResponse,
 )
 from tests.conftest import requires_db
-from tests.sourcing.builders import a_brief, a_candidate, an_active_manifest, sourced
+from tests.sourcing.builders import (
+    PLACES_URL,
+    REGISTRY,
+    VERIFY,
+    a_brief,
+    a_candidate,
+    an_active_manifest,
+    sourced,
+    verified,
+)
 
 pytestmark = requires_db
 
@@ -110,7 +119,9 @@ class TestProvenanceRoundTrip:
         run = await _a_run(db_session)
         original = a_candidate("7654321")
 
-        stored = await SourcingRepository(db_session).upsert_candidate(run.id, original)
+        stored = await SourcingRepository(db_session).upsert_candidate(
+            run.id, original, stage=REGISTRY
+        )
         loaded = await _reload(db_session, stored.id)
 
         assert loaded == original
@@ -129,7 +140,7 @@ class TestProvenanceRoundTrip:
         run = await _a_run(db_session)
 
         stored = await SourcingRepository(db_session).upsert_candidate(
-            run.id, a_candidate(with_phone=False)
+            run.id, a_candidate(with_phone=False), stage=REGISTRY
         )
         loaded = await _reload(db_session, stored.id)
 
@@ -142,7 +153,7 @@ class TestProvenanceRoundTrip:
         """What lets the upsert merge without erasing — see ``upsert_candidate``."""
         run = await _a_run(db_session)
         stored = await SourcingRepository(db_session).upsert_candidate(
-            run.id, a_candidate(with_phone=False)
+            run.id, a_candidate(with_phone=False), stage=REGISTRY
         )
 
         keys: ScalarResult[str] = (
@@ -159,9 +170,9 @@ class TestUpsert:
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
 
-        first = await repository.upsert_candidate(run.id, a_candidate())
+        first = await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
         first_id, first_fields = first.id, dict(first.fields)
-        second = await repository.upsert_candidate(run.id, a_candidate())
+        second = await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
         assert second.id == first_id
         assert second.fields == first_fields
@@ -172,9 +183,11 @@ class TestUpsert:
     ) -> None:
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
-        await repository.upsert_candidate(run.id, a_candidate())
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
-        merged = await repository.upsert_candidate(run.id, a_candidate(with_phone=False))
+        merged = await repository.upsert_candidate(
+            run.id, a_candidate(with_phone=False), stage=REGISTRY
+        )
 
         fields = CandidateFields.model_validate(merged.fields)
         assert fields.phone is not None
@@ -185,12 +198,12 @@ class TestUpsert:
     ) -> None:
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
-        await repository.upsert_candidate(run.id, a_candidate())
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
         renamed = CandidateFields(
             registry_id=sourced("1234567"), legal_name=sourced("Acme Renamed LLC")
         )
-        merged = await repository.upsert_candidate(run.id, renamed)
+        merged = await repository.upsert_candidate(run.id, renamed, stage=REGISTRY)
 
         fields = CandidateFields.model_validate(merged.fields)
         assert fields.legal_name is not None
@@ -207,12 +220,12 @@ class TestUpsert:
         """
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
-        held = await repository.upsert_candidate(run.id, a_candidate())
+        held = await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
         renamed = CandidateFields(
             registry_id=sourced("1234567"), legal_name=sourced("Acme Renamed LLC")
         )
-        merged = await repository.upsert_candidate(run.id, renamed)
+        merged = await repository.upsert_candidate(run.id, renamed, stage=REGISTRY)
 
         assert merged is held
         fields = CandidateFields.model_validate(held.fields)
@@ -227,8 +240,8 @@ class TestUpsert:
         first_run = await _a_run(db_session)
         second_run = await _a_run(db_session)
 
-        first = await repository.upsert_candidate(first_run.id, a_candidate())
-        second = await repository.upsert_candidate(second_run.id, a_candidate())
+        first = await repository.upsert_candidate(first_run.id, a_candidate(), stage=REGISTRY)
+        second = await repository.upsert_candidate(second_run.id, a_candidate(), stage=REGISTRY)
 
         assert first.id != second.id
 
@@ -238,7 +251,7 @@ class TestUpsert:
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
         for registry_id in ("300", "100", "200"):
-            await repository.upsert_candidate(run.id, a_candidate(registry_id))
+            await repository.upsert_candidate(run.id, a_candidate(registry_id), stage=REGISTRY)
 
         listed = await repository.list_candidates(run.id)
 
@@ -249,8 +262,8 @@ class TestUpsert:
         repository = SourcingRepository(db_session)
         run = await _a_run(db_session)
 
-        first = await repository.upsert_candidate(run.id, a_candidate("555"))
-        second = await repository.upsert_candidate(run.id, a_candidate(" 555 "))
+        first = await repository.upsert_candidate(run.id, a_candidate("555"), stage=REGISTRY)
+        second = await repository.upsert_candidate(run.id, a_candidate(" 555 "), stage=REGISTRY)
 
         assert second.id == first.id
         assert second.registry_id == "555"
@@ -263,10 +276,89 @@ class TestUpsert:
         run = await _a_run(db_session)
 
         stored = await SourcingRepository(db_session).upsert_candidate(
-            run.id, a_candidate("9" * 128)
+            run.id, a_candidate("9" * 128), stage=REGISTRY
         )
 
         assert len(stored.registry_id) == 128
+
+
+class TestFieldOwnership:
+    """Each field has one owning stage; any other stage may fill it, never overwrite a citation."""
+
+    async def test_a_retried_registry_stage_cannot_overwrite_a_verified_phone(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The review's case: a registry retry after verification must not downgrade the phone."""
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+        await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), phone=verified("+1-817-555-0199")),
+            stage=VERIFY,
+        )
+
+        retried = await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+
+        fields = CandidateFields.model_validate(retried.fields)
+        assert fields.phone is not None
+        assert fields.phone.value == "+1-817-555-0199"
+        assert fields.phone.source_url == PLACES_URL
+        assert fields.phone.retrieval_method is RetrievalMethod.web_lookup
+
+    async def test_the_owning_stage_overwrites_the_registrys_placeholder(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The registry's phone fills the empty field; verification, its owner, replaces it."""
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+
+        merged = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), phone=verified("+1-817-555-0199")),
+            stage=VERIFY,
+        )
+
+        fields = CandidateFields.model_validate(merged.fields)
+        assert fields.phone is not None
+        assert fields.phone.source_url == PLACES_URL
+
+    async def test_a_non_owning_stage_cannot_overwrite_the_legal_name(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Places' display name is not a legal name: the registry's citation stands."""
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
+
+        merged = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), legal_name=verified("Acme (Places)")),
+            stage=VERIFY,
+        )
+
+        fields = CandidateFields.model_validate(merged.fields)
+        assert fields.legal_name is not None
+        assert fields.legal_name.value == "Acme Logistics 1234567 LLC"
+        assert fields.registry_id.retrieval_method is RetrievalMethod.bulk_file
+
+    async def test_a_non_owning_stage_fills_an_empty_field(self, db_session: AsyncSession) -> None:
+        """Filling is not overwriting: a field nobody has cited yet takes the first citation."""
+        repository = SourcingRepository(db_session)
+        run = await _a_run(db_session)
+        await repository.upsert_candidate(run.id, a_candidate(with_phone=False), stage=VERIFY)
+
+        merged = await repository.upsert_candidate(
+            run.id,
+            CandidateFields(registry_id=sourced("1234567"), website=verified("https://acme.test")),
+            stage=REGISTRY,
+        )
+
+        fields = CandidateFields.model_validate(merged.fields)
+        assert fields.website is not None
+        assert fields.website.value == "https://acme.test"
+        assert fields.phone is None
 
 
 class TestDatabaseInvariants:
@@ -274,7 +366,7 @@ class TestDatabaseInvariants:
         self, db_session: AsyncSession
     ) -> None:
         run = await _a_run(db_session)
-        await SourcingRepository(db_session).upsert_candidate(run.id, a_candidate())
+        await SourcingRepository(db_session).upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
         db_session.add(
             Candidate(
@@ -385,7 +477,7 @@ class TestDatabaseInvariants:
     async def test_candidates_are_stored_in_their_own_table(self, db_session: AsyncSession) -> None:
         """A smoke check that the ORM and the migration agree on the table name."""
         run = await _a_run(db_session)
-        await SourcingRepository(db_session).upsert_candidate(run.id, a_candidate())
+        await SourcingRepository(db_session).upsert_candidate(run.id, a_candidate(), stage=REGISTRY)
 
         count = (
             await db_session.execute(select(Candidate.id).where(Candidate.run_id == run.id))

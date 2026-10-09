@@ -31,6 +31,7 @@ from app.sourcing.schemas import (
     SourcingBrief,
     SourcingRunResponse,
 )
+from app.sourcing.stages import PipelineStage
 
 logger = get_logger(__name__)
 
@@ -72,8 +73,14 @@ class SourcingService:
         self,
         run_id: UUID,
         candidates: Sequence[CandidateFields],
+        *,
+        stage: PipelineStage,
     ) -> list[CandidateResponse]:
-        """Upsert candidates into a running run, keyed on ``(run, registry id)``.
+        """Upsert candidates into a running run, keyed on ``(run, registry id)``, as ``stage``.
+
+        ``stage`` is the pipeline stage doing the writing. It may overwrite the fields it owns and
+        only fill the rest (see ``app/sourcing/stages.py``), so a retried stage cannot replace
+        another stage's citation. It is required: T5 to T8 each pass their own.
 
         Idempotent: recording the same candidates twice leaves the same rows with the same content.
         A candidate with uncited fields is stored as readily as a fully cited one — the workbench
@@ -82,13 +89,15 @@ class SourcingService:
         run = await self._require_running(run_id, action="record_candidates")
 
         recorded = [
-            await self._repository.upsert_candidate(run.id, fields) for fields in candidates
+            await self._repository.upsert_candidate(run.id, fields, stage=stage)
+            for fields in candidates
         ]
         await self._session.commit()
 
         logger.info(
             "sourcing.service.candidates_recorded",
             run_id=str(run_id),
+            stage=stage.value,
             count=len(recorded),
         )
         return [CandidateResponse.model_validate(candidate) for candidate in recorded]

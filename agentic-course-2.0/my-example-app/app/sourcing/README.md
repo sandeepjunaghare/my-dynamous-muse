@@ -56,16 +56,37 @@ candidate.fields.unprovenanced_fields()  # ("phone", "website")
 T9 decides which fields promotion requires. This slice only reports which fields are missing.
 
 `registry_id` is stored twice, as the key column and as the cited `fields.registry_id`.
-`ck_candidate_registry_id_is_cited` stops the two from ever disagreeing.
+`ck_candidate_registry_id_is_cited` stops the two from ever disagreeing, and refuses a row whose
+registry id is missing, JSON `null` or uncited (no source URL, retrieval time or method).
 
-## The upsert: keyed on `(run_id, registry_id)`, and it merges
+**The rest of the guarantee is held by types, not by the database.** Only `registry_id` is checked in
+SQL. Write candidates through `SourcingService` / `SourcingRepository` and nothing else. A `Candidate`
+built directly through the ORM can store a raw, uncited value, and that one row then makes
+`list_candidates` raise `ValidationError` for the whole run.
 
-`upsert_candidate` is `INSERT … ON CONFLICT (run_id, registry_id) DO UPDATE SET fields = existing ||
-incoming`.
+## The upsert: keyed on `(run_id, registry_id)`, merged by field ownership
 
-- A field the incoming write carries **overwrites** the stored one.
-- A field it does not carry **keeps its citation**. Absent fields are dumped as absent keys
-  (`exclude_none=True`), never as JSON `null`, and that is what makes the merge safe.
+`upsert_candidate(run_id, fields, *, stage)` is `INSERT … ON CONFLICT (run_id, registry_id) DO UPDATE`.
+`stage` is required, and names the pipeline stage doing the writing.
+
+**Each field has exactly one owning stage** (`stages.py`, `FIELD_OWNERS`):
+
+| Field | Owner |
+|---|---|
+| `registry_id` · `legal_name` · `dba_name` | `search_registry` |
+| `address` · `phone` · `website` | `verify_business` |
+
+`resolve_owner`, `classify_rollup` and `cluster_routes` own none yet. T6's owner fields add their rows.
+
+- The **owning** stage overwrites its own field. A retried stage re-decides its own fact.
+- **Any other** stage only *fills* a field that is empty. It never replaces a stored citation, so a
+  retried registry stage cannot downgrade a Places-verified phone.
+- A field the incoming write does not carry **keeps its citation**. Absent fields are dumped as absent
+  keys (`exclude_none=True`), never as JSON `null`, and that is what makes the merge safe.
+- In SQL the stored value becomes `fill || existing || owned`: last key wins, so owned fields beat what
+  is stored, and what is stored beats fill-only fields.
+- The registry id is stripped and capped at 128 characters by `CandidateFields`, so `" 555 "` and
+  `"555"` are one row, and an over-long id fails validation before the batch starts.
 - The same input twice leaves the same row with the same content.
 - The same registry id in two runs gives two rows: each run keeps its own record of what it saw.
 - `populate_existing=True` refreshes an object the session already holds. Without it, the second
