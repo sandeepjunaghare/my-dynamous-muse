@@ -7,7 +7,7 @@ cited, keyed for idempotent upsert on ``(run_id, registry_id)``.
 Hand-written to match ``app/sourcing/models.py`` exactly, so ``alembic check`` stays clean. Two
 CHECKs carry invariants the service also relies on, enforced here so a slice nobody has written yet
 cannot write around them: a run's finish time agrees with its status, and a candidate's key column
-agrees with its cited registry id.
+agrees with its cited registry id, and that citation is complete.
 
 Revision ID: 0004_sourcing
 Revises: 0003_seed_freight_and_fire
@@ -98,8 +98,17 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.UniqueConstraint("run_id", "registry_id", name="uq_candidate_run_registry_id"),
+        # Null-safe: a CHECK passes on NULL, so a missing or JSON-null citation must be `false`,
+        # not NULL. Kept textually identical to ``app/sourcing/models.py``.
         sa.CheckConstraint(
-            "registry_id = (fields -> 'registry_id' ->> 'value')",
+            "coalesce("
+            "jsonb_typeof(fields -> 'registry_id' -> 'value') = 'string'"
+            " and registry_id = (fields -> 'registry_id' ->> 'value')"
+            " and jsonb_typeof(fields -> 'registry_id' -> 'source_url') = 'string'"
+            " and btrim(fields -> 'registry_id' ->> 'source_url') <> ''"
+            " and jsonb_typeof(fields -> 'registry_id' -> 'retrieved_at') = 'string'"
+            " and jsonb_typeof(fields -> 'registry_id' -> 'retrieval_method') = 'string'"
+            ", false)",
             name="ck_candidate_registry_id_is_cited",
         ),
     )

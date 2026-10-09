@@ -96,7 +96,8 @@ class Candidate(Base):
     ``registry_id`` is stored twice on purpose: as a column, because it is half the upsert key; and
     as the cited ``fields.registry_id``, because it is a field like any other and a registry id
     nobody can cite is E10. ``ck_candidate_registry_id_is_cited`` makes the two impossible to
-    disagree, so the duplication costs nothing.
+    disagree, and refuses a row whose registry id is missing or uncited, so the duplication costs
+    nothing.
     """
 
     __tablename__ = "candidate"
@@ -126,8 +127,20 @@ class Candidate(Base):
 
     __table_args__ = (
         UniqueConstraint("run_id", "registry_id", name="uq_candidate_run_registry_id"),
+        # Null-safe on purpose. A comparison against a missing key is NULL, and a CHECK *passes*
+        # on NULL — so without the `coalesce(…, false)` a row with no citation at all, or one whose
+        # citation is JSON `null`, would satisfy a constraint named for refusing exactly that.
+        # Checked: the value is a string equal to the key column, and the citation is complete —
+        # a non-blank source URL, a retrieval time and a method.
         CheckConstraint(
-            "registry_id = (fields -> 'registry_id' ->> 'value')",
+            "coalesce("
+            "jsonb_typeof(fields -> 'registry_id' -> 'value') = 'string'"
+            " and registry_id = (fields -> 'registry_id' ->> 'value')"
+            " and jsonb_typeof(fields -> 'registry_id' -> 'source_url') = 'string'"
+            " and btrim(fields -> 'registry_id' ->> 'source_url') <> ''"
+            " and jsonb_typeof(fields -> 'registry_id' -> 'retrieved_at') = 'string'"
+            " and jsonb_typeof(fields -> 'registry_id' -> 'retrieval_method') = 'string'"
+            ", false)",
             name="ck_candidate_registry_id_is_cited",
         ),
     )

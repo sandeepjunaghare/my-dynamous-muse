@@ -30,6 +30,15 @@ from tests.sourcing.builders import a_brief, a_candidate, an_active_manifest, so
 
 pytestmark = requires_db
 
+_CITED_ID: dict[str, object] = sourced("1234567").model_dump(mode="json")
+"""A well-formed ``fields.registry_id``, as the typed API writes it."""
+
+_CITATION: dict[str, object] = {k: v for k, v in _CITED_ID.items() if k != "value"}
+
+
+def _without(payload: dict[str, object], key: str) -> dict[str, object]:
+    return {k: v for k, v in payload.items() if k != key}
+
 
 async def _a_run(session: AsyncSession) -> SourcingRun:
     manifest_id, vertical = await an_active_manifest(session)
@@ -263,6 +272,45 @@ class TestDatabaseInvariants:
                 fields=a_candidate("1234567").model_dump(mode="json", exclude_none=True),
             )
         )
+        with pytest.raises(IntegrityError, match="ck_candidate_registry_id_is_cited"):
+            await db_session.flush()
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            pytest.param({}, id="no registry_id key"),
+            pytest.param({"registry_id": None}, id="registry_id is json null"),
+            pytest.param({"registry_id": {"value": "1234567"}}, id="value without any citation"),
+            pytest.param({"registry_id": {**_CITATION, "value": None}}, id="value is json null"),
+            pytest.param(
+                {"registry_id": {**_CITATION, "value": 1234567}}, id="value is not a string"
+            ),
+            pytest.param({"registry_id": _without(_CITED_ID, "source_url")}, id="no source_url"),
+            pytest.param(
+                {"registry_id": {**_CITED_ID, "source_url": None}}, id="source_url is json null"
+            ),
+            pytest.param(
+                {"registry_id": {**_CITED_ID, "source_url": "  "}}, id="source_url is blank"
+            ),
+            pytest.param(
+                {"registry_id": _without(_CITED_ID, "retrieved_at")}, id="no retrieved_at"
+            ),
+            pytest.param(
+                {"registry_id": _without(_CITED_ID, "retrieval_method")}, id="no retrieval_method"
+            ),
+        ],
+    )
+    async def test_an_uncited_registry_id_is_refused(
+        self, db_session: AsyncSession, fields: dict[str, object]
+    ) -> None:
+        """The CHECK must refuse what it is named for — a registry id nobody can cite (E10).
+
+        A comparison against a missing key is NULL, and a CHECK passes on NULL, so each of these
+        rows was accepted before the constraint was made null-safe.
+        """
+        run = await _a_run(db_session)
+
+        db_session.add(Candidate(run_id=run.id, registry_id="1234567", fields=fields))
         with pytest.raises(IntegrityError, match="ck_candidate_registry_id_is_cited"):
             await db_session.flush()
 
