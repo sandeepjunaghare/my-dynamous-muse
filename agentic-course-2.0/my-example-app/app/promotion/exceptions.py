@@ -80,6 +80,17 @@ class HubSpotResponseError(HubSpotError):
         self.correlation_id = correlation_id
 
 
+class HubSpotResponseShapeError(HubSpotError):
+    """A 2xx whose body has a shape we do not recognise, where guessing would lose data.
+
+    Raised rather than read as "nothing there": an association walk that silently returned no ids
+    would make every logged call and note vanish from the cadence's evidence, and the machine would
+    nag about all of it. Not retried — the same request returns the same shape.
+    """
+
+    default_code: ClassVar[str] = "hubspot_response_shape_unrecognised"
+
+
 class HubSpotTransportError(HubSpotError):
     """The request never produced a response — a connect failure, a timeout, a broken socket.
 

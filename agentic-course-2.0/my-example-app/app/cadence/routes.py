@@ -1,7 +1,9 @@
 """HTTP access to the cadence: the sync trigger and the overdue view.
 
-``POST /cadence/sync`` is what an external scheduler hits — launchd now, cron on the VPS later,
-and T10's weekly run when it lands. There is no in-process scheduler, and none is coming.
+``POST /cadence/sync`` is what an external scheduler hits — **daily**, from launchd now and cron
+on the VPS later — separately from T10's weekly sourcing run. Voicemail and email are same-day
+touches, and their tasks only exist once a sync has seen the previous touch close, so a weekly
+sync would create them up to a week overdue. There is no in-process scheduler, and none is coming.
 
 **There is no enrol route, by design.** Enrolling an existing contact without T13's reconstruction
 would start it at touch one, and cycle position is never reset. Fresh prospects arrive through T9;
@@ -34,7 +36,9 @@ CadenceServiceDep = Annotated[CadenceService, Depends(get_cadence_service)]
 async def sync_cadence(service: CadenceServiceDep) -> SyncReport:
     """Read outcomes from HubSpot, advance every touch that is done, and report what is overdue.
 
-    Safe to call as often as wanted: a second sync with nothing new in HubSpot creates nothing.
+    Safe to call as often as wanted. A sync with nothing new in HubSpot creates nothing; one that
+    overlaps a running sync returns at once with ``skipped: true``; and a task create interrupted
+    last time is looked up by its key before anything is created again.
     """
     return await service.sync()
 

@@ -16,6 +16,7 @@ from app.cadence.machine import (
     local_date,
     next_position,
     task_for,
+    task_key,
 )
 from app.promotion.schemas import TaskType
 
@@ -110,7 +111,9 @@ class TestTasks:
 
     def test_call_and_voicemail_are_call_tasks_and_email_is_an_email_task(self) -> None:
         types = {
-            touch: task_for(CadencePosition(cycle=1, touch=touch), self.DUE, None).task_type
+            touch: task_for(
+                CadencePosition(cycle=1, touch=touch), self.DUE, None, key="k"
+            ).task_type
             for touch in Touch
         }
 
@@ -122,7 +125,7 @@ class TestTasks:
 
     def test_the_email_touch_is_a_draft_a_human_sends(self) -> None:
         """Spike 4: nothing sends. The task says so, and carries no generated copy (E16)."""
-        task = task_for(CadencePosition(cycle=2, touch=Touch.email), self.DUE, None)
+        task = task_for(CadencePosition(cycle=2, touch=Touch.email), self.DUE, None, key="k")
 
         assert "send by hand" in task.subject
         assert task.body is not None
@@ -131,14 +134,24 @@ class TestTasks:
 
     @pytest.mark.parametrize("touch", list(Touch))
     def test_every_touch_carries_the_never_lead_with_ai_rule(self, touch: Touch) -> None:
-        task = task_for(CadencePosition(cycle=1, touch=touch), self.DUE, None)
+        task = task_for(CadencePosition(cycle=1, touch=touch), self.DUE, None, key="k")
 
         assert task.body is not None
         assert "Never lead with AI" in task.body
 
     def test_the_subject_names_the_cycle_and_the_touch(self) -> None:
-        task = task_for(CadencePosition(cycle=3, touch=Touch.voicemail), self.DUE, "77001")
+        task = task_for(CadencePosition(cycle=3, touch=Touch.voicemail), self.DUE, "77001", key="k")
 
         assert task.subject == "Cadence 3/3 · voicemail"
         assert task.owner_id == "77001"
         assert task.due_at == self.DUE
+
+    def test_the_body_ends_with_the_idempotency_key(self) -> None:
+        position = CadencePosition(cycle=2, touch=Touch.voicemail)
+        key = task_key("400112233", position)
+
+        task = task_for(position, self.DUE, None, key=key)
+
+        assert key == "lpe-cadence:400112233:2-voicemail"
+        assert task.body is not None
+        assert task.body.endswith(f"Ref: {key}")

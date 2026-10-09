@@ -158,19 +158,35 @@ _BODIES: dict[Touch, str] = {
 }
 
 
-def task_for(position: CadencePosition, due_at: datetime, owner_id: str | None) -> TaskCreate:
+TASK_KEY_PREFIX = "lpe-cadence"
+
+
+def task_key(contact_id: str, position: CadencePosition) -> str:
+    """The idempotency key for one touch's task: ``lpe-cadence:400112233:2-voicemail``.
+
+    Deterministic because each (contact, position) gets at most one task, ever — cycle position
+    is never reset. It is written into the task body, which is how a sync interrupted mid-create
+    recognises the task HubSpot made but never confirmed.
+    """
+    return f"{TASK_KEY_PREFIX}:{contact_id}:{position.cycle}-{position.touch.value}"
+
+
+def task_for(
+    position: CadencePosition, due_at: datetime, owner_id: str | None, *, key: str
+) -> TaskCreate:
     """The HubSpot task for one touch — a request to a human, never an action taken.
 
     The email touch is an EMAIL-typed task, which in HubSpot is a reminder, not a message: creating
     it sends nothing. No outreach copy is generated here; who rewrites the opener is an open
-    question (PRD §9, E16), and a generated draft would answer it silently.
+    question (PRD §9, E16), and a generated draft would answer it silently. The body ends with
+    ``key`` (:func:`task_key`) so the task can be found again after an ambiguous create.
     """
     subject_touch = (
         "email draft (send by hand)" if position.touch is Touch.email else (position.touch.value)
     )
     return TaskCreate(
         subject=f"Cadence {position.cycle}/{CYCLES} · {subject_touch}",
-        body=_BODIES[position.touch],
+        body=f"{_BODIES[position.touch]}\n\nRef: {key}",
         due_at=due_at,
         task_type=_TASK_TYPES[position.touch],
         owner_id=owner_id,

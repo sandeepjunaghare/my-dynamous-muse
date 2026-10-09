@@ -207,3 +207,141 @@ class TestPlanAdvance:
 
         assert len(plan.steps) == 9
         assert plan.parks
+
+
+class TestPairingStopsAtTheTick:
+    """H2: a ticked task pairs only with matching activity logged **at or before** the tick.
+
+    Anything logged after the tick belongs to the next touch. A tick with nothing to pair with
+    must not move the anchor past activity nobody has credited yet.
+    """
+
+    def test_a_voicemail_logged_after_the_call_tick_closes_the_voicemail(self) -> None:
+        """Reviewer's row 1: call ticked 10:00, voicemail logged as a call 10:05, email 10:30.
+        Before the fix the call consumed the voicemail's call and the voicemail task re-fired."""
+        logged = [
+            activity(ActivityKind.call, later(5), "51230001"),
+            activity(ActivityKind.email, later(30), "71250001"),
+        ]
+
+        plan = plan_advance(CadencePosition.first(), ANCHOR, None, done(ANCHOR), logged, NOW)
+
+        assert [(s.position.touch, s.signal.source) for s in plan.steps] == [
+            (Touch.call, SignalSource.task_completed),
+            (Touch.voicemail, SignalSource.activity),
+            (Touch.email, SignalSource.activity),
+        ]
+        assert plan.next_position == CadencePosition(cycle=2, touch=Touch.call)
+
+    def test_notes_logged_after_the_call_tick_close_the_touches_they_were_for(self) -> None:
+        """Reviewer's row 2: call ticked 10:00, voicemail note 10:05, email note 10:30. Before
+        the fix the email task was created for an email already sent."""
+        logged = [
+            activity(ActivityKind.note, later(5), "61240001"),
+            activity(ActivityKind.note, later(30), "61240002"),
+        ]
+
+        plan = plan_advance(CadencePosition.first(), ANCHOR, None, done(ANCHOR), logged, NOW)
+
+        assert [step.position.touch for step in plan.steps] == [
+            Touch.call,
+            Touch.voicemail,
+            Touch.email,
+        ]
+        assert plan.next_position == CadencePosition(cycle=2, touch=Touch.call)
+        assert plan.anchor_ref == "notes:61240002"
+
+    def test_a_late_tick_does_not_skip_an_email_logged_before_it(self) -> None:
+        """Reviewer's row 3: the voicemail was never logged and its task was ticked on Thursday;
+        the email was logged on Monday. The email must still close the email touch."""
+        monday = ANCHOR + timedelta(hours=2)
+        thursday = ANCHOR + timedelta(days=3)
+        email = activity(ActivityKind.email, monday, "71250001")
+
+        plan = plan_advance(
+            CadencePosition(cycle=1, touch=Touch.voicemail),
+            ANCHOR,
+            "calls:51230001",
+            done(thursday),
+            [email],
+            thursday + timedelta(hours=1),
+        )
+
+        assert [step.position.touch for step in plan.steps] == [Touch.voicemail, Touch.email]
+        assert plan.next_position == CadencePosition(cycle=2, touch=Touch.call)
+        assert plan.anchor_ref == email.ref
+
+    def test_a_tick_pairs_with_an_activity_logged_at_the_same_instant(self) -> None:
+        """The tie, toward done: logged at exactly the tick is the same act."""
+        call = activity(ActivityKind.call, later(10))
+
+        signal = find_signal(Touch.call, ANCHOR, None, done(later(10)), [call], NOW)
+
+        assert signal is not None
+        assert signal.source is SignalSource.both
+        assert signal.anchor_ref == call.ref
+
+    def test_a_tick_does_not_pair_with_an_activity_logged_after_it(self) -> None:
+        call = activity(ActivityKind.call, later(11))
+
+        signal = find_signal(Touch.call, ANCHOR, None, done(later(10)), [call], NOW)
+
+        assert signal is not None
+        assert signal.source is SignalSource.task_completed
+        assert signal.done_at == later(10)
+
+    def test_a_tick_alone_moves_the_anchor_no_further_than_the_first_uncredited_activity(
+        self,
+    ) -> None:
+        email = activity(ActivityKind.email, later(5), "71250001")
+
+        signal = find_signal(Touch.call, ANCHOR, None, done(later(60)), [email], NOW)
+
+        assert signal is not None
+        assert (signal.anchor_at, signal.anchor_ref) == (later(5), None)
+
+    def test_a_tick_alone_with_nothing_logged_moves_the_anchor_to_the_tick(self) -> None:
+        """So a call logged *afterwards*, back-dated to before the tick, is not credited to the
+        voicemail on the next sync."""
+        signal = find_signal(Touch.call, ANCHOR, None, done(later(60)), [], NOW)
+
+        assert signal is not None
+        assert (signal.anchor_at, signal.anchor_ref) == (later(60), None)
+
+    def test_each_activity_still_closes_at_most_one_touch(self) -> None:
+        """One note after a tick closes the voicemail, and nothing else."""
+        note = activity(ActivityKind.note, later(5), "61240001")
+
+        plan = plan_advance(CadencePosition.first(), ANCHOR, None, done(ANCHOR), [note], NOW)
+
+        assert [step.position.touch for step in plan.steps] == [Touch.call, Touch.voicemail]
+        assert plan.next_position == CadencePosition(cycle=1, touch=Touch.email)
+
+
+class TestFutureDatedActivity:
+    """M2: a meeting's ``hs_timestamp`` is its start time, so booking one for next week must not
+    close a touch today or drag the anchor into the future."""
+
+    def test_a_meeting_booked_for_next_week_does_not_close_the_call(self) -> None:
+        meeting = activity(ActivityKind.meeting, NOW + timedelta(days=8), "81260001")
+
+        plan = plan_advance(CadencePosition.first(), ANCHOR, None, OPEN, [meeting], NOW)
+
+        assert not plan.changed
+
+    def test_a_future_activity_counts_once_it_is_in_the_past(self) -> None:
+        meeting = activity(ActivityKind.meeting, NOW + timedelta(days=8), "81260001")
+        then = NOW + timedelta(days=8, minutes=1)
+
+        signal = find_signal(Touch.call, ANCHOR, None, OPEN, [meeting], then)
+
+        assert signal is not None
+        assert signal.anchor_ref == meeting.ref
+
+    def test_a_future_activity_does_not_hold_back_a_tick_alone(self) -> None:
+        meeting = activity(ActivityKind.meeting, NOW + timedelta(days=8), "81260001")
+
+        signal = find_signal(Touch.voicemail, ANCHOR, None, done(later(30)), [meeting], NOW)
+
+        assert signal is not None
+        assert (signal.anchor_at, signal.anchor_ref) == (later(30), None)

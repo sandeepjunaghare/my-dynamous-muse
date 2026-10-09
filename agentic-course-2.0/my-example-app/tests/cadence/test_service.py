@@ -5,18 +5,23 @@ raises on any request it does not model. The clock is moved by hand, so twelve d
 in milliseconds.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.cadence.exceptions import AlreadyEnrolledError
 from app.cadence.machine import CadencePosition, CadenceStatus, Touch, local_date
-from app.cadence.repository import CadenceRepository
+from app.cadence.repository import CADENCE_SYNC_LOCK_ID, CadenceRepository
 from app.cadence.schemas import ActivityKind
 from app.cadence.service import CadenceService
+from app.core.config import get_settings
 from app.promotion.client import HubSpotClient
 from app.promotion.exceptions import HubSpotResponseError
+from app.promotion.schemas import HubSpotObject, TaskCreate
 from tests.cadence.conftest import COMPANY, CONTACT, FakeClock, FakeHubSpot
 from tests.conftest import requires_db
 
@@ -310,13 +315,18 @@ class TestFailures:
 
         assert [f.hubspot_contact_id for f in failed.failures] == [CONTACT]
         assert failed.tasks_created == 0
-        assert await _state(db_session) == ("live", 1, "call", first_task)
+        # The intent was committed before the create: the row says "a voicemail task should
+        # exist — check before making one", not "still on the call".
+        assert await _state(db_session) == ("live", 1, "voicemail", None)
+        assert first_task in hubspot.tasks
 
         retried = await service.sync()
 
         assert retried.failures == []
         assert retried.tasks_created == 1
+        assert retried.pending_tasks_adopted == []
         assert (await _state(db_session))[1:3] == (1, "voicemail")
+        assert hubspot.open_tasks() == ["Cadence 1/3 · voicemail"]
 
     async def test_one_prospect_failing_does_not_stop_the_others(
         self,
@@ -378,3 +388,304 @@ class TestNothingSends:
             and not request.url.path.endswith("/batch/read")
         }
         assert writes == {"/crm/objects/2026-09/tasks"}
+
+
+def _crash_after_create(
+    monkeypatch: pytest.MonkeyPatch, hubspot_client: HubSpotClient, times: int = 1
+) -> None:
+    """The task is created in HubSpot, then the database write behind it fails."""
+    real = hubspot_client.create_task
+    remaining = [times]
+
+    async def create_then_crash(
+        task: TaskCreate, *, contact_id: str | None = None, company_id: str | None = None
+    ) -> HubSpotObject:
+        created = await real(task, contact_id=contact_id, company_id=company_id)
+        if remaining[0]:
+            remaining[0] -= 1
+            raise OperationalError("UPDATE cadence_state", {}, Exception("connection dropped"))
+        return created
+
+    monkeypatch.setattr(hubspot_client, "create_task", create_then_crash)
+
+
+def _failing_for[**P](
+    contact_id: str, real: Callable[P, Awaitable[None]]
+) -> Callable[P, Awaitable[None]]:
+    """Wrap a repository write so it raises a database error for one contact only."""
+
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> None:
+        if any(getattr(arg, "hubspot_contact_id", None) == contact_id for arg in args):
+            raise OperationalError("UPDATE cadence_state", {}, Exception("deadlock detected"))
+        await real(*args, **kwargs)
+
+    return wrapper
+
+
+class TestAmbiguousCreates:
+    """H1: a create HubSpot executed but never confirmed must not become a second task."""
+
+    async def test_the_task_carries_its_idempotency_key(
+        self, service: CadenceService, hubspot: FakeHubSpot
+    ) -> None:
+        await service.enrol(CONTACT)
+
+        assert hubspot.created_bodies()[0].endswith(f"Ref: lpe-cadence:{CONTACT}:1-call")
+
+    async def test_a_task_created_but_answered_with_a_500_is_adopted_not_duplicated(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        db_session: AsyncSession,
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        hubspot.lose_create_responses = 1
+
+        failed = await service.sync()
+
+        assert [f.hubspot_contact_id for f in failed.failures] == [CONTACT]
+        assert hubspot.task_creates_attempted() == 2, "the POST is never retried blindly"
+        orphan = hubspot.last_task_id()
+
+        retried = await service.sync()
+
+        assert retried.failures == []
+        assert retried.tasks_created == 0
+        assert retried.pending_tasks_adopted == [orphan]
+        assert hubspot.task_creates_attempted() == 2
+        assert hubspot.open_tasks() == ["Cadence 1/3 · voicemail"]
+        assert await _state(db_session) == ("live", 1, "voicemail", orphan)
+
+    async def test_a_crash_between_the_create_and_the_commit_does_not_duplicate(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        hubspot_client: HubSpotClient,
+        clock: FakeClock,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        _crash_after_create(monkeypatch, hubspot_client)
+
+        crashed = await service.sync()
+
+        assert [f.code for f in crashed.failures] == ["database_error"]
+        orphan = hubspot.last_task_id()
+
+        retried = await service.sync()
+
+        assert retried.pending_tasks_adopted == [orphan]
+        assert hubspot.open_tasks() == ["Cadence 1/3 · voicemail"]
+        assert (await _state(db_session))[3] == orphan
+
+    async def test_an_adopted_task_already_ticked_advances_in_the_same_sync(
+        self, service: CadenceService, hubspot: FakeHubSpot, clock: FakeClock
+    ) -> None:
+        """The founder worked the orphan before the next sync: no nag, no one-sync lag."""
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        hubspot.lose_create_responses = 1
+        await service.sync()
+        orphan = hubspot.last_task_id()
+        hubspot.complete_task(orphan, at=clock.advance(minutes=30))
+
+        report = await service.sync()
+
+        assert report.pending_tasks_adopted == [orphan]
+        assert report.touches_closed == 1
+        assert hubspot.open_tasks() == ["Cadence 1/3 · email draft (send by hand)"]
+
+
+class TestTickThenLogNextTouch:
+    """H2 through the real service: the orderings people actually log in."""
+
+    async def test_tick_then_log_the_voicemail_and_email_creates_no_task_for_either(
+        self, service: CadenceService, hubspot: FakeHubSpot, clock: FakeClock
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=10))
+        hubspot.log(ActivityKind.note, at=clock.advance(minutes=5))
+        hubspot.log(ActivityKind.note, at=clock.advance(minutes=25))
+
+        report = await service.sync()
+
+        assert report.touches_closed == 3
+        assert hubspot.created_subjects() == ["Cadence 1/3 · call", "Cadence 2/3 · call"]
+
+
+class TestFutureDatedActivity:
+    async def test_a_booked_meeting_does_not_close_the_call(
+        self, service: CadenceService, hubspot: FakeHubSpot, clock: FakeClock
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.log(ActivityKind.meeting, at=clock.now.replace(day=13))
+
+        report = await service.sync()
+
+        assert report.touches_closed == 0
+        assert report.tasks_created == 0
+
+
+class TestConcurrentSyncs:
+    """M1: a second sync while one is running skips cleanly instead of double-creating."""
+
+    async def test_a_sync_skips_while_another_holds_the_lock(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        migrated_database: str,
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        engine = create_async_engine(migrated_database)
+        try:
+            async with engine.connect() as other:
+                await other.execute(
+                    text("select pg_advisory_lock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                )
+                skipped = await service.sync()
+                await other.execute(
+                    text("select pg_advisory_unlock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                )
+        finally:
+            await engine.dispose()
+
+        assert skipped.skipped is True
+        assert (skipped.checked, skipped.tasks_created) == (0, 0)
+        assert hubspot.task_creates_attempted() == 1
+
+        ran = await service.sync()
+
+        assert ran.skipped is False
+        assert ran.tasks_created == 1
+
+    async def test_the_lock_is_released_after_a_sync(
+        self, service: CadenceService, migrated_database: str
+    ) -> None:
+        await service.sync()
+
+        engine = create_async_engine(migrated_database)
+        try:
+            async with engine.connect() as other:
+                taken = await other.execute(
+                    text("select pg_try_advisory_lock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                )
+                assert taken.scalar_one() is True
+                await other.execute(
+                    text("select pg_advisory_unlock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                )
+        finally:
+            await engine.dispose()
+
+
+class TestNonHubSpotFailures:
+    """M4: a validation or database error on one prospect is that prospect's failure."""
+
+    async def test_a_malformed_body_for_one_prospect_does_not_stop_the_others(
+        self, service: CadenceService, hubspot: FakeHubSpot, clock: FakeClock
+    ) -> None:
+        await service.enrol("400000001")
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=1))
+        await service.enrol("400000002")
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=1))
+        hubspot.malformed_associations_for = {"400000001"}
+
+        report = await service.sync()
+
+        assert report.checked == 2
+        assert [(f.hubspot_contact_id, f.code) for f in report.failures] == [
+            ("400000001", "invalid_hubspot_response")
+        ]
+        assert report.tasks_created == 1
+
+    async def test_a_database_error_rolls_back_that_prospect_and_carries_on(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await service.enrol("400000001")
+        first_task = hubspot.last_task_id()
+        hubspot.complete_task(first_task, at=clock.advance(minutes=1))
+        await service.enrol("400000002")
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=1))
+        monkeypatch.setattr(
+            CadenceRepository, "advance", _failing_for("400000001", CadenceRepository.advance)
+        )
+
+        report = await service.sync()
+
+        assert [(f.hubspot_contact_id, f.code) for f in report.failures] == [
+            ("400000001", "database_error")
+        ]
+        assert report.tasks_created == 1
+        assert await _state(db_session, "400000001") == ("live", 1, "call", first_task)
+        assert (await _state(db_session, "400000002"))[1:3] == (1, "voicemail")
+
+
+class TestAssociationShape:
+    async def test_an_unrecognised_associations_body_is_reported_not_read_as_silence(
+        self, service: CadenceService, hubspot: FakeHubSpot, clock: FakeClock
+    ) -> None:
+        await service.enrol(CONTACT)
+        hubspot.log(ActivityKind.call, at=clock.advance(minutes=5))
+        hubspot.unrecognised_associations_for = {CONTACT}
+
+        report = await service.sync()
+
+        assert [f.code for f in report.failures] == ["hubspot_response_shape_unrecognised"]
+        assert report.tasks_created == 0
+
+
+class TestDefaultOwner:
+    async def test_enrol_without_an_owner_assigns_the_default(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HUBSPOT_DEFAULT_OWNER_ID", "77002")
+        get_settings.cache_clear()
+
+        await service.enrol(CONTACT)
+        hubspot.complete_task(hubspot.last_task_id(), at=clock.advance(minutes=5))
+        await service.sync()
+
+        assert hubspot.created_owners() == ["77002", "77002"]
+
+    async def test_an_explicit_owner_wins_over_the_default(
+        self, service: CadenceService, hubspot: FakeHubSpot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HUBSPOT_DEFAULT_OWNER_ID", "77002")
+        get_settings.cache_clear()
+
+        await service.enrol(CONTACT, owner_id="77001")
+
+        properties = hubspot.created[0]["properties"]
+        assert isinstance(properties, dict)
+        assert properties["hubspot_owner_id"] == "77001"
+
+    async def test_no_default_keeps_tasks_unassigned_and_warns(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HUBSPOT_DEFAULT_OWNER_ID", "")
+        get_settings.cache_clear()
+
+        await service.enrol(CONTACT)
+        report = await service.sync()
+
+        properties = hubspot.created[0]["properties"]
+        assert isinstance(properties, dict)
+        assert "hubspot_owner_id" not in properties
+        assert any("HUBSPOT_DEFAULT_OWNER_ID" in warning for warning in report.warnings)

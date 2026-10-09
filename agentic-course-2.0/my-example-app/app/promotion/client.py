@@ -24,6 +24,7 @@ import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import cast
+from urllib.parse import urlencode
 
 import httpx
 
@@ -34,6 +35,7 @@ from app.promotion.exceptions import (
     HubSpotAuthError,
     HubSpotRateLimitError,
     HubSpotResponseError,
+    HubSpotResponseShapeError,
     HubSpotTransportError,
     UnprovenancedWriteError,
 )
@@ -620,21 +622,40 @@ class HubSpotClient:
         found: list[str] = []
         after: str | None = None
         for _ in range(_ASSOCIATION_MAX_PAGES):
-            query = f"limit={_ASSOCIATION_PAGE_SIZE}"
+            params: dict[str, str | int] = {"limit": _ASSOCIATION_PAGE_SIZE}
             if after is not None:
-                query += f"&after={after}"
-            response = await self._request(
-                "GET",
+                params["after"] = after
+            path = (
                 f"/crm/objects/{API_VERSION}/{from_type.value}/{object_id}/associations/"
-                f"{to_type.value}?{query}",
-                retry_on_server_error=True,
+                f"{to_type.value}"
+            )
+            # The cursor is opaque: encoded, so a `+` or `=` in it survives the round trip.
+            response = await self._request(
+                "GET", f"{path}?{urlencode(params)}", retry_on_server_error=True
             )
             page = AssociationsPage.model_validate(response.json())
-            found.extend(
+            ids = [
                 associated.object_id
                 for associated in page.results
                 if associated.object_id is not None
-            )
+            ]
+            unrecognised = len(page.results) - len(ids)
+            if unrecognised:
+                # Neither `toObjectId` nor `id`. Reading this as "no associations" would make every
+                # logged call and note vanish from the cadence's evidence — silent and total.
+                logger.warning(
+                    "promotion.hubspot.associations_unrecognised",
+                    from_type=from_type.value,
+                    to_type=to_type.value,
+                    unrecognised=unrecognised,
+                    results=len(page.results),
+                )
+                raise HubSpotResponseShapeError(
+                    f"HubSpot's {from_type.value}→{to_type.value} associations came back in a "
+                    f"shape with no object ids ({unrecognised} of {len(page.results)} results); "
+                    "save the body as a fixture and teach AssociatedObject the new key"
+                )
+            found.extend(ids)
             after = page.next_after
             if after is None:
                 return list(dict.fromkeys(found))

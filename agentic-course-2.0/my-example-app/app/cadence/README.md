@@ -65,6 +65,22 @@ only when it sorts after the anchor. That gives three properties:
 When a task is completed **and** a matching activity is logged, they are one act recorded twice —
 the activity is consumed, so ticking the task and logging the call do not close two touches.
 
+**A tick pairs only with activity logged at or before it** (a tie counts, toward done). Anything
+logged after the tick belongs to the next touch: tick the call at 10:00, log the voicemail at 10:05
+and the email at 10:30, and all three touches close — nothing re-fires.
+
+**A late tick does not bury earlier work.** A tick with nothing to pair with moves the anchor up to
+the tick, but never past an activity nobody has credited yet. Voicemail ticked on Thursday, email
+logged on Monday: the email still closes the email touch.
+
+**Future-dated activity waits.** A meeting's `hs_timestamp` is when it starts, so one booked today
+for next week closes nothing until next week. Any activity dated after the sync's clock is ignored
+until it is in the past.
+
+**The residual race, accepted.** Tick a task, then log the *same* act with a timestamp after the
+tick, and that activity closes the next touch too — one touch early. That is the direction D5
+breaks ties in, and the alternative (pairing across the tick) credited the wrong touch.
+
 **Already done by hand advances rather than re-firing.** After a touch closes, the next touch is
 checked against the same activities *before* any task is created for it; the walk continues until a
 touch is not done, which gets one task, or the cadence ends and parks.
@@ -74,21 +90,64 @@ no content, only the cursor that tells the policy which activity is new.
 
 ## Sync
 
-`POST /cadence/sync` or `uv run lpe cadence sync`. Triggered **externally** — launchd now, cron on
-the VPS later, T10's weekly run when it lands. No in-process scheduler, no Celery, no Redis.
+**Run it daily, from an external launchd job** — separately from T10's weekly sourcing run, which
+does not trigger it. Voicemail and email are same-day touches, and each one's task only exists once
+a sync has seen the previous touch close; a weekly sync would create them up to a week overdue and
+stretch a twelve-day cadence to about nine weeks. More often than daily is fine and cheap (about
+eight reads per live prospect). No in-process scheduler, no Celery, no Redis.
+
+The command a launchd job runs — no server needed, from any working directory:
+
+```
+<path-to-uv> run --directory <path-to>/my-example-app lpe cadence sync
+```
+
+launchd starts with a bare `PATH`, so give `uv` by its absolute path (`which uv`), and put the
+command in the plist's `ProgramArguments` with a `StartCalendarInterval`. It exits `0` on success
+and when it skipped because another sync was running, and `1` when any prospect failed. With the
+API up, `curl -fsS -X POST http://localhost:8000/cadence/sync` is the same operation.
 
 Per live prospect: one batch read of all current tasks (100 per call), then the association walk and
 a batch read per engagement type that has any. The plan is computed purely (`sync.plan_advance`),
-then the one remote write — the next task — happens, then the row is updated and committed. So:
+then applied:
 
-- **Idempotent by construction.** A task is created only when the position advances; a second sync
-  with nothing new in HubSpot creates nothing.
-- **A failed create changes nothing.** It is reported under `failures` and retried next sync. One
-  prospect failing does not stop the others.
+- **Nothing new, nothing created.** A task is created only when the position advances; a second
+  sync with nothing new in HubSpot creates nothing.
+- **An interrupted create is found, not repeated.** A create HubSpot executed but answered with a
+  5xx or a timeout, or one whose commit never happened, is ambiguous, and the gateway never retries
+  it. So the advance is committed *before* the create, as a pending intent (`pending_task_key`)
+  carrying a deterministic key, `lpe-cadence:<contact>:<cycle>-<touch>`, which also ends the task
+  body. The next sync looks for a task carrying that key among the contact's associated tasks (the
+  associations read, not search, which lags) and adopts it (`pending_tasks_adopted`). Only if none
+  exists does it create the task, once. Keep the `Ref:` line in the task body: it is the key.
+- **One sync at a time.** A Postgres advisory lock (on its own connection, so it survives the
+  per-prospect commits) is held for the run. An overlapping sync — the route and launchd at once —
+  returns immediately with `skipped: true`.
+- **One prospect failing does not stop the others.** A HubSpot, validation or database error rolls
+  back what that prospect had not committed, is reported under `failures` with a code, and the sync
+  carries on.
+- **An associations body of an unknown shape is an error, not silence.** If HubSpot's associations
+  answer has results but none carries `toObjectId` or `id`, the gateway logs
+  `promotion.hubspot.associations_unrecognised` and the prospect fails with
+  `hubspot_response_shape_unrecognised`, rather than every logged touch quietly disappearing.
 - **A deleted task is reported** under `missing_tasks`, not recreated. A logged activity can still
   close its touch.
 - **A superseded open task** — its touch closed by a logged activity — is listed under
   `open_tasks_superseded` and **left alone**. This slice never writes to the founder's tasks.
+
+### Task owner
+
+`HUBSPOT_DEFAULT_OWNER_ID` is the owner a task is assigned to when `enrol` is given none, so the
+tasks land in a founder's "My tasks". Unset, tasks are created unassigned — nobody's queue, which is
+how E15's 22 tasks went unworked — and every enrol and sync warns (`warnings` in the sync report).
+
+### Metric M5
+
+**M5 counts touches the cadence machine closed**, under D5 — a ticked task *or* a matching logged
+activity — not HubSpot task completion. A touch closed by a logged note leaves its task open
+(`open_tasks_superseded`), so task status undercounts the work. Each sync reports the number it
+closed as `touches_closed`, and logs one `cadence.sync.touch_done` event per touch, with its
+`source`; T10's report sums those over its week.
 
 `GET /cadence/overdue` / `uv run lpe cadence overdue` read only our own schedule and need no token.
 Between syncs they can list a touch that has since been done; the next sync notices.
@@ -106,6 +165,13 @@ There is **no enrol route or CLI command**. `CadenceService.enrol()` is called b
   T13 replays history through.
 
 A contact is enrolled at most once, live or parked (`uq_cadence_state_contact`).
+
+## Deferred
+
+- **`lpe cadence sync --dry-run`** — print the plan, create nothing; wanted before T13's first run.
+- **`lpe cadence park <contact>`** — a human stopping a prospect (a conversation reached); wanted
+  before T13 adopts the 22.
+- **A per-touch "closed by a note" line** in the sync output.
 
 ## Decided out, for now
 

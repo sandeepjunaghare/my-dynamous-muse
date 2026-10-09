@@ -5,11 +5,13 @@ constraints fire here, at the line that caused them, while the transaction bound
 service — the only layer that knows a prospect's update is finished.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from app.cadence.machine import CadencePosition, CadenceStatus
 from app.cadence.models import CadenceState
@@ -17,12 +19,62 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+CADENCE_SYNC_LOCK_ID = 7_340_011_101
+"""The Postgres advisory-lock key a sync holds while it runs. Any constant; this one is ours."""
+
+
+def _engine_of(session: AsyncSession) -> AsyncEngine:
+    bind = session.bind
+    if isinstance(bind, AsyncConnection):
+        return bind.engine
+    if isinstance(bind, AsyncEngine):
+        return bind
+    raise RuntimeError("the cadence session is not bound to an engine or a connection")
+
 
 class CadenceRepository:
     """Reads and writes cadence rows through one :class:`AsyncSession`."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get(self, state_id: UUID) -> CadenceState | None:
+        """One cadence by id, **re-read from the database** rather than the identity map.
+
+        A sync rolls back a prospect that failed, and a rollback expires every loaded row; a
+        fresh read is what lets it carry on with the next one.
+        """
+        result = await self._session.execute(
+            select(CadenceState)
+            .where(CadenceState.id == state_id)
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    @asynccontextmanager
+    async def sync_lock(self) -> AsyncGenerator[bool]:
+        """Hold the cadence-sync advisory lock for the block. Yields whether it was acquired.
+
+        **On a connection of its own**, session-scoped. A sync commits once per prospect, and the
+        session hands its connection back to the pool at each commit — a transaction-scoped lock
+        would be released after the first prospect, and a session-scoped one taken on the
+        session's connection could be unlocked from a different one and leak. A dedicated
+        connection holds it for exactly the block; if the process dies, Postgres drops it with the
+        connection. Works on Supabase's session-mode pooler (5432), not its transaction mode.
+        """
+        async with _engine_of(self._session).connect() as connection:
+            result = await connection.execute(
+                text("select pg_try_advisory_lock(:key)"), {"key": CADENCE_SYNC_LOCK_ID}
+            )
+            acquired = bool(result.scalar_one())
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    await connection.execute(
+                        text("select pg_advisory_unlock(:key)"), {"key": CADENCE_SYNC_LOCK_ID}
+                    )
+                    await connection.commit()
 
     async def get_by_contact(self, contact_id: str) -> CadenceState | None:
         """The cadence for one HubSpot contact, live or parked."""
@@ -93,15 +145,20 @@ class CadenceRepository:
         state: CadenceState,
         *,
         position: CadencePosition,
-        task_id: str,
+        pending_task_key: str,
         due_at: datetime,
         anchor_at: datetime,
         anchor_ref: str | None,
     ) -> None:
-        """Move a live cadence to its next touch, whose task now exists."""
+        """Move a live cadence to its next touch, whose task is **about to be** created.
+
+        The row records the intent (``pending_task_key``) and no task id. The service commits this
+        before it calls HubSpot, so an interrupted create leaves a row that says what to look for.
+        """
         state.cycle = position.cycle
         state.touch = position.touch.value
-        state.hubspot_task_id = task_id
+        state.hubspot_task_id = None
+        state.pending_task_key = pending_task_key
         state.due_at = due_at
         state.anchor_at = anchor_at
         state.anchor_ref = anchor_ref
@@ -111,6 +168,17 @@ class CadenceRepository:
             contact_id=state.hubspot_contact_id,
             cycle=position.cycle,
             touch=position.touch.value,
+        )
+
+    async def attach_task(self, state: CadenceState, task_id: str) -> None:
+        """Record the current touch's task — created or found — and clear the pending intent."""
+        state.hubspot_task_id = task_id
+        state.pending_task_key = None
+        await self._session.flush()
+        logger.info(
+            "cadence.repository.task_attached",
+            contact_id=state.hubspot_contact_id,
+            task_id=task_id,
         )
 
     async def park(
@@ -124,6 +192,7 @@ class CadenceRepository:
         """Finish a cadence. Position stays at the last touch; there is no task and no due date."""
         state.status = CadenceStatus.parked.value
         state.hubspot_task_id = None
+        state.pending_task_key = None
         state.due_at = None
         state.anchor_at = anchor_at
         state.anchor_ref = anchor_ref

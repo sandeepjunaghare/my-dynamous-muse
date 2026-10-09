@@ -152,7 +152,12 @@ class OverdueTouch(BaseModel):
 
 
 class SyncFailure(BaseModel):
-    """A prospect the sync could not process. It is retried, unchanged, on the next sync."""
+    """A prospect the sync could not process. Whatever it had not committed is rolled back, and it
+    is picked up again on the next sync.
+
+    ``code`` is the HubSpot gateway's code for a HubSpot failure, ``invalid_hubspot_response``
+    when a body failed validation, and ``database_error`` for a database failure.
+    """
 
     hubspot_contact_id: str
     error: str
@@ -163,8 +168,13 @@ class SyncReport(BaseModel):
     """What one sync did. Counts are per prospect except ``touches_closed``."""
 
     ran_at: datetime
+    skipped: bool = False
+    """Another sync held the run lock, so this one did nothing. Not a failure: the running sync
+    is doing the work."""
     checked: int = 0
     touches_closed: int = 0
+    """Touches the cadence machine closed in this run — **the source for metric M5**, which counts
+    closures under D5 (a ticked task *or* a matching logged activity), not HubSpot task status."""
     tasks_created: int = 0
     parked: int = 0
     unchanged: int = 0
@@ -175,4 +185,9 @@ class SyncReport(BaseModel):
     open_tasks_superseded: list[str] = Field(default_factory=list[str])
     """Task ids still open although a logged activity already closed their touch. Left alone — we
     never write to the founder's tasks — and listed so a person can close them."""
+    pending_tasks_adopted: list[str] = Field(default_factory=list[str])
+    """Task ids found by their idempotency key after an earlier create was interrupted (a 5xx, a
+    timeout, a crash before commit) — adopted rather than created a second time."""
     failures: list[SyncFailure] = Field(default_factory=list[SyncFailure])
+    warnings: list[str] = Field(default_factory=list[str])
+    """Configuration a person should fix, e.g. no default task owner."""

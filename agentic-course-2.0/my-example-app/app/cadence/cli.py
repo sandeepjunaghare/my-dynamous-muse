@@ -1,7 +1,9 @@
 """``lpe cadence`` — run the sync and see what is overdue, from the terminal.
 
 ``sync`` is the same operation as ``POST /cadence/sync``, offered here because launchd can run a
-command without a server being up. ``overdue`` reads only our own schedule, so it works with no
+command without a server being up. **It is meant to run daily** (at least), from an external
+launchd job, separately from T10's weekly sourcing run; see ``app/cadence/README.md`` for the
+exact command. ``overdue`` reads only our own schedule, so it works with no
 HubSpot token at all.
 
 There is deliberately **no** ``enrol`` subcommand: enrolling an existing contact by hand would
@@ -25,7 +27,11 @@ def register(parser: argparse.ArgumentParser) -> None:
     """Add ``sync`` and ``overdue`` to the ``cadence`` command's parser."""
     subcommands = parser.add_subparsers(dest="cadence_command", required=True)
     subcommands.add_parser(
-        "sync", help="read outcomes from HubSpot, advance done touches, report what is overdue"
+        "sync",
+        help=(
+            "read outcomes from HubSpot, advance done touches, report what is overdue — run it at "
+            "least daily (launchd); voicemail and email are same-day touches"
+        ),
     )
     subcommands.add_parser("overdue", help="list live touches past their due date")
 
@@ -63,11 +69,20 @@ async def _run_sync() -> int:
         return await service.sync()
 
     report = await _with_service(operation)
+    if report.skipped:
+        print("another cadence sync is running — skipped; it will do this run's work")
+        return 0
+    for warning in report.warnings:
+        print(f"warning: {warning}")
     print(
         f"checked {report.checked} · touches closed {report.touches_closed} · "
         f"tasks created {report.tasks_created} · parked {report.parked} · "
         f"unchanged {report.unchanged}"
     )
+    for task_id in report.pending_tasks_adopted:
+        print(
+            f"task {task_id}: an earlier sync's interrupted create — found and adopted, not redone"
+        )
     for task_id in report.open_tasks_superseded:
         print(f"open task {task_id}: its touch was already logged — close it in HubSpot")
     for contact_id in report.missing_tasks:

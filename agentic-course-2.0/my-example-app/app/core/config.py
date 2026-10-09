@@ -43,6 +43,10 @@ class Settings(BaseSettings):
 
     # Integrations. Optional at T1 — T3 is what first needs a token.
     hubspot_private_app_token: str | None = None
+    # The HubSpot owner a cadence task is assigned to when ``enrol`` names none. Unset leaves tasks
+    # unassigned — out of everyone's "My tasks", which is how E15's tasks went unworked — so the
+    # cadence warns about it on every enrol and sync. Blank counts as unset.
+    hubspot_default_owner_id: str | None = None
 
 
 @lru_cache

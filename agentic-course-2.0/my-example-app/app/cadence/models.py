@@ -44,7 +44,16 @@ class CadenceState(Base):
     touch: Mapped[str] = mapped_column(String(16), nullable=False)
 
     hubspot_task_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    """The open HubSpot task for the current touch. ``None`` once parked."""
+    """The open HubSpot task for the current touch. ``None`` once parked, and ``None`` while the
+    current touch's task is **pending** (see ``pending_task_key``)."""
+
+    pending_task_key: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    """Set while the current touch's task may or may not exist in HubSpot.
+
+    Written and committed **before** the task create, cleared in the same commit that records the
+    task's id. A row still carrying it was interrupted mid-create — a 5xx, a timeout or a crash —
+    so the next sync looks for a task carrying this key among the contact's tasks before it would
+    ever create one. Schedule state (an intent), not an outcome."""
 
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     """When the current touch is due. ``None`` once parked."""
@@ -72,11 +81,17 @@ class CadenceState(Base):
         CheckConstraint("status in ('live', 'parked')", name="ck_cadence_state_status"),
         CheckConstraint("touch in ('call', 'voicemail', 'email')", name="ck_cadence_state_touch"),
         CheckConstraint("cycle between 1 and 3", name="ck_cadence_state_cycle"),
-        # A live prospect always has exactly one open task and a due date. Without this, a row
-        # could be live with nothing in HubSpot for anyone to do — the silent drop E15 measured.
+        # A live prospect always has a due date and either its open task or a pending intent to
+        # create one, which the next sync resolves. Without this, a row could be live with
+        # nothing in HubSpot for anyone to do — the silent drop E15 measured.
         CheckConstraint(
-            "status = 'parked' or (hubspot_task_id is not null and due_at is not null)",
+            "status = 'parked' or (due_at is not null"
+            " and (hubspot_task_id is not null or pending_task_key is not null))",
             name="ck_cadence_state_live_has_task",
+        ),
+        CheckConstraint(
+            "status = 'live' or pending_task_key is null",
+            name="ck_cadence_state_parked_has_no_pending",
         ),
         Index("ix_cadence_state_status_due_at", "status", "due_at"),
     )

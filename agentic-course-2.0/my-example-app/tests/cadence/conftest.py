@@ -67,7 +67,15 @@ class FakeHubSpot:
         }
         self.contact_engagements: dict[str, list[tuple[str, str]]] = {}
         self.fail_creates = 0
-        """Answer this many task creates with a 500 before succeeding again."""
+        """Answer this many task creates with a 500 **without** creating them — the unambiguous
+        failure, where retrying would be safe."""
+        self.lose_create_responses = 0
+        """Create this many tasks for real, then answer each with a 500 — the ambiguous failure
+        the gateway refuses to retry, because HubSpot did the work and failed to say so."""
+        self.malformed_associations_for: set[str] = set()
+        """Contacts whose association reads answer a body that fails validation."""
+        self.unrecognised_associations_for: set[str] = set()
+        """Contacts whose association reads answer a well-formed body of an unknown shape."""
         self._next_id = 88_000_000
         self.portal = MockPortal(
             [
@@ -111,8 +119,35 @@ class FakeHubSpot:
 
     # -- what a test reads back ---------------------------------------------------------------
 
+    def open_tasks(self, contact: str = CONTACT) -> list[str]:
+        """Subjects of the contact's tasks that are not completed — what the founder sees."""
+        return [
+            str(_properties(self.tasks[task_id])["hs_task_subject"])
+            for kind, task_id in self.contact_engagements.get(contact, [])
+            if kind == "tasks"
+            and task_id in self.tasks
+            and _properties(self.tasks[task_id])["hs_task_status"] != "COMPLETED"
+        ]
+
+    def task_creates_attempted(self) -> int:
+        return sum(
+            1
+            for request in self.portal.requests
+            if request.method == "POST" and request.url.path.endswith("/tasks")
+        )
+
     def created_subjects(self) -> list[str]:
         return [str(_properties(body)["hs_task_subject"]) for body in self.created]
+
+    def created_bodies(self) -> list[str]:
+        return [str(_properties(body)["hs_task_body"]) for body in self.created]
+
+    def created_owners(self) -> list[str | None]:
+        owners: list[str | None] = []
+        for body in self.created:
+            owner = _properties(body).get("hubspot_owner_id")
+            owners.append(None if owner is None else str(owner))
+        return owners
 
     def created_types(self) -> list[str]:
         return [str(_properties(body)["hs_task_type"]) for body in self.created]
@@ -143,6 +178,14 @@ class FakeHubSpot:
             "archived": False,
         }
         self.tasks[task_id] = record
+        associations = cast(list[dict[str, dict[str, str]]], body.get("associations", []))
+        for association in associations:
+            self.contact_engagements.setdefault(association["to"]["id"], []).append(
+                ("tasks", task_id)
+            )
+        if self.lose_create_responses:
+            self.lose_create_responses -= 1
+            return httpx.Response(500, json=load_fixture("error_server"))
         return httpx.Response(201, json=record)
 
     def _read_tasks(self, request: httpx.Request) -> httpx.Response:
@@ -174,6 +217,10 @@ class FakeHubSpot:
     def _associations(self, request: httpx.Request) -> httpx.Response:
         match = _ASSOCIATIONS.search(request.url.path)
         assert match is not None, request.url.path
+        if match["contact"] in self.malformed_associations_for:
+            return httpx.Response(200, json={"results": "not a list"})
+        if match["contact"] in self.unrecognised_associations_for:
+            return httpx.Response(200, json={"results": [{"objectRef": {"value": 1}}]})
         linked = [
             {
                 "toObjectId": int(activity_id),

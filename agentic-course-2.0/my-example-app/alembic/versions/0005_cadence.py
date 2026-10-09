@@ -5,7 +5,8 @@ Spike 3: the portal is Sales Hub Starter, with no sequences, so the cadence stat
 Outcomes stay in HubSpot and are re-read on every sync.
 
 Hand-written, matching 0002: the check constraints are the point, and the one that says a live row
-always has an open task is what makes "nobody is silently dropped" a database guarantee.
+always has an open task — or a pending intent to create one, which the next sync resolves — is what
+makes "nobody is silently dropped" a database guarantee.
 
 **Revision chain.** Written against ``0003_seed_freight_and_fire`` because T4's ``0004_sourcing``
 was being built in parallel. At merge, rebase ``down_revision`` onto whichever head lands first so
@@ -42,6 +43,7 @@ def upgrade() -> None:
         sa.Column("cycle", sa.SmallInteger(), nullable=False),
         sa.Column("touch", sa.String(length=16), nullable=False),
         sa.Column("hubspot_task_id", sa.String(length=32), nullable=True),
+        sa.Column("pending_task_key", sa.String(length=96), nullable=True),
         sa.Column("due_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("anchor_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("anchor_ref", sa.String(length=64), nullable=True),
@@ -65,8 +67,13 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("cycle between 1 and 3", name="ck_cadence_state_cycle"),
         sa.CheckConstraint(
-            "status = 'parked' or (hubspot_task_id is not null and due_at is not null)",
+            "status = 'parked' or (due_at is not null"
+            " and (hubspot_task_id is not null or pending_task_key is not null))",
             name="ck_cadence_state_live_has_task",
+        ),
+        sa.CheckConstraint(
+            "status = 'live' or pending_task_key is null",
+            name="ck_cadence_state_parked_has_no_pending",
         ),
     )
     op.create_index("ix_cadence_state_status_due_at", "cadence_state", ["status", "due_at"])

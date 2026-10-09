@@ -8,8 +8,11 @@ decision that differs from a create (a batch read is a POST, and it *is* retried
 import json
 
 import httpx
+import pytest
+from structlog.testing import capture_logs
 
 from app.promotion.client import API_VERSION
+from app.promotion.exceptions import HubSpotResponseShapeError
 from app.promotion.schemas import ObjectType
 from tests.promotion.conftest import (
     MockPortal,
@@ -193,6 +196,51 @@ class TestAssociations:
 
         assert portal.count("GET") == 20
         assert ids == ["51230001", "51230002"]
+        await client.aclose()
+
+
+class TestAssociationShapeGuard:
+    """M5: a body whose entries carry neither ``toObjectId`` nor ``id`` must not read as "no
+    activity" — that failure would be silent and total."""
+
+    async def test_an_unrecognised_shape_is_an_error_not_an_empty_list(self) -> None:
+        body = {"results": [{"objectRef": {"value": 51230001}}]}
+        portal = MockPortal([("GET", "/associations/calls", json_responder(200, body))])
+        client = make_client(portal)
+
+        with capture_logs() as captured, pytest.raises(HubSpotResponseShapeError):
+            await client.list_associated_ids(ObjectType.contacts, "400112233", ObjectType.calls)
+
+        events = [entry["event"] for entry in captured]
+        assert "promotion.hubspot.associations_unrecognised" in events
+        warning = next(
+            entry
+            for entry in captured
+            if entry["event"] == "promotion.hubspot.associations_unrecognised"
+        )
+        assert warning["log_level"] == "warning"
+        await client.aclose()
+
+
+class TestPagingCursor:
+    async def test_the_cursor_is_url_encoded(self) -> None:
+        """L2: ``after`` is opaque. A ``+`` interpolated raw would be read back as a space."""
+        cursor = "a+b/c=="
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if "after" in request.url.params:
+                return httpx.Response(200, json={"results": [{"toObjectId": 2}]})
+            return httpx.Response(
+                200, json={"results": [{"toObjectId": 1}], "paging": {"next": {"after": cursor}}}
+            )
+
+        portal = MockPortal([("GET", "/associations/calls", respond)])
+        client = make_client(portal)
+
+        ids = await client.list_associated_ids(ObjectType.contacts, "400112233", ObjectType.calls)
+
+        assert ids == ["1", "2"]
+        assert portal.requests[1].url.params["after"] == cursor
         await client.aclose()
 
 

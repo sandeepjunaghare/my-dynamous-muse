@@ -198,6 +198,9 @@ qualification and routing.
 
 **Scheduling: boring on purpose.** One weekly run plus ad-hoc. A scheduled trigger against a FastAPI endpoint.
 No Celery, no queue framework — YAGNI at one user, one run a week.
+**The cadence sync is a second, daily trigger** (decided 2026-10-08, T11 review): `lpe cadence sync` from its own
+launchd job, independent of the weekly run — same-day touches cannot wait a week. Overlapping syncs are kept
+apart by a Postgres advisory lock, not Redis.
 
 ---
 

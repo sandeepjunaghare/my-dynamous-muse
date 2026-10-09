@@ -49,6 +49,7 @@ class TestConstraints:
         "overrides",
         [
             {"hubspot_task_id": None},
+            {"hubspot_task_id": None, "pending_task_key": None},
             {"due_at": None},
             {"status": "Live"},
             {"status": "waiting"},
@@ -58,6 +59,7 @@ class TestConstraints:
         ],
         ids=[
             "live-without-task",
+            "live-without-task-or-pending",
             "live-without-due-date",
             "status-case",
             "status-unknown",
@@ -72,6 +74,27 @@ class TestConstraints:
         with pytest.raises(IntegrityError):
             await _insert(db_session, _row(**overrides))
 
+    async def test_a_live_row_may_carry_a_pending_task_instead_of_a_task(
+        self, db_session: AsyncSession
+    ) -> None:
+        """H1: the advance is committed before the create, as an intent the next sync resolves."""
+        await _insert(
+            db_session,
+            _row(hubspot_task_id=None, pending_task_key="lpe-cadence:400112233:1-voicemail"),
+        )
+
+    async def test_a_parked_row_cannot_carry_a_pending_task(self, db_session: AsyncSession) -> None:
+        with pytest.raises(IntegrityError):
+            await _insert(
+                db_session,
+                _row(
+                    status="parked",
+                    hubspot_task_id=None,
+                    due_at=None,
+                    pending_task_key="lpe-cadence:400112233:3-email",
+                ),
+            )
+
     async def test_one_cadence_per_contact(self, db_session: AsyncSession) -> None:
         """Re-enrolling would reset the cycle; the database refuses it whatever the service does."""
         await _insert(db_session, _row())
@@ -81,9 +104,26 @@ class TestConstraints:
 
 
 class TestScheduleOnly:
-    def test_no_outcome_columns(self) -> None:
-        """D4: outcomes live in HubSpot. A column named for one is the shadow CRM starting."""
+    def test_the_columns_are_exactly_the_schedule(self) -> None:
+        """D4: outcomes live in HubSpot. An allowlist, not a blacklist of suspicious names — a
+        column called ``spoke_to`` or ``answered`` would pass a blacklist and still be the shadow
+        CRM starting. Adding a column means adding it here, on purpose."""
         columns = {column.key for column in inspect(CadenceState).columns}
 
-        for outcome in ("outcome", "disposition", "notes", "body", "result", "reached", "reply"):
-            assert not [name for name in columns if outcome in name], outcome
+        assert columns == {
+            "id",
+            "hubspot_contact_id",
+            "hubspot_company_id",
+            "hubspot_owner_id",
+            "status",
+            "cycle",
+            "touch",
+            "hubspot_task_id",
+            "pending_task_key",
+            "due_at",
+            "anchor_at",
+            "anchor_ref",
+            "enrolled_at",
+            "updated_at",
+            "parked_at",
+        }

@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.cadence.machine import CadencePosition
-from app.cadence.repository import CadenceRepository
+from app.cadence.repository import CADENCE_SYNC_LOCK_ID, CadenceRepository
 from app.cli import main
 from app.core.config import get_settings
 from app.promotion.client import HubSpotClient
@@ -146,3 +146,27 @@ class TestSync:
         err = capsys.readouterr().err
         assert "error: HUBSPOT_PRIVATE_APP_TOKEN is not set" in err
         assert "Traceback" not in err
+
+    def test_a_second_sync_while_one_runs_says_so_and_exits_cleanly(
+        self, cli_database: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """M1, from launchd's side: an overlapping run is a skip, not a failure."""
+
+        async def sync_while_locked() -> int:
+            engine = create_async_engine(cli_database)
+            try:
+                async with engine.connect() as other:
+                    await other.execute(
+                        text("select pg_advisory_lock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                    )
+                    try:
+                        return await asyncio.to_thread(main, ["cadence", "sync"])
+                    finally:
+                        await other.execute(
+                            text("select pg_advisory_unlock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                        )
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(sync_while_locked()) == 0
+        assert "another cadence sync is running" in capsys.readouterr().out
