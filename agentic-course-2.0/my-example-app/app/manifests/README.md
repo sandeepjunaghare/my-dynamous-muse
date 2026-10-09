@@ -63,11 +63,38 @@ The CLI is the whole review UI. No frontend, no second login.
 
 ```bash
 uv run lpe manifest list [--vertical freight] [--status draft]
+uv run lpe manifest propose "collision centers, DFW"   # the authoring agent writes a cited DRAFT
 uv run lpe manifest show <id>                          # every field with its citation
 uv run lpe manifest activate <id> --accept-terms fmcsa,places [--actor you]
 ```
 
-`lpe manifest propose "<brief>"` is **T12's** and does not exist yet.
+## The authoring agent (T12)
+
+`propose` is the one place an agent drives control flow at run time. Three modules, one boundary each:
+
+| Module | Job |
+|---|---|
+| `agent.py` | The Agent SDK loop. Two tools only (`WebSearch`, `WebFetch`), no filesystem settings, `dontAsk`. Records which pages were **actually fetched**, and the run's cost via `RunCost`. Never writes. |
+| `proposal.py` | The structured-output contract and `build_draft` — the citation gate. Pure. |
+| `prompts.py` | The system prompt. Names no vertical. |
+
+**The citation gate.** A proposed field is written only if its citation URL is a page the agent
+fetched successfully in this run; it is stored as `llm_inference` with that URL and the time the
+fetch result was observed. A search-result snippet, a remembered URL, or a fetch that errored is not
+a read — that field is left **absent** and listed under "left out" with the reason. If a field the
+manifest cannot exist without (a source, the ICP band, the vocabulary) does not survive, nothing is
+written and the command exits 1.
+
+**Terms of use are raised, never answered.** The agent may point at where a source publishes its
+terms; it has no field in which to judge them. The draft's `terms` is always empty, and `propose`
+prints one question per source for the person who will run `activate`.
+
+**Quality review is still open.** Nothing checks that a proposed disqualifier is right or that the
+proposed source is the authoritative one (architecture → *Open questions*). `propose` says so on
+every run, and the activator is the reviewer until that question is decided.
+
+**Tests never call a model.** `tests/manifests/replay.py` replays a recorded transcript through the
+SDK's own message types; `fixtures/freight_proposal_transcript.json` is the acceptance fixture.
 
 Exit codes: `0` success · `1` a deliberate failure, printed as one line, never a traceback · `2`
 argparse's own usage error.
@@ -95,7 +122,6 @@ the pipeline.
 
 ## Deliberately absent
 
-- **`propose` / `agent.py`** — T12. A stubbed subcommand in `--help` reads as a broken feature.
 - **A rule evaluator.** `DisqualifierRule` is a declarative shape; **T7** runs it. There is no
   `matches()` here, and the rule schema deliberately resists growing into a DSL: `RuleKind.judgment`
   is the escape hatch for anything that needs real judgment, which is a `classify_rollup` call.

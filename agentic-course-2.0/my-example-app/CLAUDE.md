@@ -23,7 +23,7 @@ exists, and two slices are built — `manifests/`, and the gateway half of `prom
 app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
 app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
 app/shared/provenance.py                    # ProvenancedValue[T] + is_promotable() — the write-gate as a type
-app/manifests/                              # vertical_manifest DRAFT→ACTIVE, the terms gate, read-only routes, the CLI
+app/manifests/                              # vertical_manifest DRAFT→ACTIVE, the terms gate, read-only routes, the CLI, the authoring agent (T12)
 app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
 alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds
@@ -40,7 +40,6 @@ each one lands. `core/` and `shared/` above are their built counterparts — the
 infra that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
 ```
 app/
-  manifests/agent  # the manifest-authoring agent (T12) — the built slice above is everything else
   sourcing/        # brief → sourcing_run → candidate, every field carrying its own provenance
   qualification/   # disqualifier rules + Intensity×Automatable score; owns `disqualification`
   routing/         # DFW geographic route clustering
@@ -104,7 +103,8 @@ Wired at T1 and green:
 Manifests are reviewed on the CLI — no frontend, no second login. Built at T2 and working:
 `uv run lpe manifest list` · `uv run lpe manifest show <id>` ·
 `uv run lpe manifest activate <id> --accept-terms <sources>` (where the terms-of-use decision is recorded).
-**`uv run lpe manifest propose "<brief>"` is T12 and does not exist yet.**
+`uv run lpe manifest propose "<brief>" [--vertical <slug>]` (T12) writes a cited **DRAFT** only; it never
+activates and never answers terms of use. Manifest *quality* review is still an open question — no gate.
 
 Database-backed tests need a throwaway Postgres and skip without one:
 `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·
