@@ -8,12 +8,8 @@ Hand-written, matching 0002: the check constraints are the point, and the one th
 always has an open task — or a pending intent to create one, which the next sync resolves — is what
 makes "nobody is silently dropped" a database guarantee.
 
-**Revision chain.** Written against ``0003_seed_freight_and_fire`` because T4's ``0004_sourcing``
-was being built in parallel. At merge, rebase ``down_revision`` onto whichever head lands first so
-the chain stays linear (``tests/test_structure.py`` enforces a single head).
-
 Revision ID: 0005_cadence
-Revises: 0003_seed_freight_and_fire
+Revises: 0004_sourcing
 Create Date: 2026-10-08
 
 """
@@ -26,7 +22,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "0005_cadence"
-down_revision: str | None = "0003_seed_freight_and_fire"
+down_revision: str | None = "0004_sourcing"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
