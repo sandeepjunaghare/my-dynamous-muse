@@ -216,6 +216,7 @@ hand today") · PRD §6 step 5.
 - Create Company + Contact at a **`pending review`** stage with the custom properties from T3 — review happens in HubSpot; there is no frontend and no second login.
 - `promotion` ledger: candidate → the HubSpot company/contact ids it became. Idempotent: re-running promotes nothing twice.
 - **Hands off to T11** for the cadence: promotion's job ends when the record exists and the first touch has been requested.
+- **Adopted contacts (T13) already exist in HubSpot and carry no provenance.** The first field write to one of them cites `retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's create date — honest, not an exemption *(moved here from T13, 2026-10-10)*.
 
 **Per-ticket context:** `.claude/references/hubspot-integration.md` · architecture → *Review surface: HubSpot,
 no frontend* · M4/M8.
@@ -262,7 +263,10 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 
 **Scope / acceptance criteria** — *the prospects already in HubSpot stop being a queue nobody works.*
 - Read the surviving open prospects of the 22 (11 were already past due at slice time) and enrol them in the cadence state machine. **No new sourcing.**
-- **Adopted candidates carry honest provenance**, not an exemption: `retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's create date. One code path, and the data says truthfully that it was hand-typed.
+- **Adoption writes no prospect field and creates no `candidate`.** Honest `manual_hubspot_entry` provenance applies at the first field write, which is T9 *(decided 2026-10-10; this replaces "adopted candidates carry honest provenance")*.
+- **An explicit roster** *(decided 2026-10-10)*: `lpe cadence adopt --dry-run` lists every contact on an open hand task with its evidence; a person writes a TOML roster marking each `adopt` or `park` (optional `start` override, optional `company`); `adopt --roster <file>` applies it under the sync lock. Re-running is a no-op.
+- **Evidence from the contact only**, exactly what the daily sync reads. A touch logged only on the company is missed; the roster's `start` covers it.
+- **Old hand tasks are left and listed**, never written: their ids are printed for a person to close.
 - **Cycle position is reconstructed from logged activity, never reset** — a prospect touched twice by hand resumes at touch three, and park-after-three-cycles counts those prior touches.
 - Runs **after Spike 1 closes**, so the spike ends with a lever attached rather than as an observation. *(Closed 2026-10-09: discipline. 1 of 22 tasks completed.)*
 - **Surviving** excludes explicit refusals: the "do not call them again" prospect and the two "not interested" replies of 09-28 are parked or exited, never enrolled. Most past touches are **notes** on unticked tasks, so reconstruction must count them.
@@ -270,7 +274,7 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 
 **Per-ticket context:** E15 (0 of 22 completed, 11 past due) · PRD JTBD (secondary) · M5 · architecture →
 *Spike 1* and *Cadence*.
-**Files:** `app/cadence/adoption.py`, `tests/cadence/`
+**Files:** `app/cadence/{adoption,schemas,service,repository,cli,exceptions}.py`, `app/promotion/schemas.py` (`SearchOperator.neq`), `tests/cadence/`
 **Size:** ~500–800 lines · **Depends on:** T11 · **Gated by:** ~~SPIKE-1 closing~~ cleared 2026-10-09
 
 ---

@@ -10,7 +10,7 @@ the same shape as the recorded fixtures in ``tests/promotion/fixtures/`` — ids
 
 import json
 import re
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -18,6 +18,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cadence.adoption import Adopter
 from app.cadence.schemas import ActivityKind
 from app.cadence.service import CadenceService
 from app.promotion.client import API_VERSION, HubSpotClient
@@ -29,7 +30,11 @@ START = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
 CONTACT = "400112233"
 COMPANY = "7009876543"
 
-_ASSOCIATIONS = re.compile(r"/contacts/(?P<contact>[^/]+)/associations/(?P<kind>[a-z]+)$")
+_ASSOCIATIONS = re.compile(
+    r"/(?P<source>contacts|tasks|companies)/(?P<object>[^/]+)/associations/(?P<kind>[a-z]+)$"
+)
+_TASK_TO_COMPANY = 192
+"""HubSpot's task→company association type, as the gateway writes it."""
 _ENGAGEMENT_BATCH = re.compile(r"/(?P<kind>calls|emails|notes|meetings)/batch/read$")
 
 
@@ -76,9 +81,16 @@ class FakeHubSpot:
         """Contacts whose association reads answer a body that fails validation."""
         self.unrecognised_associations_for: set[str] = set()
         """Contacts whose association reads answer a well-formed body of an unknown shape."""
+        self.contacts: dict[str, dict[str, object]] = {}
+        self.contact_companies: dict[str, list[str]] = {}
+        self.task_companies: dict[str, list[str]] = {}
+        self.search_total_extra = 0
+        """Report this many more open tasks than the page carries — a truncated search."""
         self._next_id = 88_000_000
         self.portal = MockPortal(
             [
+                ("POST", "/tasks/search", self._search_tasks),
+                ("POST", "/contacts/batch/read", self._read_contacts),
                 ("POST", "/tasks/batch/read", self._read_tasks),
                 ("POST", "/batch/read", self._read_engagements),
                 ("POST", f"/crm/objects/{API_VERSION}/tasks", self._create_task),
@@ -116,6 +128,67 @@ class FakeHubSpot:
         }
         self.contact_engagements.setdefault(contact, []).append((kind.value, activity_id))
         return activity_id
+
+    def add_contact(
+        self,
+        contact_id: str = CONTACT,
+        created_at: datetime | None = None,
+        *,
+        first: str | None = None,
+        last: str | None = None,
+    ) -> str:
+        """A contact as HubSpot stores it. ``created_at=None`` omits ``createdAt`` altogether."""
+        record: dict[str, object] = {
+            "id": contact_id,
+            "properties": {
+                "hs_object_id": contact_id,
+                "firstname": first,
+                "lastname": last,
+                "createdate": None if created_at is None else iso(created_at),
+            },
+            "archived": False,
+        }
+        if created_at is not None:
+            record["createdAt"] = iso(created_at)
+            record["updatedAt"] = iso(created_at)
+        self.contacts[contact_id] = record
+        return contact_id
+
+    def link_company(self, contact: str, company: str) -> None:
+        self.contact_companies.setdefault(contact, []).append(company)
+
+    def add_hand_task(
+        self,
+        subject: str,
+        *,
+        contact: str | None = None,
+        company: str | None = None,
+        completed_at: datetime | None = None,
+        due: datetime | None = None,
+    ) -> str:
+        """A task a founder typed by hand: no ``Ref:`` line, so not one of ours."""
+        task_id = self._new_id()
+        now = iso(self.clock())
+        self.tasks[task_id] = {
+            "id": task_id,
+            "properties": {
+                "hs_object_id": task_id,
+                "hs_task_subject": subject,
+                "hs_task_body": "Follow up — see the notes.",
+                "hs_task_status": "NOT_STARTED" if completed_at is None else "COMPLETED",
+                "hs_task_completion_date": None if completed_at is None else iso(completed_at),
+                "hs_timestamp": iso(due or self.clock()),
+                "hs_createdate": now,
+            },
+            "createdAt": now,
+            "updatedAt": now if completed_at is None else iso(completed_at),
+            "archived": False,
+        }
+        if contact is not None:
+            self.contact_engagements.setdefault(contact, []).append(("tasks", task_id))
+        if company is not None:
+            self.task_companies.setdefault(task_id, []).append(company)
+        return task_id
 
     # -- what a test reads back ---------------------------------------------------------------
 
@@ -155,6 +228,16 @@ class FakeHubSpot:
     def last_task_id(self) -> str:
         return list(self.tasks)[-1]
 
+    def task_status(self, task_id: str) -> str:
+        return str(_properties(self.tasks[task_id])["hs_task_status"])
+
+    def created_company_ids(self) -> list[list[str]]:
+        """Per created task, the companies its create body associated it with."""
+        return [
+            [target for target, type_id in _targets(body) if type_id == _TASK_TO_COMPANY]
+            for body in self.created
+        ]
+
     # -- the routes ---------------------------------------------------------------------------
 
     def _new_id(self) -> str:
@@ -178,11 +261,11 @@ class FakeHubSpot:
             "archived": False,
         }
         self.tasks[task_id] = record
-        associations = cast(list[dict[str, dict[str, str]]], body.get("associations", []))
-        for association in associations:
-            self.contact_engagements.setdefault(association["to"]["id"], []).append(
-                ("tasks", task_id)
-            )
+        for target, type_id in _targets(body):
+            if type_id == _TASK_TO_COMPANY:
+                self.task_companies.setdefault(task_id, []).append(target)
+            else:
+                self.contact_engagements.setdefault(target, []).append(("tasks", task_id))
         if self.lose_create_responses:
             self.lose_create_responses -= 1
             return httpx.Response(500, json=load_fixture("error_server"))
@@ -190,6 +273,23 @@ class FakeHubSpot:
 
     def _read_tasks(self, request: httpx.Request) -> httpx.Response:
         return self._batch(request, self.tasks)
+
+    def _read_contacts(self, request: httpx.Request) -> httpx.Response:
+        return self._batch(request, self.contacts)
+
+    def _search_tasks(self, request: httpx.Request) -> httpx.Response:
+        """Only the one filter adoption sends: ``hs_task_status NEQ <value>``."""
+        body = cast(dict[str, list[dict[str, list[dict[str, str]]]]], json.loads(request.content))
+        (only,) = body["filterGroups"][0]["filters"]
+        assert (only["propertyName"], only["operator"]) == ("hs_task_status", "NEQ"), only
+        found = [
+            record
+            for record in self.tasks.values()
+            if _properties(record)["hs_task_status"] != only["value"]
+        ]
+        return httpx.Response(
+            200, json={"total": len(found) + self.search_total_extra, "results": found}
+        )
 
     def _read_engagements(self, request: httpx.Request) -> httpx.Response:
         match = _ENGAGEMENT_BATCH.search(request.url.path)
@@ -217,19 +317,52 @@ class FakeHubSpot:
     def _associations(self, request: httpx.Request) -> httpx.Response:
         match = _ASSOCIATIONS.search(request.url.path)
         assert match is not None, request.url.path
-        if match["contact"] in self.malformed_associations_for:
+        source, object_id, kind = match["source"], match["object"], match["kind"]
+        if object_id in self.malformed_associations_for:
             return httpx.Response(200, json={"results": "not a list"})
-        if match["contact"] in self.unrecognised_associations_for:
+        if object_id in self.unrecognised_associations_for:
             return httpx.Response(200, json={"results": [{"objectRef": {"value": 1}}]})
+        if source == "tasks" and kind == "contacts":
+            ids = [
+                contact
+                for contact, linked in self.contact_engagements.items()
+                if ("tasks", object_id) in linked
+            ]
+        elif source == "tasks" and kind == "companies":
+            ids = self.task_companies.get(object_id, [])
+        elif source == "companies" and kind == "contacts":
+            ids = [
+                contact
+                for contact, companies in self.contact_companies.items()
+                if object_id in companies
+            ]
+        elif kind == "companies":
+            ids = self.contact_companies.get(object_id, [])
+        else:
+            ids = [
+                activity_id
+                for engagement, activity_id in self.contact_engagements.get(object_id, [])
+                if engagement == kind
+            ]
         linked = [
             {
-                "toObjectId": int(activity_id),
+                "toObjectId": int(linked_id),
                 "associationTypes": [{"category": "HUBSPOT_DEFINED", "typeId": 0, "label": None}],
             }
-            for kind, activity_id in self.contact_engagements.get(match["contact"], [])
-            if kind == match["kind"]
+            for linked_id in ids
         ]
         return httpx.Response(200, json={"results": linked})
+
+
+def _targets(body: dict[str, object]) -> list[tuple[str, int]]:
+    """A create body's associations as ``(target id, association type id)`` pairs."""
+    associations = cast(list[dict[str, object]], body.get("associations", []))
+    pairs: list[tuple[str, int]] = []
+    for association in associations:
+        target = cast(dict[str, str], association["to"])
+        types = cast(list[dict[str, int]], association["types"])
+        pairs.append((target["id"], types[0]["associationTypeId"]))
+    return pairs
 
 
 def _properties(body: dict[str, object]) -> dict[str, object]:
@@ -262,3 +395,23 @@ def service(
 ) -> CadenceService:
     """The service under test: the rolled-back session, the fake portal, the hand-moved clock."""
     return CadenceService(db_session, hubspot=lambda: hubspot_client, clock=clock)
+
+
+@pytest.fixture
+def adopter(db_session: AsyncSession, hubspot_client: HubSpotClient, clock: FakeClock) -> Adopter:
+    """T13's adopter, on the same session, portal and clock as :func:`service`."""
+    return Adopter(db_session, hubspot=lambda: hubspot_client, clock=clock)
+
+
+def raced_by_another_run[**P, R](real: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+    """Wrap ``CadenceRepository.create`` so another run's row lands first, inside the same write.
+
+    The first call inserts the row; the second meets ``uq_cadence_state_contact`` — the race an
+    enrolment loses after it has already created its task. The rollback removes both.
+    """
+
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        await real(*args, **kwargs)
+        return await real(*args, **kwargs)
+
+    return wrapper

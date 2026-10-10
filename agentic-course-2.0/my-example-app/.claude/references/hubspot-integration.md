@@ -35,11 +35,14 @@ worse than one that occasionally advances early. Cycle position is reconstructed
 than reset, so a prospect touched twice by hand resumes at touch three — park-after-three-cycles still counts
 those prior touches.
 
-**Adoption.** Prospects the system did not source (the 22 already in the portal) can be adopted into the
-machine. The write-gate governs prospect *field* writes, not task creation, so adoption is not refused for
-records that carry no provenance — instead they become candidates whose provenance says so honestly:
-`retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's
-create date.
+**Adoption (T13).** Prospects the system did not source (the hand-worked ones already in the portal) are
+adopted into the machine with `lpe cadence adopt`, from a roster a person writes after a dry run. Adoption
+creates cadence tasks and schedule rows only — **no prospect field write and no `candidate`** — so the
+write-gate, which governs field writes and not task creation, has nothing to check. Honest provenance for
+these records (`retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` =
+the record's create date) applies at the first field write, which is T9's. Evidence is read from the contact
+only, as the sync reads it; old hand tasks are listed for a person to close, never written. Details:
+`app/cadence/README.md` → *Adoption*.
 
 One dependency left open on purpose: the `$999 assessment` deal pipeline does not exist (9 deals, all
 January, none at that value) and we have decided not to create it yet. M3 is therefore unmeasurable, and the

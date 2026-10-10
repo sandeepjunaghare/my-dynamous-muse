@@ -247,3 +247,92 @@ class SyncReport(BaseModel):
     """Configuration a person should fix, e.g. no default task owner."""
     plans: list[ProspectPlan] = Field(default_factory=list[ProspectPlan])
     """A dry run's decision per prospect. Empty for a real sync."""
+
+
+class RosterAction(StrEnum):
+    """What the adoption roster says to do with one hand-worked contact."""
+
+    adopt = "adopt"
+    """Enrol at the touch its logged history reached (or the roster's ``start``)."""
+    park = "park"
+    """A refusal: record it as finished, so nothing can ever enrol it."""
+
+
+class HandTask(BaseModel):
+    """A task a person made by hand on the contact — any task without our key. Display only; never
+    stored, and never written: adoption lists it for the founder to close."""
+
+    task_id: str
+    subject: str
+    completed: bool
+    due_at: datetime | None
+    """``hs_timestamp``, the task's due date in HubSpot."""
+
+
+class AdoptionPlan(BaseModel):
+    """What adopting one contact would do, and the evidence behind it. Nothing in it is stored
+    except the schedule an applied run writes."""
+
+    hubspot_contact_id: str
+    display_name: str | None = None
+    """First and last name, read for the screen only. Never stored."""
+    company_id: str | None = None
+    action: RosterAction
+    steps: list[AdvanceStep] = Field(default_factory=list[AdvanceStep])
+    """The touches the contact's logged activity already closes, in order — the evidence."""
+    start: CadencePosition | None = None
+    """The touch the contact would start at. ``None`` when it would park."""
+    due_at: datetime | None = None
+    anchor_at: datetime
+    anchor_ref: str | None = None
+    """Evidence after ``(anchor_at, anchor_ref)`` is the first sync's; everything up to it is
+    adoption's, and is never credited twice."""
+    overridden: bool = False
+    """The roster's ``start`` replaced the reconstructed position."""
+    finished: bool = False
+    """All nine touches are already logged: an ``adopt`` that parks."""
+    hand_tasks: list[HandTask] = Field(default_factory=list[HandTask])
+    warnings: list[str] = Field(default_factory=list[str])
+    parked_position: CadencePosition | None = None
+    """Where a parked row would record the contact: the touch it reached. Set only when it parks."""
+
+    @property
+    def parks(self) -> bool:
+        """Whether applying this plan writes a parked row rather than enrolling."""
+        return self.action is RosterAction.park or self.finished
+
+
+class CompanyOnlyTask(BaseModel):
+    """An open hand task on a company, with no contact on the task. A cadence is keyed on a
+    contact, so the task itself cannot be adopted."""
+
+    task_id: str
+    subject: str
+    company_ids: list[str] = Field(default_factory=list[str])
+    company_contacts: list[str] = Field(default_factory=list[str])
+    """Contacts the task's companies already have. Often the contact named after the company,
+    carrying its own task: then this one is a duplicate to close, not a reason to add a contact.
+    Empty means a person must add one in HubSpot before the company can be adopted."""
+
+
+class AdoptionReport(BaseModel):
+    """What one adoption run found, or did."""
+
+    ran_at: datetime
+    dry_run: bool = False
+    """Nothing was written and no lock taken. ``plans`` says what applying would do."""
+    plans: list[AdoptionPlan] = Field(default_factory=list[AdoptionPlan])
+    """In a dry run, every plan drawn up; on apply, only the plans that were applied — an entry
+    that failed or was enrolled meanwhile has none."""
+    adopted: list[CadenceStateResponse] = Field(default_factory=list[CadenceStateResponse])
+    """Cadences this run started, each with the task it created or found by key."""
+    parked: list[CadenceStateResponse] = Field(default_factory=list[CadenceStateResponse])
+    """Cadences this run recorded as finished."""
+    already_enrolled: list[str] = Field(default_factory=list[str])
+    """Contacts that already had a cadence. Skipped, so a second run adopts nothing new."""
+    orphaned_tasks: list[str] = Field(default_factory=list[str])
+    """Tasks this run created for a contact another run enrolled first — left open, to close by
+    hand."""
+    failures: list[SyncFailure] = Field(default_factory=list[SyncFailure])
+    company_only: list[CompanyOnlyTask] = Field(default_factory=list[CompanyOnlyTask])
+    warnings: list[str] = Field(default_factory=list[str])

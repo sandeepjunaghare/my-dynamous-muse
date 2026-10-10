@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cadence.exceptions import (
@@ -68,6 +68,10 @@ logger = get_logger(__name__)
 
 type Clock = Callable[[], datetime]
 type HubSpotFactory = Callable[[], HubSpotClient]
+
+UNIQUE_CONTACT = "uq_cadence_state_contact"
+"""The one-cadence-per-contact constraint. Only a violation of this one means "already
+enrolled"; any other integrity error is a bug and is raised as it is."""
 
 OWNER_UNSET_WARNING = (
     "HUBSPOT_DEFAULT_OWNER_ID is not set: cadence tasks without a named owner are created "
@@ -175,21 +179,27 @@ class CadenceService:
         owner_id: str | None = None,
         start: CadencePosition | None = None,
         anchor_at: datetime | None = None,
+        anchor_ref: str | None = None,
         due_at: datetime | None = None,
     ) -> CadenceStateResponse:
         """Put a contact into the cadence and create the task for its first touch.
 
         **The seam T9 and T13 call.** T9 hands a freshly promoted prospect over with the defaults:
         cycle one, the call, due today, evidence counted from now. T13 adopts a hand-worked prospect
-        by passing the position it **reconstructed** from logged activity (``start``), the instant
-        evidence should count from (``anchor_at``) and the due date history implies (``due_at``) —
-        cycle position is never reset, so adoption must not fall back to the defaults.
+        by passing the position it **reconstructed** from logged activity (``start``), the anchor
+        evidence should count from (``anchor_at``, ``anchor_ref``) and the due date history implies
+        (``due_at``) — cycle position is never reset, so adoption must not fall back to the
+        defaults. **When ``anchor_at`` came from an activity, its ref must come too**: an anchor
+        ``(t, None)`` sorts before the activity at ``t``, and the next sync would credit it again.
 
         With no ``owner_id``, the task goes to ``HUBSPOT_DEFAULT_OWNER_ID``; with neither, it is
         unassigned and a warning is logged.
 
         The task is created before the row is written: a row pointing at a task that was never
-        made would be a prospect nobody is asked to touch.
+        made would be a prospect nobody is asked to touch. **Safe to retry:** a task already
+        carrying this touch's key — HubSpot made it and the answer was lost, or the commit never
+        happened — is found and reused rather than made twice. Two enrolments racing past the
+        check below meet the unique constraint, and the loser raises :class:`AlreadyEnrolledError`.
         """
         if await self._repository.get_by_contact(contact_id) is not None:
             raise AlreadyEnrolledError(
@@ -203,28 +213,105 @@ class CadenceService:
         owner = owner_id or default_owner_id()
         if owner is None:
             logger.warning("cadence.service.owner_unset", contact_id=contact_id)
-        created = await self._hubspot().create_task(
-            task_for(position, due, owner, key=task_key(contact_id, position)),
-            contact_id=contact_id,
-            company_id=company_id,
-        )
-        state = await self._repository.create(
-            contact_id=contact_id,
-            company_id=company_id,
-            owner_id=owner,
-            position=position,
-            task_id=created.id,
-            due_at=due,
-            anchor_at=anchor_at or now,
-            enrolled_at=now,
-        )
+        client = self._hubspot()
+        key = task_key(contact_id, position)
+        existing = await OutcomeReader(client).find_task_by_key(contact_id, key)
+        created_here = existing is None
+        if existing is not None:
+            task_id = existing.task_id
+            logger.warning("cadence.service.task_reused", contact_id=contact_id, task_id=task_id)
+        else:
+            created = await client.create_task(
+                task_for(position, due, owner, key=key),
+                contact_id=contact_id,
+                company_id=company_id,
+            )
+            task_id = created.id
+        try:
+            state = await self._repository.create(
+                contact_id=contact_id,
+                company_id=company_id,
+                owner_id=owner,
+                position=position,
+                task_id=task_id,
+                due_at=due,
+                anchor_at=anchor_at or now,
+                anchor_ref=anchor_ref,
+                enrolled_at=now,
+            )
+        except IntegrityError as exc:
+            await self._session.rollback()
+            if UNIQUE_CONTACT not in str(exc.orig):
+                raise
+            orphan = task_id if created_here else None
+            if orphan is not None:
+                logger.warning(
+                    "cadence.service.task_orphaned", contact_id=contact_id, task_id=orphan
+                )
+            left_open = "" if orphan is None else f"; task {orphan} is left open — close it by hand"
+            raise AlreadyEnrolledError(
+                f"contact {contact_id} was enrolled by another run while this one was working — "
+                f"cycle position is never reset{left_open}",
+                contact_id=contact_id,
+                orphan_task_id=orphan,
+            ) from exc
         await self._session.commit()
         logger.info(
             "cadence.service.prospect_enrolled",
             contact_id=contact_id,
             cycle=position.cycle,
             touch=position.touch.value,
-            task_id=created.id,
+            task_id=task_id,
+        )
+        return CadenceStateResponse.model_validate(state)
+
+    async def adopt_parked(
+        self,
+        contact_id: str,
+        *,
+        company_id: str | None,
+        position: CadencePosition,
+        anchor_at: datetime,
+        anchor_ref: str | None,
+    ) -> CadenceStateResponse:
+        """Record a hand-worked prospect as already finished — a refusal, or all nine touches done.
+
+        T13's other seam. The parked row is what keeps the contact out for good: nothing can enrol
+        it afterwards. Never reaches HubSpot, and takes no lock of its own — its caller
+        (:meth:`~app.cadence.adoption.Adopter.apply`) already holds the sync lock.
+        """
+        if await self._repository.get_by_contact(contact_id) is not None:
+            raise AlreadyEnrolledError(
+                f"contact {contact_id} already has a cadence — cycle position is never reset",
+                contact_id=contact_id,
+            )
+        now = self._clock()
+        try:
+            state = await self._repository.create_parked(
+                contact_id=contact_id,
+                company_id=company_id,
+                owner_id=None,
+                position=position,
+                anchor_at=anchor_at,
+                anchor_ref=anchor_ref,
+                enrolled_at=now,
+                parked_at=now,
+            )
+        except IntegrityError as exc:
+            await self._session.rollback()
+            if UNIQUE_CONTACT not in str(exc.orig):
+                raise
+            raise AlreadyEnrolledError(
+                f"contact {contact_id} was enrolled by another run while this one was working",
+                contact_id=contact_id,
+            ) from exc
+        await self._session.commit()
+        logger.info(
+            "cadence.service.prospect_parked",
+            contact_id=contact_id,
+            by="adoption",
+            cycle=position.cycle,
+            touch=position.touch.value,
         )
         return CadenceStateResponse.model_validate(state)
 

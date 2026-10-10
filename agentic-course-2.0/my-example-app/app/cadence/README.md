@@ -187,21 +187,89 @@ was reached or the prospect refused.
   in HubSpot.
 - **Never reaches HubSpot**, so it needs no token.
 
+## Adoption (T13)
+
+`lpe cadence adopt` brings the prospects the founders were already working by hand into the machine,
+at the touch they actually reached.
+
+```bash
+uv run lpe cadence adopt --dry-run                        # every contact on an open hand task
+uv run lpe cadence adopt --roster ~/lpe/adopt.toml --dry-run   # what the roster would do
+uv run lpe cadence adopt --roster ~/lpe/adopt.toml        # apply it
+```
+
+```toml
+[[prospect]]
+contact = "552902851267"   # the HubSpot contact id
+action = "adopt"
+
+[[prospect]]
+contact = "552902851268"
+action = "adopt"
+start = "2-call"           # optional: start here, from now (the evidence lives on the company)
+company = "346975458005"   # optional: when the contact has no company, or several
+
+[[prospect]]
+contact = "552902851269"
+action = "park"            # a refusal: recorded as finished, never enrolled
+```
+
+- **Dry run first.** It lists each contact once, however many hand tasks it has, with the evidence
+  behind its position (kind, id, Dallas time), where it would start and when it is due, its open and
+  ticked hand tasks, and any warning. Tasks on a company rather than a contact are listed
+  separately, with the contacts that company already has. Usually it is a duplicate of a contact's
+  own task (APS, Koetter): adopting that contact covers it, so close the company's task by hand. A
+  company whose contacts carry no open task needs them put in the roster. Only a company with no
+  contact at all (Kodiak) needs one added in HubSpot. Writes nothing; takes no lock.
+- **The roster is the human's judgment.** Refusals are found by reading notes, which no rule does
+  safely, so `park` is written by hand. Keep the file outside the repo; it is one-off operational
+  data.
+- **Reconstructed, never reset.** History runs through the same `plan_advance` the sync uses, from
+  touch one, counting from the contact's `createdate`; notes count. Two logged calls resume at the
+  email. All nine logged parks the contact.
+- **Evidence from the contact only**, which is what the sync reads afterwards, so the two cannot
+  disagree. A touch logged only on the company is missed; `start` is the fix, and it restarts the
+  evidence clock at now. Ticked hand tasks are shown, not counted.
+- **The anchor rule.** A reconstruction ending on a note is anchored on that note, ref included, so
+  the first sync does not credit it again. `sync --dry-run` straight after an apply should close
+  nothing.
+- **Hand tasks are left and listed.** Adoption creates the cadence task and prints the old ones for
+  you to close.
+- **Not M5.** No `cadence.sync.touch_done` is logged for history; M5 counts what the machine closes.
+- **No field writes, no `candidate`.** The write-gate is not involved; provenance is T9's.
+- **Re-runnable.** An enrolled contact is skipped. A failed entry is reported and the rest carry on;
+  an interrupted task create is found by its key on the re-run.
+- **Under the sync lock**, like `park`: a real apply refuses while a sync runs.
+
 ## Enrolment — the seam for T9 and T13
 
-There is **no enrol route or CLI command**. `CadenceService.enrol()` is called by code:
+There is **no enrol route, and no plain enrol command**. `CadenceService.enrol()` is called by code:
 
 - **T9** hands over a freshly promoted prospect with the defaults — cycle one, the call, due today,
   evidence counted from now.
-- **T13** adopts the 22 hand-worked prospects by passing the position it **reconstructed** from
-  logged activity (`start`), the anchor (`anchor_at`) and the due date (`due_at`). Cycle position is
-  never reset, which is why a bare "enrol this contact" command would be wrong: it would start a
-  prospect touched twice by hand back at touch one. `OutcomeReader` and `find_signal` are the pieces
-  T13 replays history through.
+- **T13** (`adopt`, above) passes the position it **reconstructed** from logged activity (`start`),
+  the anchor (`anchor_at` **and** `anchor_ref`) and the due date (`due_at`). Cycle position is never
+  reset, which is why a bare "enrol this contact" command would be wrong: it would start a prospect
+  touched twice by hand back at touch one. **When the anchor is an activity, its ref must come
+  too**: `(t, None)` sorts before the activity at `t`, and the next sync would credit it again.
 
-A contact is enrolled at most once, live or parked (`uq_cadence_state_contact`).
+`enrol` is **safe to retry.** Before creating the task it looks for one already carrying the touch's
+key, the same lookup the sync uses after an interrupted create, and reuses it
+(`cadence.service.task_reused`). A reused task keeps the due date HubSpot gave it when it was first
+created, while the row takes the re-run's — the two disagree by the time between the runs. That is
+rare (a lost create response) and left as is; `overdue` goes by the row's date. Two
+enrolments racing past the existing-row check meet `uq_cadence_state_contact`, and the loser raises
+`AlreadyEnrolledError` rather than an integrity error. If the loser created its own task, that task
+stays open in HubSpot: the loser logs `cadence.service.task_orphaned` and carries the id on the error
+(`orphan_task_id`), and `adopt` prints it among the tasks to close by hand. A contact is enrolled at most once, live or parked; `adopt_parked`
+records an adopted refusal the same way.
 
 ## Deferred
+
+- **Company-logged activity.** The sync and adoption read the contact's activity only. On 09-22, 5
+  of the calls were logged on the company first; a touch logged only there will not close and will
+  show as overdue. Teach logging on the contact (free), or read company activity with
+  de-duplication (not free) — raise when the adopted prospects meet their first real sync.
 
 - **A per-touch "closed by a note" line in the real sync's output.** The dry run prints it already;
   the sync prints counts.

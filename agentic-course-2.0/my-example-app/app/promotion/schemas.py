@@ -49,11 +49,13 @@ class ObjectType(StrEnum):
 class SearchOperator(StrEnum):
     """Search operators the MVP uses.
 
-    One member, deliberately. Dedupe matches exact values on default-searchable properties, and an
-    operator we do not use is an operator nobody has tested. Add members as callers need them.
+    Members as callers need them, deliberately: ``eq`` for dedupe, which matches exact values on
+    default-searchable properties, and ``neq`` for adoption's open-task listing. An operator we do
+    not use is an operator nobody has tested.
     """
 
     eq = "EQ"
+    neq = "NEQ"
 
 
 class TaskType(StrEnum):

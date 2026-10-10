@@ -1,4 +1,4 @@
-"""``lpe cadence`` — run the sync, rehearse it, park a prospect, and see what is overdue.
+"""``lpe cadence`` — run the sync, rehearse it, adopt or park prospects, and see what is overdue.
 
 ``sync`` is the same operation as ``POST /cadence/sync``, offered here because launchd can run a
 command without a server being up. **It is meant to run daily** (at least), from an external
@@ -8,22 +8,32 @@ exact command. ``sync --dry-run`` makes the same reads and decisions and applies
 at all.
 
 There is deliberately **no** ``enrol`` subcommand: enrolling an existing contact by hand would
-start it at touch one, and cycle position is never reset. See ``routes.py``.
+start it at touch one, and cycle position is never reset. See ``routes.py``. ``adopt`` (T13) is
+the one exception, and only because it never starts anyone at touch one by default: it
+**reconstructs** each contact's position from its logged history, after a dry run a person has
+read, from a roster a person wrote.
 """
 
 import argparse
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.cadence.machine import CADENCE_TZ, CYCLES
+from app.cadence.adoption import Adopter, load_roster
+from app.cadence.machine import CADENCE_TZ, CYCLES, CadencePosition
 from app.cadence.schemas import (
+    AdoptionPlan,
+    AdoptionReport,
     AdvanceStep,
+    CompanyOnlyTask,
     OverdueTouch,
     ParkResult,
     PendingTask,
     ProspectPlan,
+    RosterAction,
     SignalSource,
     SyncReport,
 )
@@ -33,7 +43,7 @@ from app.promotion.client import aclose_hubspot_client, get_hubspot_client
 
 
 def register(parser: argparse.ArgumentParser) -> None:
-    """Add ``sync``, ``park`` and ``overdue`` to the ``cadence`` command's parser."""
+    """Add ``sync``, ``adopt``, ``park`` and ``overdue`` to the ``cadence`` command's parser."""
     subcommands = parser.add_subparsers(dest="cadence_command", required=True)
     sync = subcommands.add_parser(
         "sync",
@@ -47,6 +57,25 @@ def register(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="print what the sync would do; create no task and write nothing",
     )
+    adopt = subcommands.add_parser(
+        "adopt",
+        help=(
+            "bring hand-worked prospects into the cadence at the touch they reached; run with "
+            "--dry-run first"
+        ),
+    )
+    adopt.add_argument(
+        "--roster",
+        type=Path,
+        metavar="PATH",
+        help="a TOML roster marking each contact adopt or park (optional start, company)",
+    )
+    adopt.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what adopting would do — every candidate, or the roster's; write nothing",
+    )
+    adopt.set_defaults(adopt_parser=adopt)
     park = subcommands.add_parser(
         "park",
         help=(
@@ -64,6 +93,13 @@ def dispatch(args: argparse.Namespace) -> int:
     if subcommand == "sync":
         dry_run: bool = args.dry_run
         return asyncio.run(_run_dry_run() if dry_run else _run_sync())
+    if subcommand == "adopt":
+        roster: Path | None = args.roster
+        adopt_dry_run: bool = args.dry_run
+        if roster is None and not adopt_dry_run:
+            adopt_parser: argparse.ArgumentParser = args.adopt_parser
+            adopt_parser.error("adopt needs --roster; run adopt --dry-run to list candidates")
+        return asyncio.run(_run_adopt(roster, dry_run=adopt_dry_run))
     if subcommand == "park":
         contact_id: str = args.contact_id
         return asyncio.run(_run_park(contact_id))
@@ -72,18 +108,23 @@ def dispatch(args: argparse.Namespace) -> int:
     raise AssertionError(f"unreachable: argparse accepted unknown subcommand {subcommand!r}")
 
 
+async def _with_session[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Run one operation, then close the pool and the HubSpot client — a CLI is not a service."""
+    try:
+        async with get_sessionmaker()() as session:
+            return await operation(session)
+    finally:
+        await dispose_engine()
+        await aclose_hubspot_client()
+
+
 async def _with_service[T](operation: Callable[[CadenceService], Awaitable[T]]) -> T:
-    """Run one operation, then close the pool and the HubSpot client — a CLI is not a service.
+    """Run one service operation.
 
     ``get_hubspot_client`` is looked up here at call time rather than bound as a default, so a
     test can point the CLI at a mock portal by patching this module.
     """
-    try:
-        async with get_sessionmaker()() as session:
-            return await operation(_service(session))
-    finally:
-        await dispose_engine()
-        await aclose_hubspot_client()
+    return await _with_session(lambda session: operation(_service(session)))
 
 
 def _service(session: AsyncSession) -> CadenceService:
@@ -190,6 +231,153 @@ def _activity_text(ref: str | None) -> str:
         return "logged activity"
     kind, _, activity_id = ref.partition(":")
     return f"{kind.removesuffix('s')} {activity_id}"
+
+
+async def _run_adopt(roster_path: Path | None, *, dry_run: bool) -> int:
+    """Discover (no roster), rehearse (roster + dry run) or apply (roster alone)."""
+    roster = None if roster_path is None else load_roster(roster_path)
+
+    async def operation(session: AsyncSession) -> AdoptionReport:
+        adopter = Adopter(session, hubspot=get_hubspot_client)
+        if roster is None:
+            return await adopter.discover()
+        if dry_run:
+            return await adopter.rehearse(roster)
+        return await adopter.apply(roster)
+
+    report = await _with_session(operation)
+    if report.dry_run:
+        print("dry run — nothing will be created or written")
+    for warning in report.warnings:
+        print(f"warning: {warning}")
+    for plan in report.plans:
+        _print_adoption_plan(plan, dry_run=report.dry_run)
+    listed = {plan.hubspot_contact_id for plan in report.plans}
+    enrolled = set(report.already_enrolled)
+    for task in report.company_only:
+        print(_company_only_text(task, listed=listed, enrolled=enrolled))
+    for contact_id in report.already_enrolled:
+        print(f"contact {contact_id}: already has a cadence — skipped")
+    for failure in report.failures:
+        print(f"contact {failure.hubspot_contact_id}: failed ({failure.code}) — {failure.error}")
+    if report.dry_run:
+        parks = sum(1 for plan in report.plans if plan.parks)
+        print(
+            f"would adopt {len(report.plans) - parks} · would park {parks} · already enrolled "
+            f"{len(report.already_enrolled)} · failed {len(report.failures)}"
+        )
+        return 1 if report.failures else 0
+    for state in report.adopted:
+        due = "" if state.due_at is None else f", due {_dallas(state.due_at)} (Dallas)"
+        print(
+            f"adopted {state.hubspot_contact_id} at {state.cycle}/{CYCLES} {state.touch.value} — "
+            f"task {state.hubspot_task_id}{due}"
+        )
+    for state in report.parked:
+        print(
+            f"parked {state.hubspot_contact_id} at {state.cycle}/{CYCLES} {state.touch.value} — "
+            "final, it will not be enrolled again"
+        )
+    to_close = [
+        task.task_id for plan in report.plans for task in plan.hand_tasks if not task.completed
+    ]
+    if to_close:
+        print(f"old hand tasks to close in HubSpot: {', '.join(to_close)}")
+    if report.orphaned_tasks:
+        print(
+            "tasks this run created for a contact another run enrolled first — close in HubSpot: "
+            f"{', '.join(report.orphaned_tasks)}"
+        )
+    print("log nothing here — outcomes stay in HubSpot")
+    return 1 if report.failures else 0
+
+
+def _company_only_text(task: CompanyOnlyTask, *, listed: set[str], enrolled: set[str]) -> str:
+    """What to do about a hand task on a company: usually a duplicate of a contact's own task.
+
+    A company whose contact is listed (or already enrolled) needs nothing new — adopting that
+    contact covers it. One whose contacts carry no open task needs them put in the roster. Only a
+    company with no contact at all needs one added in HubSpot.
+    """
+    noun = "company" if len(task.company_ids) == 1 else "companies"
+    where = f"{noun} {', '.join(task.company_ids)}" if task.company_ids else "no company"
+    lead = f'task {task.task_id} "{task.subject}" is on {where}'
+    covered = [contact for contact in task.company_contacts if contact in listed]
+    adopted = [contact for contact in task.company_contacts if contact in enrolled]
+    if covered:
+        return (
+            f"{lead}, whose {_contacts(covered, 'is', 'are')} listed above — adopting "
+            f"{_them(covered)} covers this; close this task by hand"
+        )
+    if adopted:
+        return (
+            f"{lead}, whose {_contacts(adopted, 'is', 'are')} already in the cadence — close this "
+            "task by hand"
+        )
+    if task.company_contacts:
+        them = _them(task.company_contacts)
+        return (
+            f"{lead}, whose {_contacts(task.company_contacts, 'has', 'have')} no open hand task — "
+            f"put {them} in the roster to adopt {them}"
+        )
+    return f"{lead} with no contact — add a contact in HubSpot, then put it in the roster"
+
+
+def _them(ids: list[str]) -> str:
+    """``it`` for one contact, ``them`` for several."""
+    return "it" if len(ids) == 1 else "them"
+
+
+def _contacts(ids: list[str], singular: str, plural: str) -> str:
+    """``contact 1 is`` / ``contacts 1, 2 are`` — the verb agreeing with the count."""
+    if len(ids) == 1:
+        return f"contact {ids[0]} {singular}"
+    return f"contacts {', '.join(ids)} {plural}"
+
+
+def _print_adoption_plan(plan: AdoptionPlan, *, dry_run: bool) -> None:
+    """One contact: who, the evidence, where it would start, and the hand tasks around it."""
+    would = "would " if dry_run else ""
+    header = f"contact {plan.hubspot_contact_id}"
+    if plan.display_name is not None:
+        header += f" ({plan.display_name})"
+    if plan.company_id is not None:
+        header += f" · company {plan.company_id}"
+    print(header)
+    if not plan.steps:
+        print("  evidence: none logged on the contact")
+    for index, step in enumerate(plan.steps):
+        label = "evidence:" if index == 0 else " " * len("evidence:")
+        when = _dallas(step.signal.done_at)
+        print(f"  {label} {_label(step)} ← {_closed_by(step)}, {when} (Dallas)")
+    if plan.action is RosterAction.park:
+        print(f"  {would}park — the roster says so; it will never be enrolled")
+    elif plan.finished:
+        print(f"  {would}park — all {CYCLES * 3} touches are already logged")
+    elif plan.start is not None and plan.due_at is not None:
+        note = " (roster start — the evidence above is not counted)" if plan.overridden else ""
+        print(f"  {would}start {_position(plan.start)}, due {_dallas(plan.due_at)} (Dallas){note}")
+    open_tasks = [task for task in plan.hand_tasks if not task.completed]
+    ticked = [task for task in plan.hand_tasks if task.completed]
+    if open_tasks:
+        listed = ", ".join(f'{task.task_id} "{task.subject}"' for task in open_tasks)
+        print(f"  open hand tasks — close them in HubSpot after adopting: {listed}")
+    if ticked:
+        listed = ", ".join(f'{task.task_id} "{task.subject}"' for task in ticked)
+        print(
+            "  ticked hand tasks (not counted as evidence — set `start` if they were touches): "
+            f"{listed}"
+        )
+    for warning in plan.warnings:
+        print(f"  warning: {warning}")
+
+
+def _position(position: CadencePosition) -> str:
+    return f"{position.cycle}/{CYCLES} {position.touch.value}"
+
+
+def _dallas(moment: datetime) -> str:
+    return moment.astimezone(CADENCE_TZ).strftime("%Y-%m-%d %H:%M")
 
 
 async def _run_park(contact_id: str) -> int:
