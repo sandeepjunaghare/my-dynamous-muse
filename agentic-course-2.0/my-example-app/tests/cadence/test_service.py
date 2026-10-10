@@ -7,10 +7,11 @@ in milliseconds.
 
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from typing import NoReturn
 
 import pytest
 from sqlalchemy import text, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from structlog.testing import capture_logs
 
@@ -214,6 +215,44 @@ class TestEnrol:
         (event,) = [log for log in logs if log["event"] == "cadence.service.task_orphaned"]
         assert (event["contact_id"], event["task_id"]) == (CONTACT, orphan)
         assert await _state(db_session) == ("live", 1, "call", first_task)
+
+    async def test_another_constraint_violation_is_not_called_already_enrolled(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#15: only ``uq_cadence_state_contact`` means "enrolled meanwhile"; others re-raise."""
+        monkeypatch.setattr(CadenceRepository, "create", _violates("ck_cadence_state_cycle"))
+
+        with pytest.raises(IntegrityError, match="ck_cadence_state_cycle"):
+            await service.enrol(CONTACT)
+
+        assert await CadenceRepository(db_session).get_by_contact(CONTACT) is None
+        assert hubspot.task_creates_attempted() == 1, "the task was made; a re-run finds it by key"
+
+    async def test_another_constraint_violation_on_parking_is_not_called_already_enrolled(
+        self,
+        service: CadenceService,
+        clock: FakeClock,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            CadenceRepository, "create_parked", _violates("ck_cadence_state_status")
+        )
+
+        with pytest.raises(IntegrityError, match="ck_cadence_state_status"):
+            await service.adopt_parked(
+                CONTACT,
+                company_id=None,
+                position=CadencePosition.first(),
+                anchor_at=clock(),
+                anchor_ref=None,
+            )
+
+        assert await CadenceRepository(db_session).get_by_contact(CONTACT) is None
 
     async def test_an_adopted_refusal_is_parked_and_never_enrolled(
         self,
@@ -563,6 +602,21 @@ def _failing_for[**P](
         await real(*args, **kwargs)
 
     return wrapper
+
+
+def _violates(constraint: str) -> Callable[..., Awaitable[NoReturn]]:
+    """A repository write that fails on ``constraint`` — any constraint but the contact's."""
+
+    async def write(*args: object, **kwargs: object) -> NoReturn:
+        raise IntegrityError(
+            "INSERT INTO cadence_state",
+            {},
+            Exception(
+                f'new row for relation "cadence_state" violates check constraint "{constraint}"'
+            ),
+        )
+
+    return write
 
 
 class TestAmbiguousCreates:

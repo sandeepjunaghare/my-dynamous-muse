@@ -136,6 +136,45 @@ class TestReconstruction:
 
         assert (report.touches_closed, report.tasks_created) == (0, 0)
 
+    async def test_after_adopting_a_contact_with_no_history_only_a_new_touch_counts(
+        self,
+        adopter: Adopter,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+    ) -> None:
+        """#15: nothing matched, so the anchor is ``(createdAt, None)``; the next call counts."""
+        hubspot.add_contact(CONTACT, SINCE)
+        await adopter.apply(_adopt())
+        clock.advance(hours=1)
+
+        first = await service.sync()
+        hubspot.log(ActivityKind.call, at=clock())
+        clock.advance(hours=1)
+        second = await service.sync()
+
+        assert (first.touches_closed, first.tasks_created) == (0, 0)
+        assert (second.touches_closed, second.tasks_created) == (1, 1)
+
+    async def test_the_first_sync_after_a_start_override_ignores_the_older_evidence(
+        self,
+        adopter: Adopter,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+    ) -> None:
+        """#15: an override anchors at ``(now, None)``, so the calls before it are never counted."""
+        hubspot.add_contact(CONTACT, SINCE)
+        hubspot.log(ActivityKind.call, at=SINCE + timedelta(days=2))
+        hubspot.log(ActivityKind.call, at=SINCE + timedelta(days=3))
+        entry = RosterEntry(contact=CONTACT, action=RosterAction.adopt, start="1-call")
+        await adopter.apply(_roster(entry))
+        clock.advance(hours=1)
+
+        report = await service.sync()
+
+        assert (report.touches_closed, report.tasks_created) == (0, 0)
+
     async def test_a_note_logged_after_adoption_is_the_machines_to_count(
         self,
         adopter: Adopter,

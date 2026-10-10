@@ -926,3 +926,31 @@ Both round-2 findings fixed in this PR (Low, small, in scope); nothing deferred.
 ruff, mypy, pyright and `alembic check` are clean. **Worked:** the shared `raced_by_another_run` helper makes a
 lost race reproducible at both the service tier and the CLI tier without touching private attributes.
 **Improve:** assert on whole output lines, not bare ids. A short task id can sit inside a random contact id.
+
+## Issue #15: close the deferred T13 adoption test gaps (2026-10-10)
+
+Branch: `test/adoption-test-gaps`, cut from `main`. Tests only; app code changes only if a test exposes a real bug, and then I stop and report first.
+
+- [x] **`enrol` re-raise** (`tests/cadence/test_service.py`): an `IntegrityError` naming another constraint
+  (e.g. `ck_cadence_state_cycle`) reaches the caller as `IntegrityError`, not `AlreadyEnrolledError`, after a
+  rollback. Inject it by wrapping `CadenceRepository.create`.
+- [x] **`adopt_parked` re-raise:** the same check, by wrapping `create_parked`.
+- [x] **First sync after adoption closes nothing** (`tests/cadence/test_adoption_service.py`), two more cases:
+  - no history: anchor `(createdAt, None)`;
+  - a roster `start` override: anchor `(now, None)`, with earlier evidence that must not be re-credited.
+- [x] **CLI output** (`tests/cadence/test_cli.py`, `adopt --roster`):
+  - a `park` entry prints `parked X at 1/3 … — final, it will not be enrolled again`;
+  - an entry that fails on apply (unknown contact) exits 1 and prints `failed (contact_not_found)`;
+  - apply while a sync holds the lock gives one `error:` line saying a sync is running, with no traceback;
+  - a company-only task whose contact is already enrolled says `already in the cadence — close this task by hand`.
+- [x] The race-skip output (only `already has a cadence — skipped`, no `start …` line) is already pinned by
+  `test_a_lost_enrol_race_names_the_task_it_left_open`. Nothing to add; note it on the issue.
+- [x] Validate (ruff, format, mypy, pyright, pytest with the database), then commit, push, open a PR that closes #15.
+
+**Review:** 682 passed (8 new tests); ruff, mypy and pyright are clean. No app code changed, and no bug was found.
+**Worked:** a mutation check proved every new test bites. Disabling the re-raise, moving either anchor, making
+failures exit 0, dropping the parked line, or dropping the enrolled company-only branch each fails its test.
+**Didn't:** the first draft of the no-history test could not fail, because with no evidence there is nothing
+to re-credit. It now also checks that a call logged after adoption is counted. **Improve:** when a test
+asserts "nothing happens", pair it with "and the next real thing does", or it passes on broken code.
+

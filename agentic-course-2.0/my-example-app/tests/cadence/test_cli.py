@@ -349,6 +349,19 @@ def _hand_worked_portal(
     return hubspot, hand
 
 
+def _roster_file(tmp_path: Path, *entries: tuple[str, str]) -> Path:
+    """A roster with one ``[[prospect]]`` per ``(contact, action)``."""
+    roster = tmp_path / "adopt.toml"
+    roster.write_text(
+        "".join(
+            f'[[prospect]]\ncontact = "{contact}"\naction = "{action}"\n'
+            for contact, action in entries
+        ),
+        encoding="utf-8",
+    )
+    return roster
+
+
 async def _row_exists(database_url: str, contact_id: str) -> bool:
     engine = create_async_engine(database_url)
     try:
@@ -477,6 +490,106 @@ class TestAdopt:
         assert f"enrolled first — close in HubSpot: {orphan}" in out
         assert "would start" not in out and "  start " not in out, "no plan for a skipped entry"
         assert "old hand tasks to close" not in out, "this run superseded none of them"
+
+    def test_a_park_entry_prints_parked_and_final(
+        self,
+        fresh_contact: str,
+        cli_database: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        hubspot, hand = _hand_worked_portal(fresh_contact, monkeypatch)
+        roster = _roster_file(tmp_path, (fresh_contact, "park"))
+
+        assert main(["cadence", "adopt", "--roster", str(roster)]) == 0
+
+        out = capsys.readouterr().out
+        assert (
+            f"parked {fresh_contact} at 1/3 voicemail — final, it will not be enrolled again"
+        ) in out
+        assert f"old hand tasks to close in HubSpot: {hand}" in out
+        assert hubspot.created == []
+        assert asyncio.run(_status_of(cli_database, fresh_contact))[:2] == ("parked", "voicemail")
+
+    def test_an_entry_that_fails_exits_1_and_the_rest_still_adopt(
+        self,
+        fresh_contact: str,
+        cli_database: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _hand_worked_portal(fresh_contact, monkeypatch)
+        unknown = "400999999999"
+        roster = _roster_file(tmp_path, (unknown, "adopt"), (fresh_contact, "adopt"))
+
+        assert main(["cadence", "adopt", "--roster", str(roster)]) == 1
+
+        out = capsys.readouterr().out
+        assert f"contact {unknown}: failed (contact_not_found)" in out
+        assert f"adopted {fresh_contact} at 1/3 voicemail" in out
+        assert asyncio.run(_row_exists(cli_database, unknown)) is False
+
+    def test_adopt_while_a_sync_runs_is_one_error_line(
+        self,
+        fresh_contact: str,
+        cli_database: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        hubspot, _ = _hand_worked_portal(fresh_contact, monkeypatch)
+        roster = _roster_file(tmp_path, (fresh_contact, "adopt"))
+
+        async def adopt_while_locked() -> int:
+            engine = create_async_engine(cli_database)
+            try:
+                async with engine.connect() as other:
+                    await other.execute(
+                        text("select pg_advisory_lock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                    )
+                    try:
+                        return await asyncio.to_thread(
+                            main, ["cadence", "adopt", "--roster", str(roster)]
+                        )
+                    finally:
+                        await other.execute(
+                            text("select pg_advisory_unlock(:id)"), {"id": CADENCE_SYNC_LOCK_ID}
+                        )
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(adopt_while_locked()) == 1
+        err = capsys.readouterr().err
+        assert "error: a cadence sync is running — adopt again when it has finished" in err
+        assert "Traceback" not in err
+        assert hubspot.created == []
+        assert asyncio.run(_row_exists(cli_database, fresh_contact)) is False
+
+    def test_a_company_only_task_whose_contact_is_enrolled_says_close_it(
+        self,
+        fresh_contact: str,
+        cli_database: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        hubspot, _ = _hand_worked_portal(fresh_contact, monkeypatch)
+        hubspot.link_company(fresh_contact, "7000000001")
+        duplicate = hubspot.add_hand_task("Follow up with APS FireCo", company="7000000001")
+        roster = _roster_file(tmp_path, (fresh_contact, "adopt"))
+        assert main(["cadence", "adopt", "--roster", str(roster)]) == 0
+        capsys.readouterr()
+
+        assert main(["cadence", "adopt", "--dry-run"]) == 0
+
+        out = capsys.readouterr().out
+        assert f"contact {fresh_contact}: already has a cadence — skipped" in out
+        assert (
+            f'task {duplicate} "Follow up with APS FireCo" is on company 7000000001, whose contact '
+            f"{fresh_contact} is already in the cadence — close this task by hand"
+        ) in out
 
     def test_a_malformed_roster_is_one_error_line(
         self, cli_database: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
