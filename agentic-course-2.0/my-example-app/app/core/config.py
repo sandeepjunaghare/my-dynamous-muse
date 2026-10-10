@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     manifest_agent_max_turns: int = Field(default=60, gt=0)
     manifest_agent_max_budget_usd: Decimal = Field(default=Decimal("5.00"), gt=0)
 
+    # The classify_rollup judgment node (T7): one call per candidate decides every judgment rule.
+    # The ~$0.08 a call was measured on this model, so it is the cost basis; a cheaper model is the
+    # lever once the live eval shows it holds the <5% false-positive bar (M6). Per-call caps and a
+    # per-run call cap are circuit breakers against a runaway loop, not budget targets (D7).
+    rollup_classifier_model: str = "claude-opus-5-5"
+    rollup_classifier_max_turns: int = Field(default=8, gt=0)
+    rollup_classifier_max_budget_usd: Decimal = Field(default=Decimal("0.50"), gt=0)
+    max_judgment_calls_per_run: int = Field(default=500, gt=0)
+
 
 @lru_cache
 def get_settings() -> Settings:

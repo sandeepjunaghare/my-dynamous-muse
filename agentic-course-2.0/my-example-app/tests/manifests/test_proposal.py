@@ -12,15 +12,14 @@ from app.manifests.exceptions import ManifestProposalIncompleteError
 from app.manifests.proposal import (
     AgentProposal,
     Citation,
-    PageRead,
     ProposedIcpBand,
     ProposedRule,
     ProposedSource,
     ProposedVocabulary,
     build_draft,
-    normalize_url,
 )
 from app.manifests.schemas import RuleKind, RuleOperator, SourceKind
+from app.shared.page_reads import PageRead, normalize_url
 from app.shared.provenance import RetrievalMethod
 from tests.manifests.replay import load_structured_output
 

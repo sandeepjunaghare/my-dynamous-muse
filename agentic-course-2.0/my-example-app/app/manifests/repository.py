@@ -14,8 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.manifests.models import VerticalManifest
-from app.manifests.schemas import ManifestBody, ManifestStatus
+from app.manifests.models import ManifestDryRun, VerticalManifest
+from app.manifests.schemas import DryRunReport, ManifestBody, ManifestStatus
 
 logger = get_logger(__name__)
 
@@ -116,6 +116,34 @@ class ManifestRepository:
             version=manifest.version,
         )
         return manifest
+
+    async def record_dry_run(
+        self, manifest_id: UUID, report: DryRunReport, ran_by: str
+    ) -> ManifestDryRun:
+        """Store one dry-run report against a manifest version."""
+        dry_run = ManifestDryRun(
+            manifest_id=manifest_id, ran_by=ran_by, report=report.model_dump(mode="json")
+        )
+        self._session.add(dry_run)
+        await self._session.flush()
+        await self._session.refresh(dry_run)
+        logger.info(
+            "manifests.repository.dryrun_recorded",
+            dry_run_id=str(dry_run.id),
+            manifest_id=str(manifest_id),
+            flagged=list(report.flagged()),
+        )
+        return dry_run
+
+    async def latest_dry_run(self, manifest_id: UUID) -> ManifestDryRun | None:
+        """The most recent dry-run of a manifest version, or ``None`` if it was never dry-run."""
+        result = await self._session.execute(
+            select(ManifestDryRun)
+            .where(ManifestDryRun.manifest_id == manifest_id)
+            .order_by(ManifestDryRun.ran_at.desc(), ManifestDryRun.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def mark_superseded(self, manifest: VerticalManifest) -> None:
         """Retire a previously ACTIVE row. The row is retained, never overwritten (AC6)."""

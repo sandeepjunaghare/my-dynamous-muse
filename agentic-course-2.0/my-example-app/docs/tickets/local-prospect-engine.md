@@ -188,6 +188,12 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
 
 **Per-ticket context:** E7 · E9 · architecture → *Missing pieces* ("a rollup-vs-local classifier") · M6 ·
 PRD §4 WRONG condition (founder rejects ≥30% → qualification judgment cannot be encoded).
+- **Decided while planning (2026-10-10):** T7 owns the evaluator and wires it into T5's backlog and batch
+  selection **at merge** (one evaluator, never two). The dry-run reads **local bulk-file extracts**
+  (`--source-file fmcsa=census.csv`); rules on per-record APIs are reported, not called. `classify_rollup` gets
+  WebSearch + WebFetch, its citations held to verified reads by the read tracker, now in `app/shared/`. Rules gain an
+  optional `source` (default: the first declared). Suppression is keyed on `(vertical, registry_id)`, because every
+  run writes new candidate rows. M6's <5% is an opt-in `live` eval on a founder-labelled set; replay proves wiring.
 **Files:** `app/qualification/*`, `app/tools/classify_rollup.py`, `alembic/versions/`, `tests/qualification/`
 **Size:** ~900–1300 lines · **Depends on:** T2, T4 · **Parallel with:** T5, T6, T8. In the run, the judgment call consumes T6's verified fields; that is a data contract on `candidate` (T4), so it is not a build dependency.
 

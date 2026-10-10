@@ -16,7 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.core.config import get_settings
 from app.manifests.repository import ManifestRepository
 from app.manifests.schemas import ManifestBody
-from tests.manifests.builders import a_body, a_vertical
+from tests.manifests.builders import a_body, a_dry_run, a_vertical
+
+DELETE_DRY_RUNS = (
+    "delete from manifest_dry_run where manifest_id in "
+    "(select id from vertical_manifest where vertical = :vertical)"
+)
+"""A dry-run references its manifest, so it goes first when a test's vertical is cleaned up."""
 
 
 @pytest.fixture
@@ -32,32 +38,24 @@ def cli_database(migrated_database: str, monkeypatch: pytest.MonkeyPatch) -> Ite
     get_settings.cache_clear()
 
 
-@pytest.fixture
-def committed_draft(cli_database: str) -> Iterator[tuple[UUID, str]]:
-    """A committed DRAFT declaring ``fmcsa`` and ``places``; removed after the test."""
+def _committed_draft(
+    cli_database: str, *, dry_run: bool, body: ManifestBody | None = None
+) -> Iterator[tuple[UUID, str]]:
+    """Commit a DRAFT (``fmcsa`` + ``places`` by default), optionally dry-run; remove it after."""
     vertical = a_vertical()
 
     async def create() -> UUID:
         engine = create_async_engine(cli_database)
         try:
             async with AsyncSession(engine, expire_on_commit=False) as session:
-                manifest = await ManifestRepository(session).create_draft(
-                    vertical, a_body("fmcsa", "places")
+                repository = ManifestRepository(session)
+                manifest = await repository.create_draft(
+                    vertical, body or a_body("fmcsa", "places")
                 )
+                if dry_run:
+                    await repository.record_dry_run(manifest.id, a_dry_run(manifest.id), "test")
                 await session.commit()
                 return manifest.id
-        finally:
-            await engine.dispose()
-
-    async def remove() -> None:
-        engine = create_async_engine(cli_database)
-        try:
-            async with AsyncSession(engine) as session:
-                await session.execute(
-                    text("delete from vertical_manifest where vertical = :vertical"),
-                    {"vertical": vertical},
-                )
-                await session.commit()
         finally:
             await engine.dispose()
 
@@ -65,7 +63,19 @@ def committed_draft(cli_database: str) -> Iterator[tuple[UUID, str]]:
     try:
         yield manifest_id, vertical
     finally:
-        asyncio.run(remove())
+        asyncio.run(_delete_vertical(cli_database, vertical))
+
+
+@pytest.fixture
+def committed_draft(cli_database: str) -> Iterator[tuple[UUID, str]]:
+    """A committed DRAFT with a recorded dry-run, so ``activate`` reaches the terms gate."""
+    yield from _committed_draft(cli_database, dry_run=True)
+
+
+@pytest.fixture
+def committed_draft_without_dry_run(cli_database: str) -> Iterator[tuple[UUID, str]]:
+    """A committed DRAFT nobody has dry-run — what ``activate`` must refuse."""
+    yield from _committed_draft(cli_database, dry_run=False)
 
 
 @pytest.fixture
@@ -82,6 +92,7 @@ async def _delete_vertical(url: str, vertical: str) -> None:
     engine = create_async_engine(url)
     try:
         async with AsyncSession(engine) as session:
+            await session.execute(text(DELETE_DRY_RUNS), {"vertical": vertical})
             await session.execute(
                 text("delete from vertical_manifest where vertical = :vertical"),
                 {"vertical": vertical},
@@ -120,3 +131,26 @@ def load_committed_body(url: str, manifest_id: UUID) -> tuple[str, ManifestBody]
             await engine.dispose()
 
     return asyncio.run(read())
+
+
+@pytest.fixture
+def committed_api_only_draft(cli_database: str) -> Iterator[tuple[UUID, str]]:
+    """A committed DRAFT shaped like the fire manifest: no bulk-file source to extract from."""
+    body = a_body("fmcsa")
+    api_only = ManifestBody.model_validate(
+        {
+            **body.model_dump(mode="json"),
+            "sources": [
+                {
+                    **source.model_dump(mode="json"),
+                    "value": {**source.value.model_dump(mode="json"), "name": name, "kind": kind},
+                }
+                for source, (name, kind) in zip(
+                    body.sources * 2,
+                    (("registry", "registry_api"), ("places", "web_lookup")),
+                    strict=True,
+                )
+            ],
+        }
+    )
+    yield from _committed_draft(cli_database, dry_run=False, body=api_only)

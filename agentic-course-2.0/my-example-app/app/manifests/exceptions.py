@@ -72,6 +72,34 @@ class TermsOfUseNotRecordedError(ManifestError):
         self.missing_sources = missing_sources
 
 
+class DryRunNotRecordedError(ManifestError):
+    """The manifest has never been dry-run, so nobody has seen its rules against real data.
+
+    Decided 2026-10-09: ``activate`` requires a recorded dry-run. Freight v1 and v2 were both wrong
+    in ways only a run against the real census showed; this makes that check a precondition rather
+    than a habit. The gate asks that one was *recorded*, not that it came back clean — a person
+    reads it.
+    """
+
+    default_code: ClassVar[str] = "dry_run_not_recorded"
+    status_code: ClassVar[int] = 409
+
+    def __init__(self, message: str, *, manifest_id: str) -> None:
+        super().__init__(message)
+        self.manifest_id = manifest_id
+
+
+class DryRunMismatchError(ManifestError):
+    """A dry-run report was offered for a different manifest than the one it is recorded against."""
+
+    default_code: ClassVar[str] = "dry_run_mismatch"
+    status_code: ClassVar[int] = 422
+
+    def __init__(self, message: str, *, manifest_id: str) -> None:
+        super().__init__(message)
+        self.manifest_id = manifest_id
+
+
 class UnknownSourceError(ManifestError):
     """``--accept-terms`` named a source this manifest does not declare.
 

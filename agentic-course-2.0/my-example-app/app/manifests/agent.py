@@ -26,34 +26,29 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from urllib.parse import urlsplit
 
 from claude_agent_sdk import (
-    AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKError,
     Message,
     ResultMessage,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
     query,
 )
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
 from app.core.cost import BillableKind, RunCost, format_usd
 from app.core.logging import get_logger
 from app.manifests.exceptions import ManifestAgentError
 from app.manifests.prompts import SYSTEM_PROMPT, build_user_prompt
-from app.manifests.proposal import AgentProposal, PageRead
+from app.manifests.proposal import AgentProposal
+from app.shared.agent_reads import ReadTracker
+from app.shared.page_reads import PageRead
 
 logger = get_logger(__name__)
 
 RESEARCH_TOOLS = ("WebSearch", "WebFetch")
 """The agent's entire tool surface. Reading the web is the job; nothing else is needed."""
-
-FETCH_TOOL = "WebFetch"
 
 type AgentRunner = Callable[[str, ClaudeAgentOptions], AsyncIterator[Message]]
 """Anything that turns a prompt and options into the SDK's message stream.
@@ -108,101 +103,6 @@ def build_options(settings: Settings) -> ClaudeAgentOptions:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-REDIRECT_MARKER = "REDIRECT DETECTED"
-"""How the CLI's ``WebFetch`` starts the text of a redirect it did not follow."""
-
-
-def _host(url: str) -> str | None:
-    """The lowercased host of ``url``, or ``None`` when it has none or does not parse."""
-    try:
-        host = urlsplit(url.strip()).hostname
-    except ValueError:
-        return None
-    return host or None
-
-
-def _result_text(block: ToolResultBlock) -> str:
-    if isinstance(block.content, str):
-        return block.content
-    if block.content is None:
-        return ""
-    return " ".join(str(part.get("text", "")) for part in block.content)
-
-
-class _FetchOutcome(BaseModel):
-    """The fields of the CLI's ``WebFetch`` output (``UserMessage.tool_use_result``) a read needs.
-
-    Strict, so a status that is not a real integer or a URL that is not a string is unrecognised
-    rather than coerced.
-    """
-
-    model_config = ConfigDict(strict=True, extra="ignore")
-
-    code: int
-    url: str
-
-
-def _unread_reason(
-    block: ToolResultBlock, structured: object, requested_url: str, *, attributable: bool
-) -> str | None:
-    """Why a ``WebFetch`` result is not proof of a read — or ``None`` when it is.
-
-    Fails closed: every check demands positive evidence of success, so a shape this code does not
-    recognise is treated as a failed fetch, never as a read.
-    """
-    if block.is_error:
-        return "tool_error"
-    if not attributable:
-        # The structured result belongs to the message, not to a block: with several results in
-        # one message there is no telling whose status it is.
-        return "result_not_attributable"
-    if structured is None:
-        return "no_structured_result"
-    try:
-        outcome = _FetchOutcome.model_validate(structured)
-    except ValidationError:
-        return "unrecognised_structured_result"
-    if not 200 <= outcome.code < 300:
-        return f"http_{outcome.code}"
-    requested_host = _host(requested_url)
-    if requested_host is None or _host(outcome.url) != requested_host:
-        return "host_mismatch"
-    if _result_text(block).lstrip().startswith(REDIRECT_MARKER):
-        return "redirect"
-    return None
-
-
-class _ReadTracker:
-    """Pairs each ``WebFetch`` call with its result to learn which pages were actually read."""
-
-    def __init__(self, clock: Callable[[], datetime]) -> None:
-        self._clock = clock
-        self._pending: dict[str, str] = {}
-        self.reads: list[PageRead] = []
-
-    def observe(self, message: Message) -> None:
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, ToolUseBlock) and block.name == FETCH_TOOL:
-                    url = block.input.get("url")
-                    if isinstance(url, str) and url.strip():
-                        self._pending[block.id] = url
-        elif isinstance(message, UserMessage) and not isinstance(message.content, str):
-            results = [block for block in message.content if isinstance(block, ToolResultBlock)]
-            for block in results:
-                url = self._pending.pop(block.tool_use_id, None)
-                if url is None:
-                    continue
-                reason = _unread_reason(
-                    block, message.tool_use_result, url, attributable=len(results) == 1
-                )
-                if reason is not None:
-                    logger.info("manifests.agent.fetch_failed", url=url, reason=reason)
-                    continue
-                self.reads.append(PageRead(url=url, read_at=self._clock()))
-                logger.info("manifests.agent.fetch_succeeded", url=url)
 
 
 def _record_cost(cost: RunCost, result: ResultMessage | None) -> Decimal | None:
@@ -273,7 +173,7 @@ async def run_agent(
     options = build_options(resolved_settings)
     # Resolved at call time, so a test that replaces `query` on this module is honoured too.
     run = runner or sdk_runner
-    tracker = _ReadTracker(clock)
+    tracker = ReadTracker(clock, log_prefix="manifests.agent")
     result: ResultMessage | None = None
     usd: Decimal | None = None
 

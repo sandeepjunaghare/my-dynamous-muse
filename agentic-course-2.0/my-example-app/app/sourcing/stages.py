@@ -55,6 +55,8 @@ FIELD_OWNERS: Final[Mapping[str, PipelineStage]] = MappingProxyType(
         "website": PipelineStage.verify_business,
         # The Places check: the place ID only (D13).
         "business_check": PipelineStage.verify_business,
+        # The judgment node's score, from cited qualifying-signal answers (T7).
+        "priority": PipelineStage.classify_rollup,
     }
 )
 """``CandidateFields`` field name → the one stage allowed to overwrite it."""

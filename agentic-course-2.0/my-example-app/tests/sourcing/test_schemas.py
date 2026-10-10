@@ -17,10 +17,12 @@ from app.sourcing.schemas import (
     CandidateFields,
     PlaceCheck,
     PostalAddress,
+    PriorityScore,
     RunCostSummary,
     RunOutcome,
     RunStatus,
     RunTotals,
+    ScoreBand,
     SourcingBrief,
 )
 from tests.sourcing.builders import (
@@ -110,7 +112,12 @@ class TestCandidateFields:
 
     def test_unprovenanced_fields_names_exactly_the_absent_ones(self) -> None:
         candidate = a_candidate(with_phone=False)
-        assert candidate.unprovenanced_fields() == ("phone", "website", "business_check")
+        assert candidate.unprovenanced_fields() == (
+            "phone",
+            "website",
+            "business_check",
+            "priority",
+        )
 
     def test_a_fully_cited_candidate_has_none(self) -> None:
         candidate = CandidateFields(
@@ -121,6 +128,11 @@ class TestCandidateFields:
             phone=sourced("1"),
             website=sourced("https://example.com"),
             business_check=place_checked(),
+            priority=sourced(
+                PriorityScore(intensity=4, automatable=4),
+                "https://example.com/about",
+                RetrievalMethod.llm_inference,
+            ),
         )
         assert candidate.unprovenanced_fields() == ()
 
@@ -295,3 +307,40 @@ class TestRunTotals:
     def test_a_non_slug_stage_name_is_refused(self) -> None:
         with pytest.raises(ValidationError):
             RunTotals(counts={"Sourced Rows": 3}, cost=RunCostSummary())
+
+
+class TestPriorityScore:
+    @pytest.mark.parametrize(
+        ("intensity", "automatable", "band"),
+        [
+            (4, 4, ScoreBand.live),
+            (5, 5, ScoreBand.live),
+            (3, 3, ScoreBand.middle),
+            (3, 5, ScoreBand.middle),
+            (2, 4, ScoreBand.dead),
+            (1, 1, ScoreBand.dead),
+        ],
+    )
+    def test_bands_follow_e9(self, intensity: int, automatable: int, band: ScoreBand) -> None:
+        """>=16 live, <9 dead (E9); 16 and 9 are the boundaries."""
+        assert PriorityScore(intensity=intensity, automatable=automatable).band is band
+
+    def test_axes_are_one_to_five(self) -> None:
+        with pytest.raises(ValidationError):
+            PriorityScore(intensity=0, automatable=3)
+        with pytest.raises(ValidationError):
+            PriorityScore(intensity=3, automatable=6)
+
+    def test_a_candidate_holds_a_cited_score(self) -> None:
+        fields = a_candidate().model_copy(
+            update={
+                "priority": sourced(
+                    PriorityScore(intensity=4, automatable=5),
+                    "https://example.test/about",
+                    RetrievalMethod.llm_inference,
+                )
+            }
+        )
+        revalidated = CandidateFields.model_validate(fields.model_dump(mode="json"))
+        assert revalidated.priority is not None
+        assert revalidated.priority.value.score == 20

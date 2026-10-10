@@ -1012,3 +1012,50 @@ Review: `.claude/code-reviews/pr-17-review.md`. Triage: all four fixed in this P
 check, because the Protocol already types `stage` statically. Reading it back as `object` via `getattr` matches the `STAGE` lookup above it.
 **Improve:** a runtime-checkable Protocol proves only that attributes exist. Every attribute the registry reads
 from a loaded module needs its own runtime check.
+
+
+## T7: qualification slice, planned (2026-10-10)
+
+Plan: `.claude/plans/t7-qualification.md`. Branch `feat/t7-qualification`, test DB on port 5435, migration `0008`.
+**Decided (human, 2026-10-10):**
+- T7 owns the evaluator and wires it into T5's backlog at merge.
+- The dry-run reads local bulk-file extracts.
+- `classify_rollup` gets WebSearch + WebFetch, and the read tracker moves to `app/shared/`.
+- The M6 accuracy bar uses replay offline plus an opt-in `live` eval.
+
+- [x] **Plan reviewed by the human.** The human said "go ahead" on 2026-10-10. Assumptions A1–A8 stand
+      as written.
+- [x] Phase 1: the read tracker moved (split into `page_reads` and `agent_reads`) · rule `source` · dry-run record shapes · `CandidateFields.priority` · qualification schemas
+- [x] Phase 2: evaluator · scoring · dry-run (pure, tested first)
+- [x] Phase 3: migration 0008 · disqualification + suppression · `activate` requires a recorded dry-run
+- [x] Phase 4: judgment node (replay-tested) · `app/tools/classify_rollup.py`
+- [ ] Phase 5: ~~`lpe manifest dry-run` · live eval marker · structure allow-list · docs · validation~~ done · **PR not yet opened**
+- [ ] Phase 6 (after T5 and T8 merge): re-chain 0008 · wire `apply_predicates` and suppression into T5 · end-to-end two-run test
+- [ ] Human: dry-run freight v3 on the real census extract must reproduce 4,518 → 4,449, and the human supplies ≥20 labelled local fire companies
+
+**Review (implementation, 2026-10-10):** 837 passed and 2 skipped (the paid live eval). ruff, mypy and pyright
+are clean, and `alembic check` shows no drift. Report: `.claude/reports/t7-qualification-report.md`.
+**Worked:** the pure core (evaluator, scoring, dry-run) went first and has no I/O, so it was tested to exact
+counts before any database or SDK code existed. A manual dry-run of the seeded freight v1 flagged its dead
+rule exactly as the hand check had.
+**Didn't:** the existing log-naming guard caught four event names (two underscores in the last segment)
+only at the full-suite run. Running the whole suite once per phase, not just per slice, would have caught
+them earlier.
+**Improve:** a judged-but-unscored candidate is judged again on a retry. Add a "judged" marker if retries
+turn out to be common.
+
+## PR #18 review fixes (2026-10-10)
+
+Review: `.claude/code-reviews/pr-18-review.md` (1 High, 2 Medium, 6 Low). **Triage (human):** fix H1, M1 and M2,
+plus L1, L2, L3, L5 and L6; defer L4 (#22) and checking quotes against fetched text (#23).
+
+- [x] **H1.** A manifest with no `bulk_file` source (fire) could never be activated. Dry-run now needs an extract
+      for every bulk source and none otherwise; with none, every predicate is recorded `not_evaluable_offline`,
+      and the CLI says NOTHING was checked against data. `--source-file` is now optional.
+- [x] **M1.** The registry record can no longer back a fired judgment rule, only a signal answer.
+- [x] **M2.** Google Maps citations are refused in the gate (`is_google_maps` is now public), and a refused
+      `priority` write counts as `judgment_failed` instead of stopping the batch.
+- [x] **L1** the BOM test asserts `row_id_column` · **L2** blank CSV lines are skipped · **L3** repeated header
+      columns are refused · **L5** a judgment-disqualified candidate gets no `priority` · **L6** the inverted test
+      rule is now `not_allowed_to_operate` (`equals "N"`), with `is_true` documented
+- [x] Mutation-checked: re-introducing each bug (H1, M1, M2 ×2, L1, L2, L3, L5) fails its new test.

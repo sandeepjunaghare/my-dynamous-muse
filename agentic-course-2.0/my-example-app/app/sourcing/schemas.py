@@ -117,12 +117,49 @@ class PlaceCheck(BaseModel):
         return value.strip()
 
 
+class ScoreBand(StrEnum):
+    """Where a priority score falls (E9: >=16 live, <9 dead)."""
+
+    live = "live"
+    middle = "middle"
+    dead = "dead"
+
+
+LIVE_SCORE_MIN = 16
+DEAD_SCORE_BELOW = 9
+
+
+class PriorityScore(BaseModel):
+    """Intensity (1-5) x Automatable (1-5) = 1-25 (E9), as the ``classify_rollup`` node scored it.
+
+    Lives here, not in ``qualification/``, because ``CandidateFields`` holds it and sourcing must
+    not import the slice that reads it. Frozen, because it is cited.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    intensity: int = Field(ge=1, le=5)
+    automatable: int = Field(ge=1, le=5)
+
+    @property
+    def score(self) -> int:
+        return self.intensity * self.automatable
+
+    @property
+    def band(self) -> ScoreBand:
+        if self.score >= LIVE_SCORE_MIN:
+            return ScoreBand.live
+        if self.score < DEAD_SCORE_BELOW:
+            return ScoreBand.dead
+        return ScoreBand.middle
+
+
 _GOOGLE_MAPS_HOSTS = frozenset(
     {"places.googleapis.com", "maps.googleapis.com", "maps.google.com", "maps.app.goo.gl"}
 )
 
 
-def _is_google_maps(url: str) -> bool:
+def is_google_maps(url: str) -> bool:
     """Whether ``url`` points at Google Maps Platform content.
 
     Google *search* is not Maps: a website found by a web search may well be cited to google.com.
@@ -168,6 +205,11 @@ class CandidateFields(BaseModel):
     """The Google Places check of this record (T6): the place ID, cited to Places. Absent means
     never checked, or checked and not found."""
 
+    priority: ProvenancedValue[PriorityScore] | None = None
+    """The priority score (T7), cited ``llm_inference`` to a page the judgment node read. Absent
+    when either axis had no cited signal answer: an absent score is honest, a guessed one is E18.
+    """
+
     @field_validator("registry_id")
     @classmethod
     def _normalise_registry_id(cls, value: ProvenancedValue[str]) -> ProvenancedValue[str]:
@@ -196,7 +238,7 @@ class CandidateFields(BaseModel):
             if name == "business_check":
                 continue
             cited = getattr(self, name)
-            if isinstance(cited, ProvenancedValue) and _is_google_maps(cited.source_url):
+            if isinstance(cited, ProvenancedValue) and is_google_maps(cited.source_url):
                 raise ValueError(
                     f"{name} is cited to Google Maps ({cited.source_url}); Places content "
                     "cannot be stored (D13). Keep only the place ID, in business_check"

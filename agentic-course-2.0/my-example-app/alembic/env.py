@@ -23,6 +23,7 @@ from app.cadence import models as cadence_models
 from app.core.config import get_settings
 from app.core.database import Base
 from app.manifests import models as manifest_models
+from app.qualification import models as qualification_models
 from app.sourcing import models as sourcing_models
 
 # Importing a slice's models is what puts its tables on Base.metadata. The tuple keeps the import
@@ -30,9 +31,11 @@ from app.sourcing import models as sourcing_models
 # schema and propose dropping every table. Each new slice appends one import and one entry here.
 _REGISTERED_MODELS = (
     manifest_models.VerticalManifest,
+    manifest_models.ManifestDryRun,
     sourcing_models.SourcingRun,
     sourcing_models.Candidate,
     cadence_models.CadenceState,
+    qualification_models.Disqualification,
 )
 
 config = context.config

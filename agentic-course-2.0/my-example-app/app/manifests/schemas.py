@@ -86,6 +86,9 @@ class RuleOperator(StrEnum):
     greater_than = "greater_than"
     less_than = "less_than"
     is_true = "is_true"
+    """Fires when the field reads as true (``Y``, ``YES``, ``TRUE``, ``T``, ``1``). There is no
+    ``is_false``: to disqualify on a false flag — FMCSA's ``allowToOperate = N`` — use
+    ``equals "N"``, which also leaves a blank or unknown value unjudged rather than disqualified."""
 
 
 class ScoreAxis(StrEnum):
@@ -158,6 +161,13 @@ class DisqualifierRule(BaseModel):
     field: str | None = None
     operator: RuleOperator | None = None
     value: str | tuple[str, ...] | int | bool | None = None
+    source: str | None = Field(default=None, pattern=SLUG_PATTERN, max_length=64)
+    """Which declared source a predicate's ``field`` is read from. ``None`` means the manifest's
+    first declared source — which is what every row written before this field existed meant.
+
+    Needed because one vertical reads several sources: FMCSA's ``allowToOperate`` is a QCMobile
+    field, not a census column, and a join (the revocations dataset) arrives as a field on its own
+    declared source rather than as an operator the rule language would need to grow."""
 
     @model_validator(mode="after")
     def _shape_matches_kind(self) -> "DisqualifierRule":
@@ -166,10 +176,12 @@ class DisqualifierRule(BaseModel):
             raise ValueError(
                 f"rule {self.id!r}: a predicate rule needs both `field` and `operator`"
             )
-        if self.kind is RuleKind.judgment and (self.field is not None or self.operator is not None):
+        if self.kind is RuleKind.judgment and (
+            self.field is not None or self.operator is not None or self.source is not None
+        ):
             raise ValueError(
                 f"rule {self.id!r}: a judgment rule is decided by the classify_rollup node, so it "
-                "must carry neither `field` nor `operator`"
+                "must carry neither `field`, `operator` nor `source`"
             )
         return self
 
@@ -296,6 +308,21 @@ class ManifestBody(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _rule_sources_are_declared(self) -> "ManifestBody":
+        """A predicate reading a source the manifest does not declare can never be evaluated."""
+        declared = set(self.source_names())
+        unknown = sorted(
+            {
+                rule.value.source
+                for rule in self.disqualifier_rules
+                if rule.value.source is not None and rule.value.source not in declared
+            }
+        )
+        if unknown:
+            raise ValueError(f"disqualifier rules read undeclared source(s): {unknown}")
+        return self
+
+    @model_validator(mode="after")
     def _terms_match_declared_sources(self) -> "ManifestBody":
         """No orphan decisions, and no source decided twice.
 
@@ -317,6 +344,10 @@ class ManifestBody(BaseModel):
     def source_names(self) -> tuple[str, ...]:
         """Every declared source name, in declaration order."""
         return tuple(source.value.name for source in self.sources)
+
+    def source_for(self, rule: DisqualifierRule) -> str:
+        """The declared source a rule's field is read from: its own, or the first declared."""
+        return rule.source if rule.source is not None else self.sources[0].value.name
 
     def undecided_sources(self) -> tuple[str, ...]:
         """Declared sources with no **accepted** terms decision — what blocks activation.
@@ -343,3 +374,104 @@ class ManifestResponse(BaseModel):
     created_at: datetime
     activated_at: datetime | None
     activated_by: str | None
+
+
+class DryRunFlag(StrEnum):
+    """Something a dry-run found suspicious about one rule, read by a person before ``activate``.
+
+    Each one is a failure the hand check caught on freight v1 or v2, made mechanical.
+    """
+
+    matches_nothing = "matches_nothing"
+    """The rule fires on no row at all, even standalone — v1's ``'asset_based'`` against A/B/C."""
+
+    excludes_nothing = "excludes_nothing"
+    """The rule fires on some rows, but every one was already removed by an earlier rule."""
+
+    excludes_everything = "excludes_everything"
+    """Nothing survives this rule. A filter that empties the pool is almost never intended."""
+
+    unknown_field = "unknown_field"
+    """The rule's field is not a column of the source file — it can never be evaluated."""
+
+    value_not_seen = "value_not_seen"
+    """An ``equals``/``in_set``/``contains`` literal never appears in the data (the v1 check)."""
+
+    not_evaluable_offline = "not_evaluable_offline"
+    """The rule reads a source with no file in this dry-run (a per-record API, e.g. QCMobile)."""
+
+    malformed = "malformed"
+    """Operator and value do not fit (``in_set`` with a scalar, a numeric compare with text)."""
+
+
+class DryRunSample(BaseModel):
+    """One row, reduced to its identifier and the fields the rules read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    row_id: str
+    fields: tuple[tuple[str, str], ...]
+
+
+class DryRunStep(BaseModel):
+    """One predicate rule's effect on its source's pool, in declaration order."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_id: str
+    source: str
+    pool_before: int = Field(ge=0)
+    removed: int = Field(ge=0)
+    """Rows this rule removed at its position — the funnel."""
+
+    matched_standalone: int = Field(ge=0)
+    """Rows this rule fires on regardless of earlier rules — what tells dead from redundant."""
+
+    not_evaluable: int = Field(ge=0)
+    """Rows the rule could not judge (blank field, text where a number belongs). Never removed."""
+
+    flags: tuple[DryRunFlag, ...] = ()
+    removed_samples: tuple[DryRunSample, ...] = ()
+
+
+class DryRunSourceFile(BaseModel):
+    """One local extract a dry-run read, and the pool it started and ended with.
+
+    ``file_name`` is a basename, never a path: the record outlives the machine it was made on.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_name: str = Field(pattern=SLUG_PATTERN, max_length=64)
+    file_name: str
+    sha256: str
+    rows: int = Field(ge=0)
+    pool_end: int = Field(ge=0)
+    row_id_column: str
+    passing_samples: tuple[DryRunSample, ...] = ()
+
+
+class DryRunReport(BaseModel):
+    """What ``lpe manifest dry-run`` found: the funnel per rule, from free rules and real data."""
+
+    model_config = ConfigDict(frozen=True)
+
+    manifest_id: UUID
+    files: tuple[DryRunSourceFile, ...]
+    steps: tuple[DryRunStep, ...]
+
+    def flagged(self) -> tuple[str, ...]:
+        """Every ``rule: flag`` pair, in step order — the summary a person must read."""
+        return tuple(f"{step.rule_id}: {flag.value}" for step in self.steps for flag in step.flags)
+
+
+class DryRunResponse(BaseModel):
+    """One ``manifest_dry_run`` row."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    manifest_id: UUID
+    ran_at: datetime
+    ran_by: str
+    report: DryRunReport
