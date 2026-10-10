@@ -1043,3 +1043,19 @@ only at the full-suite run. Running the whole suite once per phase, not just per
 them earlier.
 **Improve:** a judged-but-unscored candidate is judged again on a retry. Add a "judged" marker if retries
 turn out to be common.
+
+## PR #18 review fixes (2026-10-10)
+
+Review: `.claude/code-reviews/pr-18-review.md` (1 High, 2 Medium, 6 Low). **Triage (human):** fix H1, M1 and M2,
+plus L1, L2, L3, L5 and L6; defer L4 (#22) and checking quotes against fetched text (#23).
+
+- [x] **H1.** A manifest with no `bulk_file` source (fire) could never be activated. Dry-run now needs an extract
+      for every bulk source and none otherwise; with none, every predicate is recorded `not_evaluable_offline`,
+      and the CLI says NOTHING was checked against data. `--source-file` is now optional.
+- [x] **M1.** The registry record can no longer back a fired judgment rule, only a signal answer.
+- [x] **M2.** Google Maps citations are refused in the gate (`is_google_maps` is now public), and a refused
+      `priority` write counts as `judgment_failed` instead of stopping the batch.
+- [x] **L1** the BOM test asserts `row_id_column` · **L2** blank CSV lines are skipped · **L3** repeated header
+      columns are refused · **L5** a judgment-disqualified candidate gets no `priority` · **L6** the inverted test
+      rule is now `not_allowed_to_operate` (`equals "N"`), with `is_true` documented
+- [x] Mutation-checked: re-introducing each bug (H1, M1, M2 ×2, L1, L2, L3, L5) fails its new test.

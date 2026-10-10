@@ -28,9 +28,9 @@ automate). 1 is least, 5 is most.
 
 Citation rules — these are the point of the exercise:
 
-1. Every fired: true and every signal answer carries a citation: the URL of a page you fetched \
-with WebFetch in this session, or one of the registry URLs given with the business, plus a short \
-quote from it that supports the answer.
+1. Every fired: true carries a citation: the URL of a page you fetched with WebFetch in this \
+session, plus a short quote from it that supports the answer. A signal answer may instead cite one \
+of the registry URLs given with the business. Never cite a Google Maps page.
 2. Cite only pages you actually fetched. A search-result snippet is not a read; a URL you remember \
 is not a read. Citations to anything else are discarded automatically.
 3. If you cannot cite a rule, answer fired: false, set citation to null and say why. A rule fired \

@@ -24,7 +24,9 @@ EXTRACT = Path(__file__).parent / "fixtures" / "census_extract.csv"
 V1_RULE = predicate("v1_asset_based", "carrier_operation", RuleOperator.equals, "asset_based")
 SHADOWED_RULE = predicate("out_of_state_county", "phy_cnty", RuleOperator.equals, "201")
 UNKNOWN_FIELD_RULE = predicate("stale_mcs150", "mcs150_date", RuleOperator.less_than, 2024)
-QCMOBILE_RULE = predicate("not_allowed", "allowToOperate", RuleOperator.is_true, source="qcmobile")
+QCMOBILE_RULE = predicate(
+    "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+)
 MALFORMED_RULE = predicate("bad_set", "phy_cnty", RuleOperator.in_set, "113")
 
 SOURCES = (("fmcsa", SourceKind.bulk_file), ("qcmobile", SourceKind.registry_api))
@@ -75,7 +77,7 @@ class TestFunnel:
             "v1_asset_based",
             "out_of_state_county",
             "stale_mcs150",
-            "not_allowed",
+            "not_allowed_to_operate",
             "bad_set",
         ]
 
@@ -99,7 +101,7 @@ class TestFlags:
         assert step.not_evaluable == 16
 
     def test_a_rule_on_a_per_record_api_is_not_evaluable_offline(self) -> None:
-        step = _step(_report(), "not_allowed")
+        step = _step(_report(), "not_allowed_to_operate")
         assert step.flags == (DryRunFlag.not_evaluable_offline,)
         assert step.source == "qcmobile"
 
@@ -142,8 +144,8 @@ class TestSamplesAndRecord:
 
 
 class TestRefusals:
-    def test_no_file_at_all(self) -> None:
-        with pytest.raises(DryRunSourceError):
+    def test_a_bulk_source_without_its_extract(self) -> None:
+        with pytest.raises(DryRunSourceError, match="pass --source-file"):
             dry_run(a_manifest(a_body_with(*FREIGHT_V3_PREDICATES)), {})
 
     def test_an_undeclared_source(self) -> None:
@@ -169,4 +171,34 @@ class TestRefusals:
         )
         report = dry_run(a_manifest(a_body_with(*FREIGHT_V3_PREDICATES)), {"fmcsa": extract})
         assert report.files[0].pool_end == 1
+        assert report.files[0].row_id_column == "dot_number"
         assert all(DryRunFlag.unknown_field not in step.flags for step in report.steps)
+
+    def test_blank_lines_are_not_rows(self, tmp_path: Path) -> None:
+        """A blank line would otherwise join the pool and skew the numbers a person reconciles."""
+        extract = tmp_path / "blank.csv"
+        extract.write_text(
+            "dot_number,phy_cnty,carship,power_units\n1,113,C;B,4\n\n,,,\n2,201,C;B,4\n",
+            encoding="utf-8",
+        )
+        report = dry_run(a_manifest(a_body_with(*FREIGHT_V3_PREDICATES)), {"fmcsa": extract})
+        assert (report.files[0].rows, report.files[0].pool_end) == (2, 1)
+
+    def test_a_repeated_header_column_is_refused(self, tmp_path: Path) -> None:
+        """With two ``phy_cnty`` columns the last silently wins, and a rule reads the wrong one."""
+        extract = tmp_path / "dup.csv"
+        extract.write_text("dot_number,phy_cnty,phy_cnty\n1,113,201\n", encoding="utf-8")
+        with pytest.raises(DryRunSourceError, match="repeats header column"):
+            dry_run(a_manifest(a_body_with(*FREIGHT_V3_PREDICATES)), {"fmcsa": extract})
+
+
+class TestAManifestWithNoBulkFile:
+    """PR #18 review H1: an API-only manifest (fire) must be able to record a dry-run."""
+
+    def test_every_predicate_is_reported_not_evaluable_offline(self) -> None:
+        body = a_body_with(QCMOBILE_RULE, sources=(("qcmobile", SourceKind.registry_api),))
+        report = dry_run(a_manifest(body), {})
+        assert report.files == ()
+        assert [(s.rule_id, s.flags) for s in report.steps] == [
+            ("not_allowed_to_operate", (DryRunFlag.not_evaluable_offline,))
+        ]

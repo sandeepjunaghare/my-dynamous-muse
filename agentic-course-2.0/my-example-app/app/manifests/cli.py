@@ -116,9 +116,12 @@ def register(parser: argparse.ArgumentParser) -> None:
         "--source-file",
         type=_source_file,
         action="append",
-        required=True,
+        default=[],
         metavar="SOURCE=PATH",
-        help="a local extract of a bulk_file source, e.g. fmcsa=census.csv (repeatable)",
+        help=(
+            "a local extract of each bulk_file source, e.g. fmcsa=census.csv (repeatable); "
+            "omit for a manifest that declares no bulk file"
+        ),
     )
     dry_run_parser.add_argument(
         "--samples", type=int, default=3, help="sample rows to show per rule (default 3)"
@@ -305,6 +308,11 @@ def _print_sample(sample: DryRunSample) -> None:
 def _print_dry_run(manifest: ManifestResponse, report: DryRunReport) -> None:
     """The funnel per rule, the samples, and the flags a person must read."""
     print(f"dry-run of {manifest.vertical} v{manifest.version} ({manifest.id})")
+    if not report.files:
+        print(
+            "  no bulk-file source declared: NOTHING was checked against data; every predicate is "
+            "reported not evaluable offline. Read the rules and their citations yourself."
+        )
     for file in report.files:
         print(
             f"  {file.source_name}: {file.file_name}, {file.rows} rows "

@@ -159,7 +159,7 @@ _GOOGLE_MAPS_HOSTS = frozenset(
 )
 
 
-def _is_google_maps(url: str) -> bool:
+def is_google_maps(url: str) -> bool:
     """Whether ``url`` points at Google Maps Platform content.
 
     Google *search* is not Maps: a website found by a web search may well be cited to google.com.
@@ -238,7 +238,7 @@ class CandidateFields(BaseModel):
             if name == "business_check":
                 continue
             cited = getattr(self, name)
-            if isinstance(cited, ProvenancedValue) and _is_google_maps(cited.source_url):
+            if isinstance(cited, ProvenancedValue) and is_google_maps(cited.source_url):
                 raise ValueError(
                     f"{name} is cited to Google Maps ({cited.source_url}); Places content "
                     "cannot be stored (D13). Keep only the place ID, in business_check"

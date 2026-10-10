@@ -86,6 +86,9 @@ class RuleOperator(StrEnum):
     greater_than = "greater_than"
     less_than = "less_than"
     is_true = "is_true"
+    """Fires when the field reads as true (``Y``, ``YES``, ``TRUE``, ``T``, ``1``). There is no
+    ``is_false``: to disqualify on a false flag — FMCSA's ``allowToOperate = N`` — use
+    ``equals "N"``, which also leaves a blank or unknown value unjudged rather than disqualified."""
 
 
 class ScoreAxis(StrEnum):

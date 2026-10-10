@@ -46,12 +46,22 @@ class TestTheGate:
     ) -> None:
         manifest_id, _ = committed_draft_without_dry_run
 
-        dry = main(["manifest", "dry-run", str(manifest_id), "--source-file", f"fmcsa={EXTRACT}"])
+        dry = main(
+            [
+                "manifest",
+                "dry-run",
+                str(manifest_id),
+                "--source-file",
+                f"fmcsa={EXTRACT}",
+                "--source-file",
+                f"places={EXTRACT}",
+            ]
+        )
         out = capsys.readouterr().out
 
         assert dry == 0
         assert "fmcsa: census_extract.csv, 30 rows (row id: dot_number)" in out
-        assert "30 rows in, 30 left after the rules" in out
+        assert "fmcsa: 30 rows in, 30 left after the rules" in out
         assert "FLAGGED: nothing" in out
         assert "recorded dry-run" in out
         assert str(EXTRACT.parent) not in out
@@ -107,3 +117,37 @@ class TestUsage:
         with pytest.raises(SystemExit) as exc_info:
             main(["manifest", "dry-run", str(UUID(int=1)), "--source-file", value])
         assert exc_info.value.code == 2
+
+
+@requires_db
+class TestAManifestWithNoBulkFile:
+    """PR #18 review H1: an API-only manifest (fire) must still be able to pass the gate."""
+
+    def test_it_can_be_dry_run_without_files_and_then_activated(
+        self,
+        committed_api_only_draft: tuple[UUID, str],
+        cli_database: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        manifest_id, _ = committed_api_only_draft
+
+        assert main(["manifest", "dry-run", str(manifest_id)]) == 0
+        out = capsys.readouterr().out
+        assert "NOTHING was checked against data" in out
+        assert "recorded dry-run" in out
+
+        assert (
+            main(["manifest", "activate", str(manifest_id), "--accept-terms", "registry,places"])
+            == 0
+        )
+        status, _ = load_committed_body(cli_database, manifest_id)
+        assert status == ManifestStatus.active.value
+
+    def test_a_bulk_manifest_still_needs_its_extract(
+        self,
+        committed_draft_without_dry_run: tuple[UUID, str],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        manifest_id, _ = committed_draft_without_dry_run
+        assert main(["manifest", "dry-run", str(manifest_id)]) == 1
+        assert "pass --source-file" in capsys.readouterr().err

@@ -7,10 +7,12 @@ signal** (D12): "is this a national rollup with no local owner?", "double-broker
 The boundary guarantees mirror the manifest-authoring agent (``app/manifests/agent.py``), whose
 shape this copies deliberately:
 
-* **Citations are held to what was read.** A fired rule or a signal answer survives only if its
-  citation is a page a ``WebFetch`` verifiably fetched (``app/shared/agent_reads.py``, fail-closed)
-  or one of the candidate's own registry URLs, which are already-cited facts. **An uncited verdict
-  never disqualifies anyone** — it is dropped and reported.
+* **Citations are held to what was read.** A fired rule survives only if its citation is a page a
+  ``WebFetch`` verifiably fetched in this call (``app/shared/agent_reads.py``, fail-closed). A
+  signal answer may also cite the candidate's own registry record, an already-cited fact — but a
+  census row cannot show a rollup, so it never backs a disqualification. Google Maps pages are
+  never admitted (D13). **An uncited verdict never disqualifies anyone** — it is dropped and
+  reported.
 * **It cannot touch the machine.** ``WebSearch`` and ``WebFetch`` only; no file, shell or MCP
   tools; no filesystem settings loaded; ``dontAsk`` refuses everything else.
 * **It always records what the call cost** — on failure too, the moment the result arrives.
@@ -46,7 +48,7 @@ from app.qualification.scoring import score
 from app.shared.agent_reads import ReadTracker
 from app.shared.page_reads import PageRead, normalize_url
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
-from app.sourcing.schemas import CandidateFields, PriorityScore
+from app.sourcing.schemas import CandidateFields, PriorityScore, is_google_maps
 
 logger = get_logger(__name__)
 
@@ -234,16 +236,33 @@ def evidence_reads(candidate: CandidateFields) -> tuple[PageRead, ...]:
     )
 
 
-class _Gate:
-    """Holds each answer's citation to the reads; collects what it drops and why."""
+def _index(reads: Iterable[PageRead]) -> dict[str, PageRead]:
+    """The first read of each page, keyed for comparison; an unparseable URL backs nothing."""
+    indexed: dict[str, PageRead] = {}
+    for read in reads:
+        try:
+            indexed.setdefault(normalize_url(read.url), read)
+        except ValueError:
+            continue
+    return indexed
 
-    def __init__(self, reads: Iterable[PageRead]) -> None:
-        self._reads: dict[str, PageRead] = {}
-        for read in reads:
-            try:
-                self._reads.setdefault(normalize_url(read.url), read)
-            except ValueError:
-                continue
+
+class _Gate:
+    """Holds each answer's citation to the reads; collects what it drops and why.
+
+    Two kinds of citable page, deliberately not interchangeable (PR #18 review, M1):
+
+    * **reads** — pages the node verifiably fetched in this call. These may back anything.
+    * **evidence** — the candidate's own registry citations. A census row can support a signal
+      answer, but it cannot show that a business is a national rollup; and a judgment that fires is
+      a permanent suppression. So evidence never backs a fired judgment rule.
+
+    A Google Maps page is never admitted: its content may not be stored (D13, review M2).
+    """
+
+    def __init__(self, reads: Iterable[PageRead], evidence: Iterable[PageRead] = ()) -> None:
+        self._reads = _index(reads)
+        self._evidence = _index(evidence)
         self.omitted: list[OmittedAnswer] = []
 
     def omit(self, label: str, reason: str) -> None:
@@ -251,18 +270,31 @@ class _Gate:
         logger.info(f"{LOG_PREFIX}.answer_omitted", answer=label, reason=reason)
 
     def admit(
-        self, label: str, citation: Citation | None, text: str
+        self, label: str, citation: Citation | None, text: str, *, allow_evidence: bool
     ) -> ProvenancedValue[str] | None:
         if citation is None:
             self.omit(label, "no citation offered")
             return None
         try:
-            read = self._reads.get(normalize_url(citation.url))
+            key = normalize_url(citation.url)
         except ValueError:
             self.omit(label, f"citation URL {citation.url!r} is not parseable")
             return None
+        read = self._reads.get(key)
+        if read is None and key in self._evidence:
+            if not allow_evidence:
+                self.omit(
+                    label,
+                    f"cites the registry record {citation.url}, which cannot evidence a judgment; "
+                    "a fired rule must cite a page the node read",
+                )
+                return None
+            read = self._evidence[key]
         if read is None:
             self.omit(label, f"cites {citation.url}, which the node never successfully read")
+            return None
+        if is_google_maps(read.url):
+            self.omit(label, f"cites Google Maps ({read.url}), whose content may not be stored")
             return None
         quote = citation.quote.strip()
         return ProvenancedValue(
@@ -283,10 +315,11 @@ def admit_judgment(
     """Keep only the answers a citation holds up; compute the priority from what survives.
 
     A rule id that is not one of this manifest's *judgment* rules is dropped — the model cannot
-    invent a disqualifier, nor re-decide a free predicate. A fired rule without a citation to a
-    read is dropped, so it never disqualifies. ``fired: false`` is not stored at all.
+    invent a disqualifier, nor re-decide a free predicate. A fired rule must cite a page the node
+    read in this call; one citing nothing, an unread page, the registry record or Google Maps is
+    dropped, so it never disqualifies. ``fired: false`` is not stored at all.
     """
-    gate = _Gate([*reads, *evidence])
+    gate = _Gate(reads, evidence)
     judgment_ids = {
         c.value.id for c in body.disqualifier_rules if c.value.kind is RuleKind.judgment
     }
@@ -305,7 +338,7 @@ def admit_judgment(
         decided.add(rule.rule_id)
         if not rule.fired:
             continue
-        reason = gate.admit(label, rule.citation, rule.reason)
+        reason = gate.admit(label, rule.citation, rule.reason, allow_evidence=False)
         if reason is not None:
             fired.append(AdmittedRule(rule_id=rule.rule_id, reason=reason))
 
@@ -324,7 +357,7 @@ def admit_judgment(
         if not 1 <= item.axis_score <= 5:
             gate.omit(label, f"axis score {item.axis_score} is outside 1-5")
             continue
-        cited_answer = gate.admit(label, item.citation, item.answer)
+        cited_answer = gate.admit(label, item.citation, item.answer, allow_evidence=True)
         if cited_answer is not None:
             signals.append(
                 AdmittedSignal(

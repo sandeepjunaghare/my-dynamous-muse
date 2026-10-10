@@ -28,7 +28,9 @@ from tests.sourcing.builders import a_brief
 
 pytestmark = requires_db
 
-NOT_ALLOWED = predicate("not_allowed", "allowToOperate", RuleOperator.is_true, source="qcmobile")
+NOT_ALLOWED = predicate(
+    "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+)
 BODY = a_body_with(
     *FREIGHT_V3_PREDICATES,
     NOT_ALLOWED,
@@ -65,22 +67,22 @@ class TestPredicates:
     ) -> None:
         manifest, run, (candidate,) = await a_run_with(db_session, BODY, "555")
         service = QualificationService(db_session)
-        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "Y"}}
+        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "N"}}
 
         fired = await service.disqualify_by_predicates(
             candidate, run, manifest, records, source_urls={"qcmobile": QCMOBILE_LOOKUP}
         )
 
-        assert fired is not None and fired.rule_id == "not_allowed"
+        assert fired is not None and fired.rule_id == "not_allowed_to_operate"
         (row,) = await service.list_for_candidate(candidate.id)
         assert (row.rule_id, row.rule_kind, row.registry_id) == (
-            "not_allowed",
+            "not_allowed_to_operate",
             RuleKind.predicate,
             "555",
         )
         assert row.source_url == QCMOBILE_LOOKUP
         assert row.retrieval_method is RetrievalMethod.registry_api
-        assert row.evidence == "allowToOperate='Y'"
+        assert row.evidence == "allowToOperate='N'"
 
     async def test_without_a_record_url_the_source_base_url_is_cited(
         self, db_session: AsyncSession
@@ -98,7 +100,7 @@ class TestPredicates:
     async def test_a_survivor_is_not_recorded(self, db_session: AsyncSession) -> None:
         manifest, run, (candidate,) = await a_run_with(db_session, BODY, "557")
         service = QualificationService(db_session)
-        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "N"}}
+        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "Y"}}
         assert await service.disqualify_by_predicates(candidate, run, manifest, records) is None
         assert await service.list_for_candidate(candidate.id) == []
 

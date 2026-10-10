@@ -1,6 +1,7 @@
 """Stage 4 over a real run: free before paid, one call per survivor, retries never pay twice."""
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import replace
 
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions, Message
@@ -11,8 +12,9 @@ from app.core.cost import RunCost
 from app.core.exceptions import CostLimitExceededError
 from app.manifests.schemas import ManifestBody, ManifestResponse, RuleOperator, ScoreAxis
 from app.qualification import judgment
-from app.qualification.schemas import RecordSet
+from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer, RecordSet
 from app.qualification.service import QualificationService
+from app.shared.page_reads import PageRead
 from app.shared.provenance import RetrievalMethod
 from app.sourcing.schemas import SourcingRunResponse
 from app.sourcing.service import SourcingService
@@ -74,6 +76,27 @@ LOCAL: list[StreamLine] = _stream(
         ],
     }
 )
+ROLLUP_SCORED: list[StreamLine] = _stream(
+    {
+        "rules": [
+            {
+                "rule_id": ROLLUP_RULE,
+                "fired": True,
+                "reason": "one branch of a national platform",
+                "citation": {"url": ABOUT, "quote": "a national platform"},
+            }
+        ],
+        "signals": [
+            {
+                "signal_id": sid,
+                "answer": "yes",
+                "axis_score": 5,
+                "citation": {"url": ABOUT, "quote": "q"},
+            }
+            for sid in ("backlog", "software")
+        ],
+    }
+)
 FAILED: list[StreamLine] = [result_line(None, subtype="error_max_turns", is_error=True)]
 
 
@@ -132,7 +155,7 @@ class TestTheStage:
             "judgment_disqualified": 1,
             "judgment_failed": 0,
             "scored": 1,
-            "not_scored": 1,
+            "not_scored": 0,
             "judgment_skipped": 1,
         }
 
@@ -194,3 +217,54 @@ class TestTheStage:
         result = await STAGE.run(await _context(db_session, manifest, run))
         assert runner.prompts == []
         assert dict(result.counts) == {"classified": 0}
+
+
+@requires_db
+class TestReviewFixes:
+    async def test_a_rejected_business_keeps_no_priority(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PR #18 review L5: a rollup scored 25 must not read as "live" on its candidate row."""
+        monkeypatch.setattr(
+            judgment, "sdk_runner", _ByRegistryId({"901": ROLLUP_SCORED, "902": LOCAL})
+        )
+        manifest, run = await _setup(db_session)
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        candidates = {
+            c.registry_id: c for c in await SourcingService(db_session).list_candidates(run.id)
+        }
+        assert candidates["901"].fields.priority is None
+        assert (result.counts["judgment_disqualified"], result.counts["scored"]) == (1, 1)
+
+    async def test_a_refused_priority_write_does_not_stop_the_batch(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PR #18 review M2: a candidate-model refusal (here D13) is one failure, not a crash."""
+        real_admit = judgment.admit_judgment
+        maps = "https://www.google.com/maps/place/Acme"
+
+        def admit_with_maps_anchor(
+            answer: JudgmentAnswer,
+            body: ManifestBody,
+            *,
+            reads: Sequence[PageRead],
+            evidence: Sequence[PageRead] = (),
+        ) -> AdmittedJudgment:
+            admitted = real_admit(answer, body, reads=reads, evidence=evidence)
+            if admitted.priority is None:
+                return admitted
+            return replace(
+                admitted, priority=admitted.priority.model_copy(update={"source_url": maps})
+            )
+
+        monkeypatch.setattr(judgment, "admit_judgment", admit_with_maps_anchor)
+        runner = _ByRegistryId({"901": LOCAL, "902": LOCAL})
+        monkeypatch.setattr(judgment, "sdk_runner", runner)
+        manifest, run = await _setup(db_session)
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        assert len(runner.prompts) == 2
+        assert (result.counts["judgment_failed"], result.counts["scored"]) == (2, 0)

@@ -38,8 +38,10 @@ def cli_database(migrated_database: str, monkeypatch: pytest.MonkeyPatch) -> Ite
     get_settings.cache_clear()
 
 
-def _committed_draft(cli_database: str, *, dry_run: bool) -> Iterator[tuple[UUID, str]]:
-    """Commit a DRAFT declaring ``fmcsa`` and ``places`` (optionally dry-run); remove it after."""
+def _committed_draft(
+    cli_database: str, *, dry_run: bool, body: ManifestBody | None = None
+) -> Iterator[tuple[UUID, str]]:
+    """Commit a DRAFT (``fmcsa`` + ``places`` by default), optionally dry-run; remove it after."""
     vertical = a_vertical()
 
     async def create() -> UUID:
@@ -47,7 +49,9 @@ def _committed_draft(cli_database: str, *, dry_run: bool) -> Iterator[tuple[UUID
         try:
             async with AsyncSession(engine, expire_on_commit=False) as session:
                 repository = ManifestRepository(session)
-                manifest = await repository.create_draft(vertical, a_body("fmcsa", "places"))
+                manifest = await repository.create_draft(
+                    vertical, body or a_body("fmcsa", "places")
+                )
                 if dry_run:
                     await repository.record_dry_run(manifest.id, a_dry_run(manifest.id), "test")
                 await session.commit()
@@ -127,3 +131,26 @@ def load_committed_body(url: str, manifest_id: UUID) -> tuple[str, ManifestBody]
             await engine.dispose()
 
     return asyncio.run(read())
+
+
+@pytest.fixture
+def committed_api_only_draft(cli_database: str) -> Iterator[tuple[UUID, str]]:
+    """A committed DRAFT shaped like the fire manifest: no bulk-file source to extract from."""
+    body = a_body("fmcsa")
+    api_only = ManifestBody.model_validate(
+        {
+            **body.model_dump(mode="json"),
+            "sources": [
+                {
+                    **source.model_dump(mode="json"),
+                    "value": {**source.value.model_dump(mode="json"), "name": name, "kind": kind},
+                }
+                for source, (name, kind) in zip(
+                    body.sources * 2,
+                    (("registry", "registry_api"), ("places", "web_lookup")),
+                    strict=True,
+                )
+            ],
+        }
+    )
+    yield from _committed_draft(cli_database, dry_run=False, body=api_only)

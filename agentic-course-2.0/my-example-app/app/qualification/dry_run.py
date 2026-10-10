@@ -88,10 +88,13 @@ def _sample(row_id: str, record: Mapping[str, str | None], fields: Sequence[str]
 
 
 def _check_files(manifest: ManifestResponse, files: Mapping[str, Path]) -> None:
-    if not files:
-        raise DryRunSourceError(
-            "a dry-run needs at least one --source-file <source>=<extract.csv>", source_name=""
-        )
+    """Every declared ``bulk_file`` source needs its extract, and only those may be given one.
+
+    A manifest that declares **no** bulk file (an API-only registry, like the fire manifest's) is
+    dry-run with no files at all: every predicate is then recorded as not evaluable offline, so the
+    record says plainly that nothing was checked against data — rather than the gate being
+    impossible to satisfy (PR #18 review, H1).
+    """
     kinds = {cited.value.name: cited.value.kind for cited in manifest.body.sources}
     for name in files:
         if name not in kinds:
@@ -106,6 +109,15 @@ def _check_files(manifest: ManifestResponse, files: Mapping[str, Path]) -> None:
                 "cannot read it from a local extract",
                 source_name=name,
             )
+
+    bulk = [name for name, kind in kinds.items() if kind is SourceKind.bulk_file]
+    missing = [name for name in bulk if name not in files]
+    if missing:
+        raise DryRunSourceError(
+            f"manifest {manifest.id} declares bulk-file source(s) {', '.join(missing)}; pass "
+            f"--source-file <source>=<extract.csv> for each",
+            source_name=missing[0],
+        )
 
 
 def _run_source(
@@ -122,8 +134,17 @@ def _run_source(
         if not header:
             raise DryRunSourceError(f"{path.name} has no header row", source_name=name)
         columns = [column.strip() for column in header]
+        duplicates = sorted({column for column in columns if columns.count(column) > 1})
+        if duplicates:
+            # The last duplicate would silently win in the row dict, and a rule would read the
+            # wrong column with nothing to show for it.
+            raise DryRunSourceError(
+                f"{path.name} repeats header column(s): {', '.join(duplicates)}", source_name=name
+            )
         row_id_column = columns[0]
         for raw in reader:
+            if not any(cell.strip() for cell in raw):
+                continue  # a blank line is not a row, and must not inflate the pool
             rows += 1
             record: dict[str, str | None] = dict(zip(columns, raw, strict=False))
             row_id = (record.get(row_id_column) or "").strip() or f"row {rows}"

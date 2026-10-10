@@ -319,11 +319,12 @@ class TestRuleSource:
 
     def _rule(self, source: str | None) -> DisqualifierRule:
         return DisqualifierRule(
-            id="not_allowed",
+            id="not_allowed_to_operate",
             kind=RuleKind.predicate,
             description="no operating authority",
             field="allowToOperate",
-            operator=RuleOperator.is_true,
+            operator=RuleOperator.equals,
+            value="N",
             source=source,
         )
 

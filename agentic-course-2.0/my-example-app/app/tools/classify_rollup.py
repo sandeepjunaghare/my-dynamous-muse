@@ -14,6 +14,8 @@ one bad SDK run must not sink a paid batch.
 Places evidence is ``None`` here until T6 builds the in-run channel that carries it (D13).
 """
 
+from pydantic import ValidationError
+
 from app.core.config import get_settings
 from app.core.cost import BillableKind
 from app.core.exceptions import CostLimitExceededError
@@ -83,21 +85,37 @@ class _ClassifyRollup:
                 evidence=judgment.evidence_reads(candidate.fields),
             )
             if await qualification.record_judgment(candidate, run, context.manifest, admitted):
+                # A rejected business keeps no priority: a "live" score on a rollup's row is a
+                # rejection nobody can see from the candidate (PR #18 review, L5).
                 disqualified += 1
-            if admitted.priority is not None:
-                scored += 1
+                continue
+            if admitted.priority is None:
+                continue
+            try:
                 await sourcing.record_candidates(
                     run.id,
                     [candidate.fields.model_copy(update={"priority": admitted.priority})],
                     stage=PipelineStage.classify_rollup,
                 )
+            except ValidationError as exc:
+                # The candidate model refused the write (e.g. a D13 guard). One refusal must not
+                # stop a paid batch half-way (PR #18 review, M2).
+                failed += 1
+                logger.warning(
+                    "qualification.stage.write_refused",
+                    run_id=str(run.id),
+                    candidate_id=str(candidate.id),
+                    errors=exc.error_count(),
+                )
+                continue
+            scored += 1
 
         counts = {
             "classified": classified,
             "judgment_disqualified": disqualified,
             "judgment_failed": failed,
             "scored": scored,
-            "not_scored": classified - scored,
+            "not_scored": classified - scored - disqualified,
             "judgment_skipped": skipped,
         }
         logger.info("qualification.stage.stage_completed", run_id=str(run.id), **counts)

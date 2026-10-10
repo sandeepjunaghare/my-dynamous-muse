@@ -86,7 +86,9 @@ class TestUnjudgeableRecordsAreNeverDisqualified:
         assert _kind(RuleOperator.is_true, None, "maybe") is UNSURE
 
     def test_a_missing_source(self) -> None:
-        rule = predicate("not_allowed", "allowToOperate", RuleOperator.is_true, source="qcmobile")
+        rule = predicate(
+            "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+        )
         outcome = evaluate(rule, {"fmcsa": census_row()}, source="qcmobile")
         assert outcome.kind is UNSURE
         assert outcome.reason == "source_missing"
@@ -157,14 +159,16 @@ class TestApplyPredicates:
 
     def test_a_rule_reads_its_declared_source(self) -> None:
         """``allowToOperate`` is a QCMobile field, not a census column."""
-        rule = predicate("not_allowed", "allowToOperate", RuleOperator.is_true, source="qcmobile")
+        rule = predicate(
+            "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+        )
         body = a_body_with(
             rule,
             sources=(("fmcsa", SourceKind.bulk_file), ("qcmobile", SourceKind.registry_api)),
         )
-        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "N"}}
+        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "Y"}}
         assert apply_predicates(body, records).outcomes[0].kind is PASSED
-        records = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "Y"}}
+        records = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "N"}}
         assert apply_predicates(body, records).outcomes[0].kind is FIRED
 
     def test_a_rule_without_a_source_reads_the_first_declared(self) -> None:

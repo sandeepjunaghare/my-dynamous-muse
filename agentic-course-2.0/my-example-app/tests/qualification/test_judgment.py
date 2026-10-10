@@ -163,13 +163,38 @@ class TestTheCitationGate:
         admitted, _ = await _judge(stream)
         assert admitted.fired == ()
 
-    async def test_the_candidates_own_registry_record_is_citable(self) -> None:
-        """Already-cited evidence: the census row, dated when the census was read."""
+    async def test_the_registry_record_cannot_back_a_fired_rule(self) -> None:
+        """PR #18 review M1: a census row cannot show a rollup, and a fired rule is permanent.
+
+        With no page read at all, a rollup verdict citing the candidate's own registry URL would
+        otherwise suppress the business for good on an unchecked quote.
+        """
         stream = [INIT, result_line(_answer([_rule(ROLLUP_RULE, True, CENSUS_URL)]))]
         admitted, _ = await _judge(stream)
-        (rule,) = admitted.fired
-        assert rule.reason.source_url == CENSUS_URL
-        assert rule.reason.retrieved_at == RETRIEVED_AT
+        assert admitted.fired == ()
+        assert "cannot evidence a judgment" in admitted.omitted[0].reason
+
+    async def test_the_registry_record_can_back_a_signal_answer(self) -> None:
+        """Already-cited evidence, dated when the census was read — fine for a score."""
+        signals = [
+            _signal("inspection_backlog", 3, CENSUS_URL),
+            _signal("field_software", 4, CENSUS_URL),
+        ]
+        admitted, _ = await _judge([INIT, result_line(_answer([], signals))])
+        assert admitted.priority is not None
+        assert admitted.priority.source_url == CENSUS_URL
+        assert admitted.priority.retrieved_at == RETRIEVED_AT
+
+    async def test_a_google_maps_page_is_never_admitted(self) -> None:
+        """PR #18 review M2 / D13: Places content may not be stored, even as a citation."""
+        maps = "https://www.google.com/maps/place/Acme+Fire"
+        rules = [_rule(ROLLUP_RULE, True, maps)]
+        signals = [_signal("inspection_backlog", 4, maps), _signal("field_software", 4, maps)]
+        stream = [INIT, *_fetched(maps), result_line(_answer(rules, signals))]
+        admitted, _ = await _judge(stream)
+        assert admitted.fired == ()
+        assert admitted.priority is None
+        assert all("Google Maps" in o.reason for o in admitted.omitted)
 
     async def test_the_model_cannot_invent_or_re_decide_a_rule(self) -> None:
         """Undeclared ids and free predicates are not the node's to fire."""
