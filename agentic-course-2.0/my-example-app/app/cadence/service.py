@@ -243,16 +243,17 @@ class CadenceService:
             await self._session.rollback()
             if UNIQUE_CONTACT not in str(exc.orig):
                 raise
-            orphan = ""
-            if created_here:
+            orphan = task_id if created_here else None
+            if orphan is not None:
                 logger.warning(
-                    "cadence.service.task_orphaned", contact_id=contact_id, task_id=task_id
+                    "cadence.service.task_orphaned", contact_id=contact_id, task_id=orphan
                 )
-                orphan = f"; task {task_id} this run created is left open — close it by hand"
+            left_open = "" if orphan is None else f"; task {orphan} is left open — close it by hand"
             raise AlreadyEnrolledError(
                 f"contact {contact_id} was enrolled by another run while this one was working — "
-                f"cycle position is never reset{orphan}",
+                f"cycle position is never reset{left_open}",
                 contact_id=contact_id,
+                orphan_task_id=orphan,
             ) from exc
         await self._session.commit()
         logger.info(

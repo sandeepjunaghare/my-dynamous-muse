@@ -20,7 +20,7 @@ from app.cadence.repository import CADENCE_SYNC_LOCK_ID, CadenceRepository
 from app.cadence.schemas import Activity, ActivityKind, RosterAction
 from app.cadence.service import CadenceService
 from app.cadence.sync import OutcomeReader
-from tests.cadence.conftest import CONTACT, START, FakeClock, FakeHubSpot
+from tests.cadence.conftest import CONTACT, START, FakeClock, FakeHubSpot, raced_by_another_run
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -319,6 +319,21 @@ class TestRerun:
         assert report.already_enrolled == [CONTACT]
         assert [plan.hubspot_contact_id for plan in report.plans] == [OTHER]
         assert [state.hubspot_contact_id for state in report.adopted] == [OTHER]
+
+    async def test_a_task_left_open_by_a_lost_race_is_reported_to_close(
+        self, adopter: Adopter, hubspot: FakeHubSpot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pr-14 round 2 N1: the orphan's id reaches the report, not only the log."""
+        hubspot.add_contact(CONTACT, SINCE)
+        monkeypatch.setattr(
+            CadenceRepository, "create", raced_by_another_run(CadenceRepository.create)
+        )
+
+        report = await adopter.apply(_adopt())
+
+        assert report.already_enrolled == [CONTACT]
+        assert report.orphaned_tasks == [hubspot.last_task_id()]
+        assert (report.plans, report.adopted, report.failures) == ([], [], [])
 
 
 class TestLock:

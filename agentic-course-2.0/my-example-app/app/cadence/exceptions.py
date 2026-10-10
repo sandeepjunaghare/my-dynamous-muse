@@ -24,14 +24,18 @@ class AlreadyEnrolledError(CadenceError):
 
     Re-enrolling would start the cycle again from touch one, and **cycle position is never reset**
     (CLAUDE.md). A parked prospect coming back is a decision for a human, not a second ``enrol``.
+
+    ``orphan_task_id`` is a task this enrolment created before another run took the row — left
+    open in HubSpot, for the person to close.
     """
 
     default_code: ClassVar[str] = "already_enrolled"
     status_code: ClassVar[int] = 409
 
-    def __init__(self, message: str, *, contact_id: str) -> None:
+    def __init__(self, message: str, *, contact_id: str, orphan_task_id: str | None = None) -> None:
         super().__init__(message)
         self.contact_id = contact_id
+        self.orphan_task_id = orphan_task_id
 
 
 class NotEnrolledError(CadenceError):

@@ -260,8 +260,8 @@ created, while the row takes the re-run's — the two disagree by the time betwe
 rare (a lost create response) and left as is; `overdue` goes by the row's date. Two
 enrolments racing past the existing-row check meet `uq_cadence_state_contact`, and the loser raises
 `AlreadyEnrolledError` rather than an integrity error. If the loser created its own task, that task
-stays open in HubSpot: the loser logs `cadence.service.task_orphaned` with its id and names it in the
-error, for the person to close. A contact is enrolled at most once, live or parked; `adopt_parked`
+stays open in HubSpot: the loser logs `cadence.service.task_orphaned` and carries the id on the error
+(`orphan_task_id`), and `adopt` prints it among the tasks to close by hand. A contact is enrolled at most once, live or parked; `adopt_parked`
 records an adopted refusal the same way.
 
 ## Deferred

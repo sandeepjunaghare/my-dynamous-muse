@@ -585,8 +585,10 @@ class Adopter:
         """
         try:
             await work()
-        except AlreadyEnrolledError:
+        except AlreadyEnrolledError as exc:
             report.already_enrolled.append(contact)
+            if exc.orphan_task_id is not None:
+                report.orphaned_tasks.append(exc.orphan_task_id)
             logger.info("cadence.adoption.already_enrolled", contact_id=contact)
         except UnadoptableContactError as exc:
             await self._fail(report, contact, exc.code, exc.message)

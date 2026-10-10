@@ -250,10 +250,8 @@ async def _run_adopt(roster_path: Path | None, *, dry_run: bool) -> int:
         print("dry run — nothing will be created or written")
     for warning in report.warnings:
         print(f"warning: {warning}")
-    failed = {failure.hubspot_contact_id for failure in report.failures}
     for plan in report.plans:
-        if report.dry_run or plan.hubspot_contact_id not in failed:
-            _print_adoption_plan(plan, dry_run=report.dry_run)
+        _print_adoption_plan(plan, dry_run=report.dry_run)
     listed = {plan.hubspot_contact_id for plan in report.plans}
     enrolled = set(report.already_enrolled)
     for task in report.company_only:
@@ -280,16 +278,16 @@ async def _run_adopt(roster_path: Path | None, *, dry_run: bool) -> int:
             f"parked {state.hubspot_contact_id} at {state.cycle}/{CYCLES} {state.touch.value} — "
             "final, it will not be enrolled again"
         )
-    done = {state.hubspot_contact_id for state in [*report.adopted, *report.parked]}
     to_close = [
-        task.task_id
-        for plan in report.plans
-        if plan.hubspot_contact_id in done
-        for task in plan.hand_tasks
-        if not task.completed
+        task.task_id for plan in report.plans for task in plan.hand_tasks if not task.completed
     ]
     if to_close:
         print(f"old hand tasks to close in HubSpot: {', '.join(to_close)}")
+    if report.orphaned_tasks:
+        print(
+            "tasks this run created for a contact another run enrolled first — close in HubSpot: "
+            f"{', '.join(report.orphaned_tasks)}"
+        )
     print("log nothing here — outcomes stay in HubSpot")
     return 1 if report.failures else 0
 

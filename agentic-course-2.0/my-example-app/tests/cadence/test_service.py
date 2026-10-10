@@ -172,11 +172,12 @@ class TestEnrol:
 
         monkeypatch.setattr(repository, "get_by_contact", missed_once)
 
-        with pytest.raises(AlreadyEnrolledError):
+        with pytest.raises(AlreadyEnrolledError) as raised:
             await service.enrol(CONTACT)
 
         assert await _state(db_session) == ("live", 1, "call", first_task)
         assert hubspot.task_creates_attempted() == 1, "the loser found the task by key"
+        assert raised.value.orphan_task_id is None, "a reused task is the winner's, not an orphan"
 
     async def test_a_losing_enrolment_names_the_task_it_left_open(
         self,
@@ -209,6 +210,7 @@ class TestEnrol:
         orphan = hubspot.last_task_id()
         assert orphan != first_task
         assert f"task {orphan}" in raised.value.message
+        assert raised.value.orphan_task_id == orphan
         (event,) = [log for log in logs if log["event"] == "cadence.service.task_orphaned"]
         assert (event["contact_id"], event["task_id"]) == (CONTACT, orphan)
         assert await _state(db_session) == ("live", 1, "call", first_task)

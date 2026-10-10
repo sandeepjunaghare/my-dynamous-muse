@@ -21,7 +21,7 @@ from app.cadence.schemas import ActivityKind
 from app.cli import main
 from app.core.config import get_settings
 from app.promotion.client import HubSpotClient
-from tests.cadence.conftest import FakeClock, FakeHubSpot
+from tests.cadence.conftest import FakeClock, FakeHubSpot, raced_by_another_run
 from tests.conftest import requires_db
 from tests.promotion.conftest import make_client
 
@@ -450,6 +450,33 @@ class TestAdopt:
         assert "outcomes stay in HubSpot" in out
         assert hubspot.created_subjects() == ["Cadence 1/3 · voicemail"]
         assert asyncio.run(_status_of(cli_database, fresh_contact))[:2] == ("live", "voicemail")
+
+    def test_a_lost_enrol_race_names_the_task_it_left_open(
+        self,
+        fresh_contact: str,
+        cli_database: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """pr-14 round 2 N1: the person is told which task to close, not only the log."""
+        hubspot, _ = _hand_worked_portal(fresh_contact, monkeypatch)
+        monkeypatch.setattr(
+            CadenceRepository, "create", raced_by_another_run(CadenceRepository.create)
+        )
+        roster = tmp_path / "adopt.toml"
+        roster.write_text(
+            f'[[prospect]]\ncontact = "{fresh_contact}"\naction = "adopt"\n', encoding="utf-8"
+        )
+
+        assert main(["cadence", "adopt", "--roster", str(roster)]) == 0
+
+        out = capsys.readouterr().out
+        orphan = hubspot.last_task_id()
+        assert f"contact {fresh_contact}: already has a cadence — skipped" in out
+        assert f"enrolled first — close in HubSpot: {orphan}" in out
+        assert "would start" not in out and "  start " not in out, "no plan for a skipped entry"
+        assert "old hand tasks to close" not in out, "this run superseded none of them"
 
     def test_a_malformed_roster_is_one_error_line(
         self, cli_database: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]

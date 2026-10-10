@@ -912,3 +912,17 @@ Triage approved: fix M1, M2, L1, L3, L4 with tests; L2 as a README note; defer t
 `alembic check` clean. **Worked:** watching each new test fail on the stashed PR-head code before trusting it.
 **Didn't:** a first draft of the database-error test used a pyright suppression; replaced with a typed ParamSpec
 wrapper. **Improve:** `-k` filters miss hyphenated parametrize ids — select those by full node id.
+
+## PR #14 round-2 review fixes (2026-10-10)
+
+Both round-2 findings fixed in this PR (Low, small, in scope); nothing deferred.
+
+- [x] N1 — `AlreadyEnrolledError.orphan_task_id`; `AdoptionReport.orphaned_tasks`; `adopt` prints the
+  orphaned task among the ones to close. README *Enrolment* corrected.
+- [x] N2 — removed the CLI's dead `failed` and `done` filters; `AdoptionReport.plans` documents that apply
+  reports only applied plans.
+
+**Review:** 674 passed (2 new tests, 2 extended). All 4 race tests failed on `c9943ec` first, then passed.
+ruff, mypy, pyright and `alembic check` are clean. **Worked:** the shared `raced_by_another_run` helper makes a
+lost race reproducible at both the service tier and the CLI tier without touching private attributes.
+**Improve:** assert on whole output lines, not bare ids. A short task id can sit inside a random contact id.

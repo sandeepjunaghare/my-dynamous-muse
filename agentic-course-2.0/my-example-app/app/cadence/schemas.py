@@ -322,12 +322,17 @@ class AdoptionReport(BaseModel):
     dry_run: bool = False
     """Nothing was written and no lock taken. ``plans`` says what applying would do."""
     plans: list[AdoptionPlan] = Field(default_factory=list[AdoptionPlan])
+    """In a dry run, every plan drawn up; on apply, only the plans that were applied — an entry
+    that failed or was enrolled meanwhile has none."""
     adopted: list[CadenceStateResponse] = Field(default_factory=list[CadenceStateResponse])
     """Cadences this run started, each with the task it created or found by key."""
     parked: list[CadenceStateResponse] = Field(default_factory=list[CadenceStateResponse])
     """Cadences this run recorded as finished."""
     already_enrolled: list[str] = Field(default_factory=list[str])
     """Contacts that already had a cadence. Skipped, so a second run adopts nothing new."""
+    orphaned_tasks: list[str] = Field(default_factory=list[str])
+    """Tasks this run created for a contact another run enrolled first — left open, to close by
+    hand."""
     failures: list[SyncFailure] = Field(default_factory=list[SyncFailure])
     company_only: list[CompanyOnlyTask] = Field(default_factory=list[CompanyOnlyTask])
     warnings: list[str] = Field(default_factory=list[str])

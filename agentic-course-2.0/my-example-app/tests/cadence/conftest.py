@@ -10,7 +10,7 @@ the same shape as the recorded fixtures in ``tests/promotion/fixtures/`` — ids
 
 import json
 import re
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -401,3 +401,17 @@ def service(
 def adopter(db_session: AsyncSession, hubspot_client: HubSpotClient, clock: FakeClock) -> Adopter:
     """T13's adopter, on the same session, portal and clock as :func:`service`."""
     return Adopter(db_session, hubspot=lambda: hubspot_client, clock=clock)
+
+
+def raced_by_another_run[**P, R](real: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+    """Wrap ``CadenceRepository.create`` so another run's row lands first, inside the same write.
+
+    The first call inserts the row; the second meets ``uq_cadence_state_contact`` — the race an
+    enrolment loses after it has already created its task. The rollback removes both.
+    """
+
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        await real(*args, **kwargs)
+        return await real(*args, **kwargs)
+
+    return wrapper
