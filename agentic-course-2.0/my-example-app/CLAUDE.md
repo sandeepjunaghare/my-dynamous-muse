@@ -17,21 +17,23 @@ five stages (registry search, business verification, route clustering) never nee
 place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
-**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), and T13 from Wave 4: the service boots,
-validates clean, the provenance primitive exists, and five slices are built — `manifests/` with its authoring
-agent, the gateway half of `promotion/`, the `sourcing/` data model, and the `cadence/` state machine with
-adoption.
+**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), T13 from Wave 4, and T5 from Wave 5: the
+service boots, validates clean, the provenance primitive exists, and five slices are built — `manifests/` with
+its authoring agent, the gateway half of `promotion/`, `sourcing/` with the pipeline runner, backlog and FMCSA
+adapters, and the `cadence/` state machine with adoption.
 ```
 app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
 app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
 app/shared/provenance.py                    # ProvenancedValue[T] + is_promotable() — the write-gate as a type
 app/manifests/                              # vertical_manifest DRAFT→ACTIVE, the terms gate, read-only routes, the CLI, the authoring agent (T12)
 app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties, task/activity reads
-app/sourcing/                               # sourcing_run + candidate, field-level provenance, one owning stage per field (stages.py)
+app/sourcing/                               # sourcing_run + candidate (field-level provenance, one owner per field), the pipeline runner, the sourcing_pool backlog, `lpe sourcing run`
+app/sourcing/sources/                       # adapters bound by base_url: FMCSA census (discovery) · QCMobile (lookup) · Motus revocations (join); SoQL pushdown
 app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, adoption (T13), routes + CLI
 app/tools/registry.py                       # the Stage contract; a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
+app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushdown, refresh the pool, take a batch best first, free evidence
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
-alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence
+alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool
 tests/                                      # mirrors app/, plus the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
@@ -45,11 +47,10 @@ each one lands. `core/` and `shared/` above are their built counterparts — the
 infra that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
 ```
 app/
-  sourcing/        # the pipeline runner and registry search (T5) — the data model above is built
   qualification/   # disqualifier rules + Intensity×Automatable score; owns `disqualification`
   routing/         # DFW geographic route clustering
   promotion/       # create Company/Contact, own the `promotion` ledger (T9) — the gateway above is built
-  tools/           # the stage modules themselves (T5–T8), one file per PipelineStage — the registry above is built
+  tools/           # the remaining stage modules (T6–T8), one file per PipelineStage — search_registry is built
 ```
 `cadence/` is a domain, not promotion's back half: our HubSpot tier has no sequences (see *Ground rules*), and
 adoption gives it a consumer with nothing to do with sourcing. It depends only on `core/` and the HubSpot
@@ -120,6 +121,9 @@ The cadence is synced **daily by an external launchd job**, not by the weekly ru
 (also `POST /cadence/sync`, `GET /cadence/overdue`). `park` is final, and leaves the open task for you to close.
 `uv run lpe cadence adopt --dry-run` · `uv run lpe cadence adopt --roster <file> [--dry-run]` (T13; no
 plain enrol command by design — adoption reconstructs, and T9 enrols in code).
+
+Sourcing is run by hand until T10's `POST /runs` (T5): `uv run lpe sourcing run --vertical <slug> [--batch-size N]`
+— ACTIVE manifests only; without `FMCSA_WEBKEY` the run ends `degraded` (no QCMobile evidence).
 
 Database-backed tests need a throwaway Postgres and skip without one:
 `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·

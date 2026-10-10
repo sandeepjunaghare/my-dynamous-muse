@@ -5,10 +5,10 @@ flush so defaults land and constraints fire here, but the transaction boundary i
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import func, literal, select
+from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,14 +67,30 @@ class SourcingRepository:
         counts: Mapping[str, int],
         cost: RunCostSummary,
         detail: str | None,
-    ) -> None:
-        """Close a run: its outcome, finish time, stage counts and cost, in one write."""
-        run.status = outcome.value
-        run.status_detail = detail
-        run.finished_at = datetime.now(UTC)
-        run.counts = dict(counts)
-        run.cost = cost.model_dump(mode="json")
-        await self._session.flush()
+    ) -> SourcingRun | None:
+        """Close a run in one conditional write; ``None`` when it was no longer running.
+
+        ``WHERE status = 'running'`` makes finishing a compare-and-set: of two finishes racing one
+        run, the second updates nothing instead of overwriting the first's outcome. The finish time
+        is the **database's** clock, like ``started_at`` — so "how long did it take" never mixes two
+        clocks (T4 review, deferred to T5).
+        """
+        result = await self._session.scalars(
+            update(SourcingRun)
+            .where(SourcingRun.id == run.id, SourcingRun.status == RunStatus.running.value)
+            .values(
+                status=outcome.value,
+                status_detail=detail,
+                finished_at=func.now(),
+                counts=dict(counts),
+                cost=cost.model_dump(mode="json"),
+            )
+            .returning(SourcingRun),
+            execution_options={"populate_existing": True},
+        )
+        finished = result.one_or_none()
+        if finished is None:
+            return None
         logger.info(
             "sourcing.repository.run_finished",
             run_id=str(run.id),
@@ -82,6 +98,38 @@ class SourcingRepository:
             counts=dict(counts),
             total_usd=str(cost.total_usd()),
         )
+        return finished
+
+    async def reap_stale_runs(self, vertical: str, older_than: timedelta) -> list[UUID]:
+        """Mark this vertical's runs still ``running`` after ``older_than`` as failed.
+
+        A run killed outright — the Mac sleeping mid-run, a ``kill -9`` — never reaches its own
+        ``except``, and stays ``running`` forever. Failing it here is also what hands its batch back
+        to the pool, because availability is read from the batching run's status.
+        """
+        hours = older_than.total_seconds() / 3600
+        result = await self._session.scalars(
+            update(SourcingRun)
+            .where(
+                SourcingRun.vertical == vertical,
+                SourcingRun.status == RunStatus.running.value,
+                SourcingRun.started_at < func.now() - older_than,
+            )
+            .values(
+                status=RunStatus.failed.value,
+                status_detail=f"abandoned: still running after {hours:g}h",
+                finished_at=func.now(),
+            )
+            .returning(SourcingRun.id)
+        )
+        reaped = list(result.all())
+        if reaped:
+            logger.warning(
+                "sourcing.repository.runs_reaped",
+                vertical=vertical,
+                run_ids=[str(run_id) for run_id in reaped],
+            )
+        return reaped
 
     async def upsert_candidate(
         self,
@@ -103,9 +151,9 @@ class SourcingRepository:
           where ``existing`` has no key, which fills an empty field and nothing else.
 
         A field the incoming write does not carry keeps its citation whoever owns it. That works
-        only because absent fields are dumped as absent keys (``exclude_none=True``); dumped as
-        JSON ``null`` they would erase it. The same input twice therefore leaves the same row with
-        the same content.
+        only because absent fields are dumped as absent keys (``CandidateFields.to_stored``);
+        dumped as JSON ``null`` they would erase it. The same input twice therefore leaves the same
+        row with the same content.
 
         ``stage`` is required and keyword-only, so a caller cannot forget to say who is writing.
 
@@ -117,7 +165,7 @@ class SourcingRepository:
         # reach this point carrying what `CandidateFields` refuses (Places content, D13). Stored,
         # such a row would also fail to load and take the whole run's reads down with it.
         fields = CandidateFields.model_validate(fields.model_dump(mode="json"))
-        incoming = fields.model_dump(mode="json", exclude_none=True)
+        incoming = fields.to_stored()
         owned = {name: value for name, value in incoming.items() if owns(stage, name)}
         fill = {name: value for name, value in incoming.items() if not owns(stage, name)}
 

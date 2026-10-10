@@ -21,10 +21,13 @@ from app.sourcing.schemas import (
     RunOutcome,
     RunStatus,
     RunTotals,
+    SourceRecord,
+    SourceRow,
     SourcingBrief,
 )
 from tests.sourcing.builders import (
     PLACES_URL,
+    QCMOBILE_URL,
     a_brief,
     a_candidate,
     looked_up,
@@ -197,8 +200,6 @@ class TestBusinessCheck:
             "https://maps.google.com/?cid=123",
             # Review L1: forms the first guard missed.
             "https://maps.google.com./place/x",
-            "maps.google.com/place/x",
-            "//maps.google.com/place/x",
             "https://www.google.com/Maps/place/x",
             "HTTPS://MAPS.GOOGLE.COM/x",
             "https://goo.gl/maps/abc123",
@@ -210,6 +211,17 @@ class TestBusinessCheck:
     def test_no_other_field_may_cite_google_maps(self, url: str) -> None:
         """The structure guard D13 asked for: copying Places content into a field fails here."""
         with pytest.raises(ValidationError, match="D13"):
+            CandidateFields(
+                registry_id=sourced("1234567"),
+                phone=sourced("+1-817-555-0199", url, RetrievalMethod.web_lookup),
+            )
+
+    @pytest.mark.parametrize("url", ["maps.google.com/place/x", "//maps.google.com/place/x"])
+    def test_a_scheme_less_maps_url_is_refused_before_d13_is_reached(self, url: str) -> None:
+        """Review L1's scheme-less forms. Since PR #2 finding #2, a citation must be an http(s)
+        URL, so these are refused by the citation itself; the D13 guard never sees them. Either
+        way, Places content cannot be stored."""
+        with pytest.raises(ValidationError, match="http"):
             CandidateFields(
                 registry_id=sourced("1234567"),
                 phone=sourced("+1-817-555-0199", url, RetrievalMethod.web_lookup),
@@ -295,3 +307,65 @@ class TestRunTotals:
     def test_a_non_slug_stage_name_is_refused(self) -> None:
         with pytest.raises(ValidationError):
             RunTotals(counts={"Sourced Rows": 3}, cost=RunCostSummary())
+
+
+def _record(
+    source: str, *rows: SourceRow, url: str = QCMOBILE_URL
+) -> ProvenancedValue[SourceRecord]:
+    return sourced(SourceRecord(source=source, rows=rows), url, RetrievalMethod.registry_api)
+
+
+class TestSourceRecords:
+    """T5's generic evidence: each source's raw record, cited, for T7's rules and T6's fill."""
+
+    def test_a_row_is_sorted_by_key(self) -> None:
+        row = SourceRow(values=(("power_units", 0), ("carship", "B")))
+        assert row.values == (("carship", "B"), ("power_units", 0))
+
+    def test_a_row_refuses_duplicate_and_blank_keys(self) -> None:
+        with pytest.raises(ValidationError, match="duplicate"):
+            SourceRow(values=(("carship", "B"), ("carship", "C")))
+        with pytest.raises(ValidationError, match="blank"):
+            SourceRow(values=((" ", "B"),))
+
+    def test_get_returns_the_stated_value_or_none(self) -> None:
+        row = SourceRow(values=(("allowToOperate", "Y"),))
+        assert row.get("allowToOperate") == "Y"
+        assert row.get("outOfService") is None
+
+    def test_empty_rows_mean_looked_and_found_nothing(self) -> None:
+        """Distinct from an absent record, which means never looked."""
+        fields = CandidateFields(
+            registry_id=sourced("usdot:1"), source_records=(_record("fmcsa_revocations"),)
+        )
+        assert fields.source_records[0].value.rows == ()
+
+    def test_two_records_for_one_source_are_refused(self) -> None:
+        with pytest.raises(ValidationError, match="more than one source record"):
+            CandidateFields(
+                registry_id=sourced("usdot:1"),
+                source_records=(_record("fmcsa_qcmobile"), _record("fmcsa_qcmobile")),
+            )
+
+    def test_a_string_and_an_integer_survive_the_json_round_trip_as_themselves(self) -> None:
+        """Pydantic's smart union must keep ``"010"`` a string and ``10`` an integer."""
+        row = SourceRow(values=(("phy_cnty", "010"), ("power_units", 10)))
+        fields = CandidateFields(
+            registry_id=sourced("usdot:1"), source_records=(_record("fmcsa_census", row),)
+        )
+        restored = CandidateFields.model_validate(fields.model_dump(mode="json"))
+        assert restored == fields
+        values = restored.source_records[0].value.rows[0].values
+        assert values == (("phy_cnty", "010"), ("power_units", 10))
+
+    def test_a_source_record_cited_to_google_maps_is_refused(self) -> None:
+        """D13 reaches inside tuple fields too."""
+        with pytest.raises(ValidationError, match="D13"):
+            CandidateFields(
+                registry_id=sourced("usdot:1"),
+                source_records=(_record("places", url=PLACES_URL),),
+            )
+
+    def test_source_records_are_never_reported_as_unprovenanced(self) -> None:
+        fields = CandidateFields(registry_id=sourced("usdot:1"))
+        assert "source_records" not in fields.unprovenanced_fields()

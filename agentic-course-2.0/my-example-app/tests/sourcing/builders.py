@@ -6,11 +6,19 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.manifests.repository import ManifestRepository
-from app.manifests.schemas import IcpBand
+from app.manifests.schemas import (
+    DisqualifierRule,
+    IcpBand,
+    ManifestBody,
+    ManifestSource,
+    RuleKind,
+    RuleOperator,
+    SourceKind,
+)
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
 from app.sourcing.schemas import CandidateFields, PlaceCheck, PostalAddress, SourcingBrief
 from app.sourcing.stages import PipelineStage
-from tests.manifests.builders import a_body, a_vertical
+from tests.manifests.builders import a_body, a_vertical, cited
 
 RETRIEVED_AT = datetime(2026, 10, 1, 14, 30, tzinfo=UTC)
 CENSUS_URL = "https://ai.fmcsa.dot.gov/SMS/Tools/Downloads.aspx"
@@ -91,4 +99,100 @@ async def an_active_manifest(session: AsyncSession) -> tuple[UUID, str]:
     repository = ManifestRepository(session)
     manifest = await repository.create_draft(vertical, a_body())
     await repository.mark_active(manifest, a_body(), "test")
+    return manifest.id, vertical
+
+
+DFW_COUNTIES = ("085", "113", "121", "139", "231", "251", "257", "367", "397", "439", "497")
+
+CENSUS_SOURCE_URL = "https://data.transportation.gov/d/az4n-8mr2"
+QCMOBILE_SOURCE_URL = "https://mobile.fmcsa.dot.gov/qc/services/"
+AUTHORITY_HISTORY_URL = "https://data.transportation.gov/d/u4i8-4m26"
+MOTUS_REVOCATIONS_URL = "https://data.transportation.gov/d/wb4f-neki"
+LEGACY_REVOCATIONS_URL = "https://data.transportation.gov/d/rwr4-5nkg"
+"""What freight v3 declares: the frozen pre-Motus file, which T5 deliberately won't bind."""
+
+TX_FIRE_MARSHAL_URL = "https://www.tdi.texas.gov/fire/fmlicense.html"
+PLACES_SOURCE_URL = "https://developers.google.com/maps/documentation/places/web-service/overview"
+
+
+def freight_v3_rules() -> tuple[DisqualifierRule, ...]:
+    """Freight v3's disqualifier rules, copied from the dev manifest (``ecdc1c8e``, 2026-10-09)."""
+    predicate = RuleKind.predicate
+    return (
+        DisqualifierRule(
+            id="inactive_registration", kind=predicate, description="inactive",
+            field="status_code", operator=RuleOperator.equals, value="I",
+        ),
+        DisqualifierRule(
+            id="outside_texas", kind=predicate, description="not TX",
+            field="phy_state", operator=RuleOperator.not_equals, value="TX",
+        ),
+        DisqualifierRule(
+            id="outside_dfw_metro", kind=predicate, description="not one of the 11 counties",
+            field="phy_cnty", operator=RuleOperator.not_in_set, value=DFW_COUNTIES,
+        ),
+        DisqualifierRule(
+            id="no_broker_entity_type", kind=predicate, description="no broker code",
+            field="carship", operator=RuleOperator.not_contains, value="B",
+        ),
+        DisqualifierRule(
+            id="not_allowed_to_operate", kind=predicate, description="QCMobile says N",
+            field="allowToOperate", operator=RuleOperator.equals, value="N",
+        ),
+        DisqualifierRule(
+            id="authority_revoked", kind=RuleKind.judgment, description="in the revocations"
+        ),
+        DisqualifierRule(
+            id="asset_based_carrier", kind=predicate, description="a real fleet",
+            field="power_units", operator=RuleOperator.greater_than, value=10,
+        ),
+        DisqualifierRule(
+            id="self_employed_shell", kind=RuleKind.judgment, description="no back office"
+        ),
+    )  # fmt: skip
+
+
+def _source(name: str, kind: SourceKind, base_url: str) -> ProvenancedValue[ManifestSource]:
+    return cited(
+        ManifestSource(name=name, kind=kind, description=f"the {name} source", base_url=base_url)
+    )
+
+
+def a_freight_body(*, revocations_url: str = MOTUS_REVOCATIONS_URL) -> ManifestBody:
+    """Freight v3's sources and rules — with Motus revocations unless told otherwise."""
+    base = a_body()
+    return base.model_copy(
+        update={
+            "sources": (
+                _source("fmcsa_company_census", SourceKind.bulk_file, CENSUS_SOURCE_URL),
+                _source("fmcsa_qcmobile", SourceKind.registry_api, QCMOBILE_SOURCE_URL),
+                _source("fmcsa_authority_history", SourceKind.bulk_file, AUTHORITY_HISTORY_URL),
+                _source("fmcsa_revocations", SourceKind.bulk_file, revocations_url),
+            ),
+            "disqualifier_rules": tuple(cited(rule) for rule in freight_v3_rules()),
+        }
+    )
+
+
+def a_fire_body() -> ManifestBody:
+    """Fire's sources: the Texas Fire Marshal registry, and Places — which must never discover."""
+    base = a_body()
+    return base.model_copy(
+        update={
+            "sources": (
+                _source("tx_fire_marshal", SourceKind.registry_api, TX_FIRE_MARSHAL_URL),
+                _source("places", SourceKind.web_lookup, PLACES_SOURCE_URL),
+            ),
+        }
+    )
+
+
+async def an_active_manifest_with(
+    session: AsyncSession, body: ManifestBody, *, vertical: str | None = None
+) -> tuple[UUID, str]:
+    """Like :func:`an_active_manifest`, with the body (and optionally the vertical) given."""
+    vertical = vertical or a_vertical()
+    repository = ManifestRepository(session)
+    manifest = await repository.create_draft(vertical, body)
+    await repository.mark_active(manifest, body, "test")
     return manifest.id, vertical
