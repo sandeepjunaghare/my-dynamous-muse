@@ -81,9 +81,14 @@ def registered_stages(package: str = STAGES_PACKAGE) -> tuple[Stage, ...]:
         exported: object = getattr(module, "STAGE", None)
         if not isinstance(exported, Stage):
             raise TypeError(f"{module_name} must export STAGE, meeting the Stage contract")
-        if exported.stage is not pipeline_stage:
+        # The Protocol check only proves ``stage`` exists, not that it is the enum: a bare string
+        # would pass it and then fail on ``.value`` below with an AttributeError that says nothing.
+        declared: object = getattr(exported, "stage", None)
+        if not isinstance(declared, PipelineStage):
+            raise TypeError(f"{module_name}: STAGE.stage must be a PipelineStage, got {declared!r}")
+        if declared is not pipeline_stage:
             raise TypeError(
-                f"{module_name} exports the {exported.stage.value} stage; "
+                f"{module_name} exports the {declared.value} stage; "
                 f"a stage module is named for the stage it exports"
             )
         stages.append(exported)

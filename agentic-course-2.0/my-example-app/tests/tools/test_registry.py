@@ -63,9 +63,10 @@ def _stage_source(stage: PipelineStage) -> str:
 
 
 def test_app_tools_registers_only_built_stages() -> None:
-    """The real package: whatever is registered is a known stage, in pipeline order."""
+    """The real package: whatever is registered is a known stage, once each, in pipeline order."""
     stages = [registered.stage for registered in registered_stages()]
     assert stages == sorted(stages, key=list(PipelineStage).index)
+    assert len(stages) == len(set(stages))
 
 
 def test_a_package_with_no_stage_modules_registers_nothing(make_package: PackageFactory) -> None:
@@ -104,6 +105,17 @@ def test_a_module_whose_stage_claims_another_name_is_refused(
     package = make_package({"cluster_routes": _stage_source(PipelineStage.classify_rollup)})
 
     with pytest.raises(TypeError, match="classify_rollup"):
+        registered_stages(package)
+
+
+def test_a_stage_that_is_not_a_pipeline_stage_is_refused(make_package: PackageFactory) -> None:
+    """A bare string is not the enum, even one that matches the module's name."""
+    source = _stage_source(PipelineStage.cluster_routes).replace(
+        "stage = PipelineStage.cluster_routes", 'stage = "cluster_routes"'
+    )
+    package = make_package({"cluster_routes": source})
+
+    with pytest.raises(TypeError, match="must be a PipelineStage"):
         registered_stages(package)
 
 

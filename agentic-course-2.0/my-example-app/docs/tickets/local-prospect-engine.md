@@ -146,7 +146,7 @@ declarative manifest, not code* and *Missing pieces* · PRD §6 portability tabl
 **Per-ticket context:** architecture → *Recommended approach* (incl. why a pipeline, not a loop), *Five generic
 stages, not one per source*, *Boundaries & contracts* → FMCSA · `.claude/references/adding-a-vertical.md` ·
 E10 · **SPIKE-2 result** (below).
-**Files:** `app/tools/{__init__,search_registry}.py`, `app/sourcing/{service,pipeline,sources/fmcsa}.py`, `tests/`
+**Files:** `app/tools/search_registry.py`, `app/sourcing/{service,pipeline,sources/fmcsa}.py`, `tests/`
 **Size:** ~1100–1500 lines · **Depends on:** T2, T4 · **Gated by:** ~~SPIKE-2~~ cleared 2026-10-10 (principal half; headcount does not gate)
 
 ---

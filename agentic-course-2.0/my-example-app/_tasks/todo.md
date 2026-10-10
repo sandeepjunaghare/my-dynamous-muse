@@ -961,7 +961,7 @@ T9 is blocked on T7 and T8, so the parallel set is T5 ∥ T7 ∥ T8; T9 follows 
 **Decided 2026-10-10:** SPIKE-2's headcount half does not gate T5. The principal half (67%) clears the 50% bar.
 
 - [x] **0. Record the decisions** in `docs/tickets/local-prospect-engine.md`: SPIKE-2 is no longer gating T5, and the wave order is revised.
-- [ ] **1. Seam PR on `main`, merged before the worktrees are cut** (built and validated on `feat/tools-stage-seam`; PR open, not merged): `app/tools/__init__.py` with
+- [ ] **1. Seam PR on `main`, merged before the worktrees are cut** *(superseded as written: what was built is in **Step 1 changed from the plan** below)* (built and validated on `feat/tools-stage-seam`; PR open, not merged): `app/tools/__init__.py` with
   - a `Stage` Protocol, keyed by the existing `PipelineStage`;
   - a `StageContext`: run id, active manifest, batch candidate ids, session, cost recorder;
   - an empty `STAGES` registry, where adding a stage is a one-line append;
@@ -994,3 +994,21 @@ T9 is blocked on T7 and T8, so the parallel set is T5 ∥ T7 ∥ T8; T9 follows 
   package whose only module is `__init__.py`.
 - **Tests:** 7 new, 689 passed with the database; ruff, mypy and pyright are clean. A mutation check showed that
   the three guards (missing `STAGE`, misnamed stage, broken import) are each caught by a test.
+
+
+## PR #17 review findings: fix all four Lows (2026-10-10)
+
+Review: `.claude/code-reviews/pr-17-review.md`. Triage: all four fixed in this PR, since the Wave 5 worktrees are cut from it.
+
+- [x] **L1.** A non-enum `STAGE.stage` gives an `AttributeError` from `.value`. Check it is a `PipelineStage` first, and add a test.
+- [x] **L2.** The real-package test is trivially true. Also assert that no stage is registered twice.
+- [x] **L3.** T5's `Files:` line in the tickets still lists `app/tools/__init__.py`.
+- [x] **L4.** Mark the step 1 checkbox in Wave 5 as superseded by its "changed from the plan" note.
+- [x] Validate, commit, push.
+
+**Review:** 690 passed (1 new test, and one assertion added to an existing test); ruff, mypy and pyright are clean.
+**Worked:** the L1 test was written first and failed with the exact `AttributeError` before the fix.
+**Didn't:** a direct `isinstance(exported.stage, PipelineStage)` would trip Pyright strict's unnecessary-isinstance
+check, because the Protocol already types `stage` statically. Reading it back as `object` via `getattr` matches the `STAGE` lookup above it.
+**Improve:** a runtime-checkable Protocol proves only that attributes exist. Every attribute the registry reads
+from a loaded module needs its own runtime check.
