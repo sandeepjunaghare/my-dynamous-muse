@@ -837,3 +837,37 @@ item from D13.
       M1 (a `model_copy` bypassed the D13 guard; reproduced) fixed by re-validating in `upsert_candidate`. L1
       (4 host forms missed) fixed. L3 tests and L4 docs added. L2 (tie the check to the address) deferred to
       T6 with a note. 604 passed with the database
+
+---
+
+# T13 — Adoption: the hand-worked prospects into the cadence (planned 2026-10-10)
+
+**Why:** Spike 1 closed as discipline. The cadence machine has zero live prospects, and the September
+prospects stalled after day 4. **Plan:** `.claude/plans/t13-cadence-adoption.md`.
+
+**Found in the live portal (read-only):** 26 tasks do not map to 22 prospects (Jorge has 3 tasks, and
+Koetter, APS, Central and DSS have 2 each). Kodiak has no contact. The 09-22 calls were logged twice, once
+on the company and once on the contact. The three refusals have notes but no tasks.
+
+**Decided (human, 2026-10-10):** an explicit TOML roster (adopt / park, optional `start` override) after a
+dry run · evidence from the contact only, matching the sync · old hand tasks left and listed · **no
+`candidate` rows**: the ticket is amended, and T9 owns provenance for these records.
+
+**Found while planning:** `enrol` drops `anchor_ref` (`repository.create` hard-codes `None`), so the first
+sync after an adoption that ended on a note would re-credit that note. Fixed in T13, with the deferred
+pr-9 L1 (look before create, IntegrityError → AlreadyEnrolledError).
+
+## Tasks
+
+- [ ] `SearchOperator.neq`
+- [ ] `repository.create(anchor_ref=)` + `create_parked`
+- [ ] `enrol`: `anchor_ref`, look-before-create by key, IntegrityError → AlreadyEnrolledError
+- [ ] `service.adopt_parked`
+- [ ] `RosterError`; adoption schemas
+- [ ] `adoption.py`: roster + `parse_position` + pure `reconstruct` + `Adopter` (discover / rehearse / apply, under the lock)
+- [ ] `lpe cadence adopt [--roster] [--dry-run]`
+- [ ] Fake portal: tasks search, contacts batch read, task→contact and contact→company associations, hand tasks
+- [ ] Tests first: pure, DB tier (13 cases), CLI
+- [ ] Docs: T13 and T9 tickets, hubspot-integration Adoption, cadence README, `CLAUDE.md` commands
+- [ ] `/piv-validate` on the full tier (with database)
+- [ ] **Human-gated live run:** dry run → roster → roster dry run → apply on approval → `sync --dry-run` closes nothing
