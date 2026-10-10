@@ -16,9 +16,12 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum, StrEnum
 from typing import cast
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+_URL_SCHEMES = frozenset({"http", "https"})
 
 _IMMUTABLE_SCALARS = (str, bytes, bool, int, float, Decimal, datetime, date, UUID, Enum, type(None))
 
@@ -135,11 +138,22 @@ class ProvenancedValue[T](BaseModel):
     @field_validator("source_url")
     @classmethod
     def _reject_blank_source(cls, value: str) -> str:
-        """Reject an empty or whitespace-only source URL."""
+        """Reject a source URL that is blank or is not an http(s) URL with a host.
+
+        Blank was the original rule; the shape check came later (PR #2 review, finding #2), when
+        ``"n/a"`` was shown to pass the gate. A citation a person cannot follow back is no citation,
+        and T5 is the first ticket writing real sourced URLs, so the rule landed before it did.
+        """
         stripped = value.strip()
         if not stripped:
             raise ValueError(
                 "source_url must not be blank — a field without a source is not provenanced"
+            )
+        parts = urlsplit(stripped)
+        if parts.scheme.lower() not in _URL_SCHEMES or not parts.hostname:
+            raise ValueError(
+                f"source_url must be an http(s) URL with a host, got {stripped!r} — "
+                "a citation nobody can follow back is not provenanced"
             )
         return stripped
 

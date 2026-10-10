@@ -76,6 +76,26 @@ class TestRequiredFields:
     def test_source_url_is_stripped(self) -> None:
         assert _value(source_url=f"  {SOURCE}  ").source_url == SOURCE
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "n/a",
+            "ftp://safer.fmcsa.dot.gov/file",
+            "https://",
+            "mobile.fmcsa.dot.gov/qc/services/carriers/7989",
+            "//mobile.fmcsa.dot.gov/qc/services/carriers/7989",
+            "mailto:someone@example.com",
+        ],
+    )
+    def test_a_source_url_that_is_not_an_http_url_raises(self, url: str) -> None:
+        """PR #2 review #2: ``"n/a"`` used to pass the gate. A citation must be followable."""
+        with pytest.raises(ValidationError, match="http"):
+            _value(source_url=url)
+
+    @pytest.mark.parametrize("url", ["http://example.com/x", "HTTPS://SAFER.FMCSA.DOT.GOV/"])
+    def test_http_and_https_urls_are_accepted(self, url: str) -> None:
+        assert _value(source_url=url).source_url == url
+
 
 class TestFrozen:
     """A citation is a fact about how a value was obtained; it is not editable afterwards."""
