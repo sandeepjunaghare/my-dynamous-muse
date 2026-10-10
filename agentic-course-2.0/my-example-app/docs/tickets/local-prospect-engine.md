@@ -207,6 +207,11 @@ hand today") · PRD §6 step 5.
 **Files:** `app/routing/*`, `app/tools/cluster_routes.py`, `tests/routing/`
 **Size:** ~500–800 lines · **Depends on:** T4 · **Parallel with:** T5, T7
 
+*Decided 2026-10-10, planning T8.* **Eligibility is a verified address only.** T8 does not read T7's
+`disqualification`. Narrowing routes to qualified candidates, and whether to re-route afterwards, is **T9/T10's**.
+**Storage is routing's own `route_assignment` table** (migration `0007`): the cited Census point and the route.
+`CandidateFields` is unchanged, and `cluster_routes` still owns no candidate field.
+
 ---
 
 ### T9 — Promotion slice: the write-gate, HubSpot create, promotion ledger

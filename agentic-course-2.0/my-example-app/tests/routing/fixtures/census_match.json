@@ -1,0 +1,25 @@
+{
+  "result": {
+    "input": {
+      "address": {"zip": "75238", "city": "Dallas", "street": "9500 Forest Ln", "state": "TX"},
+      "benchmark": {
+        "isDefault": true,
+        "benchmarkDescription": "Public Address Ranges - Current Benchmark",
+        "id": "4",
+        "benchmarkName": "Public_AR_Current"
+      }
+    },
+    "addressMatches": [
+      {
+        "tigerLine": {"side": "R", "tigerLineId": "48113000000"},
+        "coordinates": {"x": -96.7164, "y": 32.8839},
+        "addressComponents": {
+          "zip": "75238", "streetName": "FOREST", "preType": "", "city": "DALLAS",
+          "preDirection": "", "suffixDirection": "", "fromAddress": "9500", "state": "TX",
+          "suffixType": "LN", "toAddress": "9598", "suffixQualifier": "", "preQualifier": ""
+        },
+        "matchedAddress": "9500 FOREST LN, DALLAS, TX, 75238"
+      }
+    ]
+  }
+}
