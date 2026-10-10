@@ -100,7 +100,7 @@ OPEN_TASK_SEARCH_LIMIT = 200
 CONTACT_PROPERTIES = ("firstname", "lastname", "createdate")
 HAND_TASK_PROPERTIES = ("hs_task_subject", "hs_task_status", "hs_task_body", "hs_timestamp")
 
-_POSITION = re.compile(r"(?P<cycle>\d+)-(?P<touch>[a-z]+)")
+_POSITION = re.compile(r"(?P<cycle>\d+)-(?P<touch>[a-z]+)", re.ASCII)
 
 
 def parse_position(text: str) -> CadencePosition:
@@ -147,7 +147,7 @@ class RosterEntry(BaseModel):
         if value is None:
             return None
         stripped = value.strip()
-        if not stripped.isdigit():
+        if not (stripped.isascii() and stripped.isdigit()):
             raise ValueError(f"{value!r} is not a HubSpot id — ids are digits only")
         return stripped
 
@@ -194,6 +194,8 @@ def load_roster(path: Path) -> Roster:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RosterError(f"roster {path}: cannot be read ({exc.strerror or exc})") from exc
+    except UnicodeDecodeError as exc:
+        raise RosterError(f"roster {path}: not UTF-8 text — save it as UTF-8") from exc
     try:
         return Roster.model_validate(tomllib.loads(text))
     except tomllib.TOMLDecodeError as exc:
@@ -416,8 +418,8 @@ class Adopter:
 
                 async def adopt_one(entry: RosterEntry = entry) -> None:
                     plan = await self._plan_contact(entry, now, reader, client)
-                    report.plans.append(plan)
                     await self._apply(plan, report)
+                    report.plans.append(plan)
 
                 await self._guarded(report, entry.contact, adopt_one)
         return self._completed(report, mode="apply")

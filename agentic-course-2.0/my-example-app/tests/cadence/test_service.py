@@ -178,6 +178,41 @@ class TestEnrol:
         assert await _state(db_session) == ("live", 1, "call", first_task)
         assert hubspot.task_creates_attempted() == 1, "the loser found the task by key"
 
+    async def test_a_losing_enrolment_names_the_task_it_left_open(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pr-14 L1: both racers created a task; the loser's is orphaned, and says so."""
+        await service.enrol(CONTACT)
+        first_task = hubspot.last_task_id()
+        repository = CadenceRepository(db_session)
+        monkeypatch.setattr(service, "_repository", repository)
+        real_get = repository.get_by_contact
+        calls = {"n": 0}
+
+        async def missed_once(contact_id: str) -> CadenceState | None:
+            calls["n"] += 1
+            return None if calls["n"] == 1 else await real_get(contact_id)
+
+        async def not_yet_visible(reader: OutcomeReader, contact_id: str, key: str) -> None:
+            return None
+
+        monkeypatch.setattr(repository, "get_by_contact", missed_once)
+        monkeypatch.setattr(OutcomeReader, "find_task_by_key", not_yet_visible)
+
+        with capture_logs() as logs, pytest.raises(AlreadyEnrolledError) as raised:
+            await service.enrol(CONTACT)
+
+        orphan = hubspot.last_task_id()
+        assert orphan != first_task
+        assert f"task {orphan}" in raised.value.message
+        (event,) = [log for log in logs if log["event"] == "cadence.service.task_orphaned"]
+        assert (event["contact_id"], event["task_id"]) == (CONTACT, orphan)
+        assert await _state(db_session) == ("live", 1, "call", first_task)
+
     async def test_an_adopted_refusal_is_parked_and_never_enrolled(
         self,
         service: CadenceService,

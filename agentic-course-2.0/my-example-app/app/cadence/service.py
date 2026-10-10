@@ -216,6 +216,7 @@ class CadenceService:
         client = self._hubspot()
         key = task_key(contact_id, position)
         existing = await OutcomeReader(client).find_task_by_key(contact_id, key)
+        created_here = existing is None
         if existing is not None:
             task_id = existing.task_id
             logger.warning("cadence.service.task_reused", contact_id=contact_id, task_id=task_id)
@@ -242,9 +243,15 @@ class CadenceService:
             await self._session.rollback()
             if UNIQUE_CONTACT not in str(exc.orig):
                 raise
+            orphan = ""
+            if created_here:
+                logger.warning(
+                    "cadence.service.task_orphaned", contact_id=contact_id, task_id=task_id
+                )
+                orphan = f"; task {task_id} this run created is left open — close it by hand"
             raise AlreadyEnrolledError(
                 f"contact {contact_id} was enrolled by another run while this one was working — "
-                "cycle position is never reset",
+                f"cycle position is never reset{orphan}",
                 contact_id=contact_id,
             ) from exc
         await self._session.commit()

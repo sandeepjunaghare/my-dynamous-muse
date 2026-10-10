@@ -308,8 +308,8 @@ def _company_only_text(task: CompanyOnlyTask, *, listed: set[str], enrolled: set
     adopted = [contact for contact in task.company_contacts if contact in enrolled]
     if covered:
         return (
-            f"{lead}, whose {_contacts(covered, 'is', 'are')} listed above — adopting it covers "
-            "this; close this task by hand"
+            f"{lead}, whose {_contacts(covered, 'is', 'are')} listed above — adopting "
+            f"{_them(covered)} covers this; close this task by hand"
         )
     if adopted:
         return (
@@ -317,11 +317,17 @@ def _company_only_text(task: CompanyOnlyTask, *, listed: set[str], enrolled: set
             "task by hand"
         )
     if task.company_contacts:
+        them = _them(task.company_contacts)
         return (
             f"{lead}, whose {_contacts(task.company_contacts, 'has', 'have')} no open hand task — "
-            "put it in the roster to adopt it"
+            f"put {them} in the roster to adopt {them}"
         )
     return f"{lead} with no contact — add a contact in HubSpot, then put it in the roster"
+
+
+def _them(ids: list[str]) -> str:
+    """``it`` for one contact, ``them`` for several."""
+    return "it" if len(ids) == 1 else "them"
 
 
 def _contacts(ids: list[str], singular: str, plural: str) -> str:

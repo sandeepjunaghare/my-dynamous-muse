@@ -402,6 +402,10 @@ class TestAdopt:
         hubspot.link_company("400000000777", "7000000002")
         quiet = hubspot.add_hand_task("Follow up with Eagle", company="7000000002")
         orphan = hubspot.add_hand_task("Call Kodiak", company="7000000003")
+        for contact in ("400000000778", "400000000779"):
+            hubspot.add_contact(contact, datetime.now(UTC))
+            hubspot.link_company(contact, "7000000004")
+        pair = hubspot.add_hand_task("Follow up with Central", company="7000000004")
 
         assert main(["cadence", "adopt", "--dry-run"]) == 0
 
@@ -417,6 +421,11 @@ class TestAdopt:
         assert (
             f'task {orphan} "Call Kodiak" is on company 7000000003 with no contact — add a '
             "contact in HubSpot, then put it in the roster"
+        ) in out
+        assert (
+            f'task {pair} "Follow up with Central" is on company 7000000004, whose contacts '
+            "400000000778, 400000000779 have no open hand task — put them in the roster to adopt "
+            "them"
         ) in out
 
     def test_a_roster_adopts_and_lists_the_hand_tasks_to_close(

@@ -36,7 +36,9 @@ class TestParsePosition:
     def test_the_task_key_suffix_is_a_position(self, text: str, expected: CadencePosition) -> None:
         assert parse_position(text) == expected
 
-    @pytest.mark.parametrize("text", ["0-call", "4-call", "2-door", "call", "1call", "", "1-Call"])
+    @pytest.mark.parametrize(
+        "text", ["0-call", "4-call", "2-door", "call", "1call", "", "1-Call", "\u0661-call"]
+    )
     def test_anything_else_is_refused(self, text: str) -> None:
         with pytest.raises(ValueError, match="position"):
             parse_position(text)
@@ -99,6 +101,7 @@ class TestRoster:
             ("prospect = []\n", "prospect"),
             ("", "prospect"),
             ('[[prospect]]\ncontact = "Jorge"\naction = "adopt"\n', "digits"),
+            ('[[prospect]]\ncontact = "\u00b2"\naction = "adopt"\n', "digits"),
             ('[[prospect]]\ncontact = "1"\naction = "enrol"\n', "action"),
             ('[[prospect]]\ncontact = "1"\naction = "adopt"\nstart = "4-call"\n', "position"),
             ('[[prospect]\ncontact = "1"\n', "not valid TOML"),
@@ -110,6 +113,7 @@ class TestRoster:
             "empty",
             "no-prospects",
             "non-digit-contact",
+            "non-ascii-digit-contact",
             "unknown-action",
             "impossible-start",
             "malformed-toml",
@@ -136,6 +140,16 @@ class TestRoster:
 
         with pytest.raises(RosterError, match="prospect 2"):
             load_roster(path)
+
+    def test_a_roster_that_is_not_utf8_is_a_roster_error(self, tmp_path: Path) -> None:
+        """pr-14 M1: a UTF-16 save from a Windows editor is one error line, not a traceback."""
+        path = tmp_path / "adopt.toml"
+        path.write_bytes('[[prospect]]\ncontact = "1"\naction = "park"\n'.encode("utf-16"))
+
+        with pytest.raises(RosterError, match="not UTF-8") as raised:
+            load_roster(path)
+
+        assert str(path) in raised.value.message
 
     def test_a_missing_file_is_a_roster_error(self, tmp_path: Path) -> None:
         path = tmp_path / "nowhere.toml"

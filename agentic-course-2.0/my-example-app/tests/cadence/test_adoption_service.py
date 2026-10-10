@@ -5,10 +5,11 @@ is proved by the absence of a route for one, not asserted by hope.
 """
 
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from structlog.testing import capture_logs
 
@@ -16,8 +17,9 @@ from app.cadence.adoption import Adopter, Roster, RosterEntry
 from app.cadence.exceptions import AlreadyEnrolledError, SyncRunningError
 from app.cadence.machine import CadencePosition, Touch, due_at_enrolment
 from app.cadence.repository import CADENCE_SYNC_LOCK_ID, CadenceRepository
-from app.cadence.schemas import ActivityKind, RosterAction
+from app.cadence.schemas import Activity, ActivityKind, RosterAction
 from app.cadence.service import CadenceService
+from app.cadence.sync import OutcomeReader
 from tests.cadence.conftest import CONTACT, START, FakeClock, FakeHubSpot
 from tests.conftest import requires_db
 
@@ -63,6 +65,19 @@ async def _hold_sync_lock[T](database_url: str, operation: Callable[[], Awaitabl
                 )
     finally:
         await engine.dispose()
+
+
+def _deadlock_for[**P, R](
+    contact_id: str, real: Callable[P, Awaitable[R]]
+) -> Callable[P, Awaitable[R]]:
+    """Wrap a repository write so it raises a database error for one contact only."""
+
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        if kwargs.get("contact_id") == contact_id:
+            raise OperationalError("INSERT cadence_state", {}, Exception("deadlock detected"))
+        return await real(*args, **kwargs)
+
+    return wrapper
 
 
 class TestNoFieldWrites:
@@ -252,9 +267,62 @@ class TestRerun:
         assert failure.code == "contact_created_at_missing"
         assert hubspot.task_creates_attempted() == 0
 
+    async def test_a_database_error_rolls_back_one_entry_and_the_next_still_adopts(
+        self,
+        adopter: Adopter,
+        hubspot: FakeHubSpot,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        hubspot.add_contact(CONTACT, SINCE)
+        hubspot.add_contact(OTHER, SINCE)
+        monkeypatch.setattr(
+            CadenceRepository, "create", _deadlock_for(CONTACT, CadenceRepository.create)
+        )
+
+        report = await adopter.apply(
+            _roster((CONTACT, RosterAction.adopt), (OTHER, RosterAction.adopt))
+        )
+
+        (failure,) = report.failures
+        assert (failure.hubspot_contact_id, failure.code) == (CONTACT, "database_error")
+        assert [state.hubspot_contact_id for state in report.adopted] == [OTHER]
+        assert [plan.hubspot_contact_id for plan in report.plans] == [OTHER]
+        assert await CadenceRepository(db_session).get_by_contact(CONTACT) is None
+
+    async def test_an_entry_enrolled_by_another_run_mid_apply_shows_no_plan(
+        self,
+        adopter: Adopter,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pr-14 M2: a plan is reported only once it was applied, not when it was drawn up."""
+        hubspot.add_contact(CONTACT, SINCE)
+        hubspot.add_contact(OTHER, SINCE)
+        real_activities = OutcomeReader.activities
+
+        async def enrolled_meanwhile(
+            reader: OutcomeReader, contact_id: str, since: datetime | None = None
+        ) -> list[Activity]:
+            history = await real_activities(reader, contact_id, since)
+            if contact_id == CONTACT:
+                await service.enrol(CONTACT)
+            return history
+
+        monkeypatch.setattr(OutcomeReader, "activities", enrolled_meanwhile)
+
+        report = await adopter.apply(
+            _roster((CONTACT, RosterAction.adopt), (OTHER, RosterAction.adopt))
+        )
+
+        assert report.already_enrolled == [CONTACT]
+        assert [plan.hubspot_contact_id for plan in report.plans] == [OTHER]
+        assert [state.hubspot_contact_id for state in report.adopted] == [OTHER]
+
 
 class TestLock:
-    async def test_apply_waits_for_a_running_sync_but_a_rehearsal_does_not(
+    async def test_apply_refuses_while_a_sync_runs_but_a_rehearsal_does_not(
         self, adopter: Adopter, hubspot: FakeHubSpot, migrated_database: str
     ) -> None:
         hubspot.add_contact(CONTACT, SINCE)

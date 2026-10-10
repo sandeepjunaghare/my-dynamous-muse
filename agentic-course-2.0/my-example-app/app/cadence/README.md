@@ -255,10 +255,14 @@ There is **no enrol route, and no plain enrol command**. `CadenceService.enrol()
 
 `enrol` is **safe to retry.** Before creating the task it looks for one already carrying the touch's
 key, the same lookup the sync uses after an interrupted create, and reuses it
-(`cadence.service.task_reused`). Two enrolments racing past the existing-row check meet
-`uq_cadence_state_contact`, and the loser raises `AlreadyEnrolledError` rather than an integrity
-error. A contact is enrolled at most once, live or parked; `adopt_parked` records an adopted refusal
-the same way.
+(`cadence.service.task_reused`). A reused task keeps the due date HubSpot gave it when it was first
+created, while the row takes the re-run's — the two disagree by the time between the runs. That is
+rare (a lost create response) and left as is; `overdue` goes by the row's date. Two
+enrolments racing past the existing-row check meet `uq_cadence_state_contact`, and the loser raises
+`AlreadyEnrolledError` rather than an integrity error. If the loser created its own task, that task
+stays open in HubSpot: the loser logs `cadence.service.task_orphaned` with its id and names it in the
+error, for the person to close. A contact is enrolled at most once, live or parked; `adopt_parked`
+records an adopted refusal the same way.
 
 ## Deferred
 

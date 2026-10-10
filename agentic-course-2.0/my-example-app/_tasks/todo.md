@@ -894,3 +894,21 @@ pr-9 L1 (look before create, IntegrityError → AlreadyEnrolledError).
   - Close the 15 old hand tasks.
   - Kodiak and DSS Fire, Inc. need contacts.
   - Company-logged activity (README *Deferred*).
+
+## PR #14 review fixes (2026-10-10)
+
+Triage approved: fix M1, M2, L1, L3, L4 with tests; L2 as a README note; defer the rest of the test gaps to #15.
+
+- [x] M1 — a non-UTF-8 roster is one `RosterError` ("not UTF-8 text"), not a traceback (`load_roster`).
+- [x] M2 — `apply` records a plan only after `_apply` succeeds; a failed or race-skipped entry shows no plan.
+- [x] L1 — a losing enrol that created its own task logs `cadence.service.task_orphaned` and names the task.
+- [x] L2 — README *Enrolment*: a task reused by key keeps HubSpot's old due date; `overdue` goes by the row.
+- [x] L3 — ids accept ASCII digits only; `_POSITION` is `re.ASCII`.
+- [x] L4 — plural company-only messages say "them".
+- [x] Test gaps fixed here: the `_guarded` database-error path (next entry still adopts); lock test renamed to "refuses".
+- [x] Deferred: the remaining test gaps → issue #15.
+
+**Review:** 672 passed (6 new; all 7 new cases failed on the PR head first, then passed). ruff, mypy, pyright and
+`alembic check` clean. **Worked:** watching each new test fail on the stashed PR-head code before trusting it.
+**Didn't:** a first draft of the database-error test used a pyright suppression; replaced with a typed ParamSpec
+wrapper. **Improve:** `-k` filters miss hyphenated parametrize ids — select those by full node id.
