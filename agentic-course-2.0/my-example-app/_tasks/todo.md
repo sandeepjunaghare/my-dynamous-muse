@@ -859,15 +859,38 @@ pr-9 L1 (look before create, IntegrityError → AlreadyEnrolledError).
 
 ## Tasks
 
-- [ ] `SearchOperator.neq`
-- [ ] `repository.create(anchor_ref=)` + `create_parked`
-- [ ] `enrol`: `anchor_ref`, look-before-create by key, IntegrityError → AlreadyEnrolledError
-- [ ] `service.adopt_parked`
-- [ ] `RosterError`; adoption schemas
-- [ ] `adoption.py`: roster + `parse_position` + pure `reconstruct` + `Adopter` (discover / rehearse / apply, under the lock)
-- [ ] `lpe cadence adopt [--roster] [--dry-run]`
-- [ ] Fake portal: tasks search, contacts batch read, task→contact and contact→company associations, hand tasks
-- [ ] Tests first: pure, DB tier (13 cases), CLI
-- [ ] Docs: T13 and T9 tickets, hubspot-integration Adoption, cadence README, `CLAUDE.md` commands
-- [ ] `/piv-validate` on the full tier (with database)
-- [ ] **Human-gated live run:** dry run → roster → roster dry run → apply on approval → `sync --dry-run` closes nothing
+- [x] `SearchOperator.neq`
+- [x] `repository.create(anchor_ref=)` + `create_parked`
+- [x] `enrol`: `anchor_ref`, look-before-create by key, IntegrityError → AlreadyEnrolledError
+- [x] `service.adopt_parked`
+- [x] `RosterError`; adoption schemas
+- [x] `adoption.py`: roster + `parse_position` + pure `reconstruct` + `Adopter` (discover / rehearse / apply, under the lock)
+- [x] `lpe cadence adopt [--roster] [--dry-run]`
+- [x] Fake portal: tasks search, contacts batch read, task→contact and contact→company associations, hand tasks
+- [x] Tests first: pure, DB tier (13 cases), CLI
+- [x] Docs: T13 and T9 tickets, hubspot-integration Adoption, cadence README, `CLAUDE.md` commands
+- [x] `/piv-validate` on the full tier (with database)
+- [x] **Human-gated live run:** dry run → roster → roster dry run → apply on approval → `sync --dry-run` closes nothing
+
+## Review (implementation, 2026-10-10)
+
+**Done:** all code, tests and docs on `feat/cadence-adoption`. Report: `.claude/reports/t13-cadence-adoption-report.md`.
+664 passed with the database (60 new, 0 skipped); ruff, mypy, pyright and `alembic check` are clean.
+
+- **Worked:** reusing `plan_advance` made the core about 40 lines, and adoption and the sync cannot disagree.
+  Putting the fake portal's routes above the generic ones kept the "no field write" property provable. A
+  mutation check confirmed that the anchor and look-before-create tests bite.
+- **Didn't:** the two new adoption test files were never seen failing before their code existed; the mutation
+  check covered that. Port 5433 was taken by `langfuse-postgres`, so the test database ran on 5434.
+- **Improve:** `/piv-validate` and `CLAUDE.md` hard-code 5433. Make the port a variable, or check that it is
+  free first.
+- **Live run (2026-10-10, approved):**
+  - Applied `~/lpe/adopt-2026-10.toml`: 14 adopted, 3 parked (Five Star, Complete Fire, Lone Star), 0 failures.
+  - `sync --dry-run` straight after: checked 14 · would advance 0. The anchor round-trip holds on live data.
+  - Spot-checked tasks 406124314353 and 406124393189: the `Ref: lpe-cadence:…` key survives in the body, the
+    owner is set, and they are due 23:59 Dallas.
+  - The first dry run's misleading "add a contact" advice was fixed in the same branch (company → contacts lookup).
+- **Still open:**
+  - Close the 15 old hand tasks.
+  - Kodiak and DSS Fire, Inc. need contacts.
+  - Company-logged activity (README *Deferred*).

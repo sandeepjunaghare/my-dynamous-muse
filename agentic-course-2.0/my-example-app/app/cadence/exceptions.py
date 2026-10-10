@@ -65,3 +65,30 @@ class SyncRunningError(CadenceError):
 
     default_code: ClassVar[str] = "sync_running"
     status_code: ClassVar[int] = 409
+
+
+class RosterError(CadenceError):
+    """The adoption roster cannot be used: missing, not TOML, or an entry that fails validation.
+
+    The message names the file and, where known, the entry — the person fixing it has the file
+    open, not the parser's internals.
+    """
+
+    default_code: ClassVar[str] = "invalid_roster"
+    status_code: ClassVar[int] = 422
+
+
+class UnadoptableContactError(CadenceError):
+    """One roster entry's contact cannot be planned — it no longer exists in HubSpot, or HubSpot
+    gave no ``createdate`` to count its evidence from.
+
+    Reported against that entry, never raised out of a run: the other entries carry on. ``code``
+    says which (``contact_not_found``, ``contact_created_at_missing``).
+    """
+
+    default_code: ClassVar[str] = "unadoptable_contact"
+    status_code: ClassVar[int] = 422
+
+    def __init__(self, message: str, *, contact_id: str, code: str) -> None:
+        super().__init__(message, code=code)
+        self.contact_id = contact_id

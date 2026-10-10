@@ -112,6 +112,104 @@ class TestEnrol:
 
         assert await CadenceRepository(db_session).get_by_contact(CONTACT) is None
 
+    async def test_an_anchor_on_an_activity_is_not_credited_again(
+        self, service: CadenceService, hubspot: FakeHubSpot, clock: FakeClock
+    ) -> None:
+        """T13's regression: adoption anchors on the note that closed the last touch. Stored
+        without its ref, that note would sort after the anchor and close the next touch too."""
+        logged_at = clock()
+        note_id = hubspot.log(ActivityKind.note, at=logged_at)
+        clock.advance(hours=1)
+        await service.enrol(
+            CONTACT,
+            start=CadencePosition(cycle=1, touch=Touch.voicemail),
+            anchor_at=logged_at,
+            anchor_ref=f"notes:{note_id}",
+        )
+
+        report = await service.sync()
+
+        assert (report.touches_closed, report.tasks_created) == (0, 0)
+
+    async def test_an_interrupted_enrolment_reuses_the_task_it_made(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        db_session: AsyncSession,
+    ) -> None:
+        """pr-9 L1: HubSpot made the task and lost the answer. The retry finds it by its key
+        instead of putting a second one on the founder's list."""
+        hubspot.lose_create_responses = 1
+        with pytest.raises(HubSpotResponseError):
+            await service.enrol(CONTACT)
+        made = hubspot.last_task_id()
+
+        with capture_logs() as captured:
+            enrolled = await service.enrol(CONTACT)
+
+        assert enrolled.hubspot_task_id == made
+        assert hubspot.task_creates_attempted() == 1
+        assert any(entry["event"] == "cadence.service.task_reused" for entry in captured)
+
+    async def test_a_concurrent_enrolment_is_already_enrolled_not_an_integrity_error(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pr-9 L1: two enrolments race past the check; the loser hears the domain error."""
+        await service.enrol(CONTACT)
+        first_task = hubspot.last_task_id()
+        repository = CadenceRepository(db_session)
+        monkeypatch.setattr(service, "_repository", repository)
+        real_get = repository.get_by_contact
+        calls = {"n": 0}
+
+        async def missed_once(contact_id: str) -> CadenceState | None:
+            calls["n"] += 1
+            return None if calls["n"] == 1 else await real_get(contact_id)
+
+        monkeypatch.setattr(repository, "get_by_contact", missed_once)
+
+        with pytest.raises(AlreadyEnrolledError):
+            await service.enrol(CONTACT)
+
+        assert await _state(db_session) == ("live", 1, "call", first_task)
+        assert hubspot.task_creates_attempted() == 1, "the loser found the task by key"
+
+    async def test_an_adopted_refusal_is_parked_and_never_enrolled(
+        self,
+        service: CadenceService,
+        hubspot: FakeHubSpot,
+        clock: FakeClock,
+    ) -> None:
+        parked = await service.adopt_parked(
+            CONTACT,
+            company_id=COMPANY,
+            position=CadencePosition.first(),
+            anchor_at=clock(),
+            anchor_ref=None,
+        )
+
+        assert (parked.status, parked.hubspot_task_id, parked.due_at) == (
+            CadenceStatus.parked,
+            None,
+            None,
+        )
+        assert hubspot.portal.requests == [], "parking a refusal never reaches HubSpot"
+        with pytest.raises(AlreadyEnrolledError):
+            await service.enrol(CONTACT)
+        with pytest.raises(AlreadyEnrolledError):
+            await service.adopt_parked(
+                CONTACT,
+                company_id=None,
+                position=CadencePosition.first(),
+                anchor_at=clock(),
+                anchor_ref=None,
+            )
+        assert (await service.sync()).checked == 0
+
 
 class TestIdempotency:
     async def test_a_sync_with_nothing_new_creates_nothing(

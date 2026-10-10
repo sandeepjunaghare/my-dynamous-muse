@@ -121,8 +121,13 @@ class CadenceRepository:
         due_at: datetime,
         anchor_at: datetime,
         enrolled_at: datetime,
+        anchor_ref: str | None = None,
     ) -> CadenceState:
-        """Insert a live cadence whose first task already exists in HubSpot."""
+        """Insert a live cadence whose first task already exists in HubSpot.
+
+        ``anchor_ref`` must come with ``anchor_at`` whenever the anchor is an activity — an
+        adoption that ended on a logged note — or the next sync re-credits that activity.
+        """
         state = CadenceState(
             hubspot_contact_id=contact_id,
             hubspot_company_id=company_id,
@@ -133,7 +138,7 @@ class CadenceRepository:
             hubspot_task_id=task_id,
             due_at=due_at,
             anchor_at=anchor_at,
-            anchor_ref=None,
+            anchor_ref=anchor_ref,
             enrolled_at=enrolled_at,
         )
         self._session.add(state)
@@ -141,6 +146,46 @@ class CadenceRepository:
         logger.info(
             "cadence.repository.state_created",
             contact_id=contact_id,
+            cycle=position.cycle,
+            touch=position.touch.value,
+        )
+        return state
+
+    async def create_parked(
+        self,
+        *,
+        contact_id: str,
+        company_id: str | None,
+        owner_id: str | None,
+        position: CadencePosition,
+        anchor_at: datetime,
+        anchor_ref: str | None,
+        enrolled_at: datetime,
+        parked_at: datetime,
+    ) -> CadenceState:
+        """Insert a cadence that is finished from the start — an adopted refusal.
+
+        No task, no due date and no pending key: the row exists only so that nothing can ever
+        enrol the contact again (``uq_cadence_state_contact``).
+        """
+        state = CadenceState(
+            hubspot_contact_id=contact_id,
+            hubspot_company_id=company_id,
+            hubspot_owner_id=owner_id,
+            status=CadenceStatus.parked.value,
+            cycle=position.cycle,
+            touch=position.touch.value,
+            anchor_at=anchor_at,
+            anchor_ref=anchor_ref,
+            enrolled_at=enrolled_at,
+            parked_at=parked_at,
+        )
+        self._session.add(state)
+        await self._session.flush()
+        logger.info(
+            "cadence.repository.state_created",
+            contact_id=contact_id,
+            status=CadenceStatus.parked.value,
             cycle=position.cycle,
             touch=position.touch.value,
         )
