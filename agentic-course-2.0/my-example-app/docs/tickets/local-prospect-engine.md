@@ -133,7 +133,7 @@ declarative manifest, not code* and *Missing pieces* · PRD §6 portability tabl
 
 **Scope / acceptance criteria** — *a brief produces cited candidates from the manifest's declared source.*
 - **Deterministic pipeline runner** in `app/sourcing/service.py` — ordinary async Python, stages executed in a declared order, each stage's output persisted with provenance. **No agent loop** (D1).
-- **`app/tools/` registry established here** — one module per stage, registration a one-line append. This is the seam that keeps T6/T7/T8 mergeable in parallel: they add files rather than editing a shared one.
+- ~~**`app/tools/` registry established here**~~ — *landed ahead of T5 as the seam PR (2026-10-10)*. T5 adds `app/tools/search_registry.py` and builds the runner over `registered_stages()`.
 - Stage 1 of 5: `search_registry(manifest_source, query)` — generic, manifest-parameterized, never source-specific.
 - **FMCSA adapter, census-file-first.** QCMobile is a *lookup* API keyed on USDOT/MC, not a search-by-geography API — so: pull the bulk Company Census File, filter to DFW counties + active broker authority, then QCMobile per record for MC number, authority status, fleet size, BOC-3 filings. (E10: this is the exact judgment whose absence produced a 74-row file of BOC-3 process agents instead of brokers.)
 - Brief → `sourcing_run` → candidates persisted with provenance on every field.
@@ -146,8 +146,8 @@ declarative manifest, not code* and *Missing pieces* · PRD §6 portability tabl
 **Per-ticket context:** architecture → *Recommended approach* (incl. why a pipeline, not a loop), *Five generic
 stages, not one per source*, *Boundaries & contracts* → FMCSA · `.claude/references/adding-a-vertical.md` ·
 E10 · **SPIKE-2 result** (below).
-**Files:** `app/tools/{__init__,search_registry}.py`, `app/sourcing/{service,pipeline,sources/fmcsa}.py`, `tests/`
-**Size:** ~1100–1500 lines · **Depends on:** T2, T4 · **Gated by:** SPIKE-2
+**Files:** `app/tools/search_registry.py`, `app/sourcing/{service,pipeline,sources/fmcsa}.py`, `tests/`
+**Size:** ~1100–1500 lines · **Depends on:** T2, T4 · **Gated by:** ~~SPIKE-2~~ cleared 2026-10-10 (principal half; headcount does not gate)
 
 ---
 
@@ -301,7 +301,7 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 ```mermaid
 graph TD
   S1[SPIKE-1 · answered: discipline]:::spike
-  S2[SPIKE-2 · 1 day · FMCSA yield, offline]:::spike
+  S2[SPIKE-2 · principal half answered: 67%]:::spike
 
   T1[T1 scaffold + core + provenance + cost]
   T2[T2 vertical manifest + CLI]
@@ -356,8 +356,9 @@ graph TD
 | **1** | **T1** | no | Blocks everything |
 | **2** | **T2** ∥ **T3** | 2 worktrees | Disjoint (`manifests/` vs `promotion/`) |
 | **3** | **T4** ∥ **T11** ∥ **T12** | 3 worktrees | `sourcing/` · `cadence/` · `manifests/`. T11 needs no sourcing at all, so the cadence machine exists before the first list does |
-| **4** | **T7** ∥ **T8** ∥ **T13** | 3 worktrees | Spike 1 closed 2026-10-09 (discipline): T13 is unblocked and stays in parallel, and the 22 enter the machine here |
-| **5** | **T5** ∥ **T9** | 2 worktrees | `sourcing/`+`tools/` vs `promotion/` |
+| **4** | ~~**T7** ∥ **T8** ∥~~ **T13** | — | Spike 1 closed 2026-10-09 (discipline): T13 is unblocked and stays in parallel, and the 22 enter the machine here. **T7 and T8 moved to Wave 5** (2026-10-10) |
+| **5** | **T5** ∥ **T7** ∥ **T8** | 3 worktrees | *Revised 2026-10-10.* `sourcing/`+`tools/search_registry` · `qualification/`+`tools/classify_rollup` · `routing/`+`tools/cluster_routes`. Cut from the `app/tools/` stage-contract seam PR. Migrations pre-numbered: T5 `0006`, T8 `0007`, T7 `0008`, re-chained at merge; merge order T5 → T8 → T7 |
+| **5b** | **T9** | no | Depends on T7 and T8, so it cannot run beside them; plan it once both are merged |
 | **6** | **T6** | no | After T5. No longer waits for T7: verification now runs before the judgment call (D8, revised 2026-10-09) |
 | **7** | **T10** | no | Integration; plan it last, when the seams are real |
 
@@ -368,8 +369,11 @@ because Places is cheaper than a judgment call and is the evidence that call rea
 T3, so the cadence machine can be working the existing 22 while the sourcing line is still being built.
 
 **The `app/tools/` parallelization seam.** Four tickets add one of the five stages each (T5→1, T6→2 and 3,
-T7→4, T8→5). T5 establishes the registry as **one module per stage** with registration as a one-line append,
-so parallel waves add files rather than editing a shared one — a trivial merge instead of a conflict.
+T7→4, T8→5). *Revised 2026-10-10:* the registry landed **before** T5, as its own seam PR
+(`app/tools/registry.py`), so the three Wave 5 branches start from the same contract. A stage registers by
+**being a file**: `app/tools/<stage>.py`, named for its `PipelineStage` value and exporting `STAGE`. There is no
+shared list to append to, because three branches appending at the same line conflict, which is what the seam
+exists to prevent.
 
 **Plan just-in-time.** Independent tickets in a wave can be planned and run in parallel. A dependent ticket
 waits until its dependency is *implemented*, not merely sliced — planning T9 before T7 exists is planning
@@ -384,7 +388,7 @@ against a guess.
 | Gate | Question | Timebox | Blocks |
 |---|---|---|---|
 | SPIKE-1 | Is the constraint sourcing, or discipline? | 2 weeks | **ANSWERED 2026-10-09: discipline.** 1 of 22 tasks done, 0 decision-maker conversations, nothing logged after day 4. No further reorder. T13 is unblocked and runs in parallel. **Checkpoint:** read M5 on the adopted prospects before T10's first real run |
-| SPIKE-2 | Does FMCSA yield a named principal **and** a headcount band for DFW non-asset brokerages? | 1 day | **T5.** Run offline against the bulk census file. <50% principal yield → the freight manifest needs a second source from day one and M6's 70% needs re-basing. **The headcount half is expected to fail** — FMCSA's power-unit/driver fields describe carriers, not brokers. **Principal half measured 2026-10-09:** census `company_officer_1` is present for **67%** of freight v3's 4,449 DFW pool, which clears the 50% bar. Whether those officers are the decision-maker M6 means is still unchecked, and the headcount half is not yet run |
+| SPIKE-2 | Does FMCSA yield a named principal **and** a headcount band for DFW non-asset brokerages? | 1 day | **T5.** Run offline against the bulk census file. <50% principal yield → the freight manifest needs a second source from day one and M6's 70% needs re-basing. **The headcount half is expected to fail** — FMCSA's power-unit/driver fields describe carriers, not brokers. **Principal half measured 2026-10-09:** census `company_officer_1` is present for **67%** of freight v3's 4,449 DFW pool, which clears the 50% bar. Whether those officers are the decision-maker M6 means is still unchecked, and the headcount half is not yet run. **No longer gates T5 (decided 2026-10-10):** the principal half is enough to build on; headcount affects only ICP-band fill (M8), where *absent* is the honest answer |
 | SPIKE-3 | Does our HubSpot tier have sequences, or only tasks? | — | **ANSWERED.** Starter — no sequences, workflows capped. Forced D4 |
 | SPIKE-4 | Can we send without risking `compumatrice.com`? | — | **Out of MVP scope.** No ticket here sends. T11 drafts the email touch only |
 

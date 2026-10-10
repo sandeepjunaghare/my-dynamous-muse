@@ -29,6 +29,7 @@ app/manifests/                              # vertical_manifest DRAFT→ACTIVE, 
 app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties, task/activity reads
 app/sourcing/                               # sourcing_run + candidate, field-level provenance, one owning stage per field (stages.py)
 app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, adoption (T13), routes + CLI
+app/tools/registry.py                       # the Stage contract; a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
 alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence
 tests/                                      # mirrors app/, plus the structure guards that keep decisions decided
@@ -48,7 +49,7 @@ app/
   qualification/   # disqualifier rules + Intensity×Automatable score; owns `disqualification`
   routing/         # DFW geographic route clustering
   promotion/       # create Company/Contact, own the `promotion` ledger (T9) — the gateway above is built
-  tools/           # pipeline stages, all manifest-parameterized
+  tools/           # the stage modules themselves (T5–T8), one file per PipelineStage — the registry above is built
 ```
 `cadence/` is a domain, not promotion's back half: our HubSpot tier has no sequences (see *Ground rules*), and
 adoption gives it a consumer with nothing to do with sourcing. It depends only on `core/` and the HubSpot
