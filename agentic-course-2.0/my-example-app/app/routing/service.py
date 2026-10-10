@@ -15,8 +15,9 @@ T7 disqualified is T9/T10's to add once both exist; this slice does not read ``q
 
 **One failed geocode leaves one candidate out; every geocode failing is an error.** A single
 timeout should not cost the week's routes, and re-running the stage retries it, because the stage
-replaces its rows. But if the service is down for every address, an empty result would look like a
-quiet week, so the error is raised for the runner to see.
+replaces its rows. But if every address fails, unreachable or unreadable alike, an empty result
+would look like a quiet week and erase the run's earlier routes. So the error is raised for the
+runner to see, before anything is written.
 
 Routing writes only its own table. It never writes ``candidate``: ``cluster_routes`` owns no
 candidate field (``app/sourcing/stages.py``).
@@ -33,6 +34,7 @@ from app.routing.clustering import cluster_points
 from app.routing.exceptions import (
     GeocoderResponseShapeError,
     GeocoderUnavailableError,
+    RoutingError,
 )
 from app.routing.geocoder import CensusGeocoder
 from app.routing.repository import RoutingRepository
@@ -44,7 +46,7 @@ from app.routing.schemas import (
     RoutingResult,
 )
 from app.shared.provenance import ProvenancedValue
-from app.sourcing.schemas import CandidateResponse
+from app.sourcing.schemas import CandidateResponse, PostalAddress
 from app.sourcing.service import SourcingService
 
 logger = get_logger(__name__)
@@ -58,7 +60,13 @@ class _Misses:
     ambiguous: int = 0
     unavailable: int = 0
     unreadable: int = 0
-    last_unavailable: GeocoderUnavailableError | None = None
+    last_error: RoutingError | None = None
+    """The last geocoder failure, re-raised when every eligible geocode failed."""
+
+    @property
+    def failed(self) -> int:
+        """Geocodes that failed outright, for either reason."""
+        return self.unavailable + self.unreadable
 
 
 class RoutingService:
@@ -79,11 +87,20 @@ class RoutingService:
     async def cluster_run(self, run_id: UUID) -> RoutingResult:
         """Geocode the run's verified addresses, cluster them, and replace the run's assignments.
 
-        Raises ``SourcingRunNotFoundError`` for an unknown run, and ``GeocoderUnavailableError``
-        when every eligible geocode failed because the service was unreachable.
+        Raises ``SourcingRunNotFoundError`` for an unknown run. When every eligible geocode failed,
+        for any mix of reasons, re-raises the last ``GeocoderUnavailableError`` or
+        ``GeocoderResponseShapeError`` *before* touching the run's assignments, so a failed re-run
+        leaves the earlier routes in place (PR #19 review, M1).
         """
         candidates = await SourcingService(self._session).list_candidates(run_id)
-        eligible = [c for c in candidates if c.fields.has_verified_address()]
+        # Pair each eligible candidate with its address here, so nothing downstream has to re-check
+        # an address that ``has_verified_address`` already guaranteed (PR #19 review, L1).
+        eligible = [
+            (candidate, address.value)
+            for candidate in candidates
+            if candidate.fields.has_verified_address()
+            and (address := candidate.fields.address) is not None
+        ]
 
         if eligible:
             if self._geocoder is None:
@@ -94,8 +111,8 @@ class RoutingService:
         else:
             located, misses = [], _Misses()
 
-        if misses.last_unavailable is not None and misses.unavailable == len(eligible):
-            raise misses.last_unavailable
+        if misses.last_error is not None and misses.failed == len(eligible):
+            raise misses.last_error
 
         points = [point for point, _ in located]
         clusters = cluster_points(points, max_doors=self._max_doors)
@@ -111,7 +128,7 @@ class RoutingService:
             "routing_unverified_address": len(candidates) - len(eligible),
             "routing_geocode_unmatched": misses.unmatched,
             "routing_geocode_ambiguous": misses.ambiguous,
-            "routing_geocode_failed": misses.unavailable + misses.unreadable,
+            "routing_geocode_failed": misses.failed,
             "routing_clustered": len(points),
             "routing_clusters": len(clusters),
         }
@@ -126,7 +143,7 @@ class RoutingService:
 
     async def _geocode(
         self,
-        eligible: list[CandidateResponse],
+        eligible: list[tuple[CandidateResponse, PostalAddress]],
         geocoder: CensusGeocoder,
     ) -> tuple[list[tuple[RoutePoint, ProvenancedValue[GeoPoint]]], _Misses]:
         """Geocode each eligible candidate in registry-id order, one at a time.
@@ -136,23 +153,15 @@ class RoutingService:
         """
         located: list[tuple[RoutePoint, ProvenancedValue[GeoPoint]]] = []
         misses = _Misses()
-        for candidate in eligible:
-            address = candidate.fields.address
-            if address is None:  # unreachable: has_verified_address() requires one
-                continue
+        for candidate, address in eligible:
             try:
-                outcome = await geocoder.geocode(address.value)
-            except GeocoderUnavailableError as exc:
-                misses.unavailable += 1
-                misses.last_unavailable = exc
-                logger.warning(
-                    "routing.service.geocode_failed",
-                    registry_id=candidate.registry_id,
-                    error=exc.code,
-                )
-                continue
-            except GeocoderResponseShapeError as exc:
-                misses.unreadable += 1
+                outcome = await geocoder.geocode(address)
+            except (GeocoderUnavailableError, GeocoderResponseShapeError) as exc:
+                if isinstance(exc, GeocoderUnavailableError):
+                    misses.unavailable += 1
+                else:
+                    misses.unreadable += 1
+                misses.last_error = exc
                 logger.warning(
                     "routing.service.geocode_failed",
                     registry_id=candidate.registry_id,
@@ -165,7 +174,8 @@ class RoutingService:
             elif outcome.status is GeocodeMatchStatus.ambiguous:
                 misses.ambiguous += 1
             if outcome.point is None:
-                logger.info(
+                # Debug, not info: the run's counts already carry these (PR #19 review, L6).
+                logger.debug(
                     "routing.service.geocode_missed",
                     registry_id=candidate.registry_id,
                     status=outcome.status.value,
@@ -178,7 +188,7 @@ class RoutingService:
                         candidate_id=candidate.id,
                         registry_id=candidate.registry_id,
                         point=outcome.point.value,
-                        postal_code=address.value.postal_code,
+                        postal_code=address.postal_code,
                     ),
                     outcome.point,
                 )

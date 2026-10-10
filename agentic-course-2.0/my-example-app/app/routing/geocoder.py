@@ -101,37 +101,43 @@ class CensusGeocoder:
                 "format": "json",
             }
         )
+        # Everything read from the body sits inside this ``try``, the point included: a coordinate
+        # outside GeoPoint's bounds is as much "not the documented shape" as a missing key, and must
+        # cost one candidate rather than escape and stop the stage (PR #19 review, M2).
         try:
-            parsed = CensusResponse.model_validate(response.json())
+            matches = CensusResponse.model_validate(response.json()).result.address_matches
+            if not matches:
+                return GeocodeOutcome(status=GeocodeMatchStatus.unmatched)
+            if len(matches) > 1:
+                return GeocodeOutcome(status=GeocodeMatchStatus.ambiguous)
+
+            coordinates = matches[0].coordinates
+            point = ProvenancedValue(
+                # x is longitude and y is latitude.
+                value=GeoPoint(latitude=coordinates.y, longitude=coordinates.x),
+                source_url=str(response.request.url),
+                retrieved_at=datetime.now(UTC),
+                retrieval_method=RetrievalMethod.web_lookup,
+            )
         except (ValidationError, ValueError) as exc:
             logger.warning("routing.geocoder.response_unparseable", error=type(exc).__name__)
             raise GeocoderResponseShapeError(
                 "the Census Geocoder returned a body that is not its documented shape"
             ) from exc
-
-        matches = parsed.result.address_matches
-        if not matches:
-            return GeocodeOutcome(status=GeocodeMatchStatus.unmatched)
-        if len(matches) > 1:
-            return GeocodeOutcome(status=GeocodeMatchStatus.ambiguous)
-
-        coordinates = matches[0].coordinates
-        point = ProvenancedValue(
-            # x is longitude and y is latitude.
-            value=GeoPoint(latitude=coordinates.y, longitude=coordinates.x),
-            source_url=str(response.request.url),
-            retrieved_at=datetime.now(UTC),
-            retrieval_method=RetrievalMethod.web_lookup,
-        )
         return GeocodeOutcome(status=GeocodeMatchStatus.matched, point=point)
 
     async def _get(self, params: dict[str, str]) -> httpx.Response:
-        """GET with retries on transport errors, 429 and 5xx. Any other 4xx fails at once."""
+        """GET with retries on request errors, 429 and 5xx. Any other 4xx fails at once.
+
+        ``RequestError``, not just ``TransportError``: a body that fails to decode (a truncated gzip
+        stream, say) is a ``DecodingError``, which is a request error but not a transport one, and
+        it would otherwise escape unretried (PR #19 review, M2).
+        """
         last_status: int | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 response = await self._client.get(self._base_url, params=params)
-            except httpx.TransportError as exc:
+            except httpx.RequestError as exc:
                 last_status = None
                 logger.warning(
                     "routing.geocoder.request_failed",

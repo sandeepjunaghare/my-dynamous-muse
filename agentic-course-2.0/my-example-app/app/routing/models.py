@@ -46,7 +46,11 @@ class RouteAssignment(Base):
         ForeignKey(Candidate.id),
         nullable=False,
     )
-    """Unique: a candidate belongs to one run, and is on at most one of its routes."""
+    """Unique: a candidate is on at most one route.
+
+    That the candidate belongs to ``run_id`` is **service-enforced**: ``RoutingService`` only routes
+    the run's own candidates. A composite foreign key would need ``unique(run_id, id)`` on
+    ``candidate``, which is T4's table (PR #19 review, L2, deferred)."""
 
     cluster_index: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     """The route's position in label order: 0 is route A, west of route B."""

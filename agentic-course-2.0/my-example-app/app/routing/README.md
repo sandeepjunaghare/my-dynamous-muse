@@ -29,9 +29,10 @@ lat/lng may be cached for only 30 days and is barred as input to point-in-polygo
   and `y` is latitude.
 - **No match** is *unmatched*, and **two or more** is *ambiguous*. Both are left out and counted. We
   never pick one of several matches.
-- **The service failing** for one address (after 3 tries) leaves that candidate out as
-  `routing_geocode_failed`. If it fails for **every** address, the stage raises, so a geocoder
-  outage cannot pass as a quiet week.
+- **A geocode failing** for one address (unreachable after 3 tries, or an unreadable body) leaves
+  that candidate out as `routing_geocode_failed`. If **every** address fails, for any mix of those
+  reasons, the stage raises **before writing anything**. A geocoder outage cannot pass as a quiet
+  week, and a failed re-run keeps the run's earlier routes.
 
 ## The algorithm (`clustering.py`)
 

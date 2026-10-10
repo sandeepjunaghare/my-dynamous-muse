@@ -8,10 +8,11 @@ proven property rather than an intention.
 
 import json
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app.routing.geocoder import BASE_URL, CensusGeocoder
 
@@ -77,6 +78,7 @@ class MockCensus:
 
     def __init__(self) -> None:
         self._answers: dict[str, deque[Answer]] = {}
+        self._geocoders: list[CensusGeocoder] = []
         self.requests: list[httpx.Request] = []
 
     def on(self, street: str, *answers: Answer) -> None:
@@ -105,4 +107,19 @@ class MockCensus:
         async def no_sleep(seconds: float) -> None:
             return None
 
-        return CensusGeocoder(transport=httpx.MockTransport(self.handle), sleep=no_sleep)
+        geocoder = CensusGeocoder(transport=httpx.MockTransport(self.handle), sleep=no_sleep)
+        self._geocoders.append(geocoder)
+        return geocoder
+
+    async def aclose(self) -> None:
+        """Close every geocoder handed out. A service never closes one it was given."""
+        for geocoder in self._geocoders:
+            await geocoder.aclose()
+
+
+@pytest.fixture
+async def census() -> AsyncGenerator[MockCensus, None]:
+    """A :class:`MockCensus` whose geocoders are closed when the test ends."""
+    mock = MockCensus()
+    yield mock
+    await mock.aclose()

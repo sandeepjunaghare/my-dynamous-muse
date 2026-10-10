@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.routing.exceptions import GeocoderUnavailableError
+from app.routing.exceptions import GeocoderResponseShapeError, GeocoderUnavailableError
 from app.routing.schemas import RouteCluster
 from app.routing.service import RoutingService
 from app.sourcing.exceptions import SourcingRunNotFoundError
@@ -53,8 +53,9 @@ async def _cluster(session: AsyncSession, run_id: UUID, census: MockCensus) -> R
 
 
 class TestClusterRun:
-    async def test_the_e4_week_becomes_two_routes_of_ten(self, db_session: AsyncSession) -> None:
-        census = MockCensus()
+    async def test_the_e4_week_becomes_two_routes_of_ten(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
         run_id = await a_running_run(db_session)
         await record(db_session, run_id, _week(census))
 
@@ -75,9 +76,8 @@ class TestClusterRun:
         }
 
     async def test_assignments_are_persisted_with_their_cited_point(
-        self, db_session: AsyncSession
+        self, db_session: AsyncSession, census: MockCensus
     ) -> None:
-        census = MockCensus()
         run_id = await a_running_run(db_session)
         await record(db_session, run_id, _week(census))
 
@@ -89,8 +89,9 @@ class TestClusterRun:
         assert all(r.point.source_url.startswith("https://geocoding.geo.census.gov/") for r in rows)
         assert [r.cluster_index for r in rows] == sorted(r.cluster_index for r in rows)
 
-    async def test_an_unverified_address_is_never_geocoded(self, db_session: AsyncSession) -> None:
-        census = MockCensus()
+    async def test_an_unverified_address_is_never_geocoded(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
         run_id = await a_running_run(db_session)
         week = _week(census)
         no_check = CandidateFields(
@@ -111,8 +112,9 @@ class TestClusterRun:
         assert "1 Unchecked Way" not in census.streets_requested()
         assert len(census.requests) == 20
 
-    async def test_misses_are_left_out_and_counted(self, db_session: AsyncSession) -> None:
-        census = MockCensus()
+    async def test_misses_are_left_out_and_counted(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
         run_id = await a_running_run(db_session)
         census.on("1 Nowhere Rd", json_answer(200, load_fixture("census_no_match")))
         census.on("100 Main St", json_answer(200, load_fixture("census_ambiguous")))
@@ -141,9 +143,8 @@ class TestClusterRun:
         assert not routed & {"miss", "twice", "flaky"}
 
     async def test_the_geocoder_down_for_everyone_is_an_error(
-        self, db_session: AsyncSession
+        self, db_session: AsyncSession, census: MockCensus
     ) -> None:
-        census = MockCensus()
         run_id = await a_running_run(db_session)
         streets = [street_for(f"down{i}") for i in range(3)]
         for street in streets:
@@ -157,8 +158,9 @@ class TestClusterRun:
         with pytest.raises(GeocoderUnavailableError):
             await RoutingService(db_session, geocoder=census.geocoder()).cluster_run(run_id)
 
-    async def test_a_rerun_replaces_the_runs_routes(self, db_session: AsyncSession) -> None:
-        census = MockCensus()
+    async def test_a_rerun_replaces_the_runs_routes(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
         run_id = await a_running_run(db_session)
         await record(db_session, run_id, _week(census))
 
@@ -171,9 +173,8 @@ class TestClusterRun:
         assert second == first
 
     async def test_the_same_candidates_in_two_runs_get_the_same_routes(
-        self, db_session: AsyncSession
+        self, db_session: AsyncSession, census: MockCensus
     ) -> None:
-        census = MockCensus()
         week = _week(census)
         run_a = await a_running_run(db_session)
         run_b = await a_running_run(db_session)
@@ -187,9 +188,8 @@ class TestClusterRun:
         assert _ids_by_label(result_a.clusters) == _ids_by_label(result_b.clusters)
 
     async def test_no_eligible_candidates_is_no_routes_and_no_calls(
-        self, db_session: AsyncSession
+        self, db_session: AsyncSession, census: MockCensus
     ) -> None:
-        census = MockCensus()
         run_id = await a_running_run(db_session)
         await record(db_session, run_id, [CandidateFields(registry_id=sourced("bare"))])
 
@@ -199,6 +199,82 @@ class TestClusterRun:
         assert result.counts["routing_clusters"] == 0
         assert census.requests == []
 
-    async def test_an_unknown_run_is_refused(self, db_session: AsyncSession) -> None:
+    async def test_an_unknown_run_is_refused(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
         with pytest.raises(SourcingRunNotFoundError):
-            await RoutingService(db_session, geocoder=MockCensus().geocoder()).cluster_run(uuid4())
+            await RoutingService(db_session, geocoder=census.geocoder()).cluster_run(uuid4())
+
+
+class TestEveryGeocodeFailing:
+    """PR #19 review, M1 and M3: an all-failed pass raises, whatever the mix, and erases nothing."""
+
+    async def _run_of(
+        self, db_session: AsyncSession, census: MockCensus, answers: list[int | str]
+    ) -> UUID:
+        """A run whose geocodes all fail: an int answers that status, ``"bad"`` a bad body."""
+        run_id = await a_running_run(db_session)
+        candidates: list[CandidateFields] = []
+        for i, answer in enumerate(answers):
+            street = street_for(f"fail{i}")
+            if answer == "bad":
+                census.on(street, json_answer(200, load_fixture("census_bad_shape")))
+            else:
+                census.on(street, json_answer(int(answer), {}))
+            candidates.append(a_verified_candidate(f"fail{i}", street))
+        await record(db_session, run_id, candidates)
+        return run_id
+
+    async def test_every_body_unreadable_raises(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        run_id = await self._run_of(db_session, census, ["bad", "bad"])
+
+        with pytest.raises(GeocoderResponseShapeError):
+            await RoutingService(db_session, geocoder=census.geocoder()).cluster_run(run_id)
+
+    async def test_a_mix_of_failures_raises(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        run_id = await self._run_of(db_session, census, [503, "bad", 503])
+
+        with pytest.raises((GeocoderUnavailableError, GeocoderResponseShapeError)):
+            await RoutingService(db_session, geocoder=census.geocoder()).cluster_run(run_id)
+
+    async def test_an_unreadable_body_alone_counts_as_failed(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        run_id = await a_running_run(db_session)
+        census.on("1 Garbled Way", json_answer(200, load_fixture("census_bad_shape")))
+        await record(
+            db_session,
+            run_id,
+            [*_week(census), a_verified_candidate("garbled", "1 Garbled Way")],
+        )
+
+        result = await RoutingService(
+            db_session, geocoder=census.geocoder(), max_doors=12
+        ).cluster_run(run_id)
+
+        assert result.counts["routing_geocode_failed"] == 1
+        assert result.counts["routing_clustered"] == 20
+
+    async def test_a_failed_rerun_keeps_the_earlier_routes(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        run_id = await a_running_run(db_session)
+        week = _week(census)
+        await record(db_session, run_id, week)
+        service = RoutingService(db_session, geocoder=census.geocoder(), max_doors=12)
+        await service.cluster_run(run_id)
+        before = [(r.candidate_id, r.cluster_label) for r in await service.list_assignments(run_id)]
+
+        for candidate in week:
+            assert candidate.address is not None
+            census.on(candidate.address.value.street, json_answer(200, {"result": {}}))
+        with pytest.raises(GeocoderResponseShapeError):
+            await service.cluster_run(run_id)
+
+        after = [(r.candidate_id, r.cluster_label) for r in await service.list_assignments(run_id)]
+        assert after == before
+        assert len(after) == 20

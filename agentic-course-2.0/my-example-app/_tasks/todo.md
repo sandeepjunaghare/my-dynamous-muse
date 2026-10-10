@@ -1047,3 +1047,29 @@ a typed helper.
   `routing_geocode_failed > 0`, so a partial geocode shows on the run as `degraded` rather than only in the counts.
 - [ ] **T9/T10:** route only qualified candidates, and decide whether to re-route after disqualification. Until then a
   batch of 150 makes ~13 routes, not 2.
+
+
+## PR #19 review findings: fix M1–M3 and the cheap Lows (2026-10-10)
+
+Review: `.claude/code-reviews/pr-19-review.md` (0 Critical, 0 High, 3 Medium, 6 Low). Triage: M1–M3 and L1, L3–L6 fixed in
+this PR. The L2 composite foreign key is deferred to **#20**, because it needs `unique(run_id, id)` on T4's `candidate`
+during a parallel wave; it is documented as service-enforced in the model docstring.
+
+- [x] **M1.** An all-failed pass with any unreadable body committed an empty success and erased the run's routes. The
+  guard now counts unavailable + unreadable and raises the last error *before* any write.
+- [x] **M2.** `httpx.DecodingError` escaped unretried, and so did an out-of-range coordinate. `_get` now catches
+  `RequestError`, and point construction sits inside the shape-error `try`.
+- [x] **M3.** Tests added: all unreadable, a mix, an unreadable body counted as failed, and a failed re-run keeping the
+  earlier rows.
+- [x] **L1** eligible candidates paired with their address, so there is no unreachable skip. **L3** a `census` fixture
+  closes every geocoder it handed out. **L4** a typed stub instead of the zero-argument lambda. **L5** tests for 429
+  retried, transport error then success, and a corrupt body. **L6** `geocode_missed` moved to debug.
+- [x] Validate, commit, push.
+
+**Review:** 742 passed (8 new tests). ruff, format, mypy and pyright are clean; alembic shows no drift.
+**Worked:** each fix was test-first. The three M1 tests and the two M2 tests failed with exactly the predicted
+behaviour before the fix; the M1 log line showed `routing_clusters=0` committed as a success.
+**Didn't:** a `*args, **kwargs` lambda is "partially unknown" under Pyright strict, so the L4 fix needed a typed
+`def`. A fixture in `tests/routing/conftest.py` is not visible to `tests/tools/`, so the stage test closes its own mock.
+**Improve:** the original all-failed test exercised only the one branch that worked (503s). Test a rule across every
+input class it claims to cover, not just the first one that comes to mind.

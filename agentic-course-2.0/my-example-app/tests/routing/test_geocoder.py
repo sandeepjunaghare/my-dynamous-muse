@@ -11,6 +11,7 @@ from app.sourcing.schemas import PostalAddress
 from tests.routing.conftest import (
     Answer,
     MockCensus,
+    a_match,
     json_answer,
     load_fixture,
     text_answer,
@@ -148,3 +149,48 @@ class TestFailures:
         async with census.geocoder() as geocoder:
             with pytest.raises(AssertionError, match="no answer"):
                 await geocoder.geocode(ADDRESS)
+
+
+class TestReviewFindings:
+    """PR #19 review: M2 (escaping exceptions) and L5 (untested retry paths)."""
+
+    async def test_a_corrupt_body_is_retried_then_unavailable(self) -> None:
+        def corrupt(request: httpx.Request) -> httpx.Response:
+            raise httpx.DecodingError("truncated gzip body", request=request)
+
+        census = MockCensus()
+        census.on(STREET, corrupt)
+
+        async with census.geocoder() as geocoder:
+            with pytest.raises(GeocoderUnavailableError):
+                await geocoder.geocode(ADDRESS)
+
+        assert len(census.requests) == 3
+
+    async def test_a_coordinate_out_of_range_is_a_shape_error(self) -> None:
+        census = MockCensus()
+        census.on(STREET, json_answer(200, a_match(latitude=123.0, longitude=-96.7)))
+
+        async with census.geocoder() as geocoder:
+            with pytest.raises(GeocoderResponseShapeError):
+                await geocoder.geocode(ADDRESS)
+
+    async def test_a_rate_limit_is_retried(self) -> None:
+        census = MockCensus()
+        census.on(STREET, json_answer(429, {}), json_answer(200, load_fixture("census_match")))
+
+        async with census.geocoder() as geocoder:
+            outcome = await geocoder.geocode(ADDRESS)
+
+        assert outcome.status is GeocodeMatchStatus.matched
+        assert len(census.requests) == 2
+
+    async def test_a_dropped_connection_then_success_matches(self) -> None:
+        census = MockCensus()
+        census.on(STREET, transport_error(), json_answer(200, load_fixture("census_match")))
+
+        async with census.geocoder() as geocoder:
+            outcome = await geocoder.geocode(ADDRESS)
+
+        assert outcome.status is GeocodeMatchStatus.matched
+        assert len(census.requests) == 2
