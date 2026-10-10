@@ -1,0 +1,26 @@
+{
+  "_note": "Labelled set for the M6 rollup eval (tests/qualification/test_live_eval.py). The four rollups are E7's. 'locals' must be supplied by a founder: at least 20 DFW fire-protection companies known to be locally owned. Until then the false-positive half of the eval skips.",
+  "rollups": [
+    {
+      "legal_name": "Impact Fire Services",
+      "city": "Dallas",
+      "state": "TX"
+    },
+    {
+      "legal_name": "Summit Fire & Security",
+      "city": "Dallas",
+      "state": "TX"
+    },
+    {
+      "legal_name": "Century Fire Protection",
+      "city": "Dallas",
+      "state": "TX"
+    },
+    {
+      "legal_name": "Control Systems Inc",
+      "city": "Dallas",
+      "state": "TX"
+    }
+  ],
+  "locals": []
+}

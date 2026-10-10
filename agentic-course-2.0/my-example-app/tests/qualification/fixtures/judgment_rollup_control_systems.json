@@ -1,0 +1,113 @@
+{
+  "_note": "SYNTHETIC replay fixture in the bundled CLI's stream-json shape. Proves wiring and the citation gate offline; it says nothing true or false about the named company. Accuracy is measured by tests/qualification/test_live_eval.py.",
+  "stream": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "session_id": "judgment-replay",
+      "model": "claude-opus-5-5",
+      "tools": [
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_servers": [],
+      "permissionMode": "dontAsk",
+      "cwd": "/app"
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-5-5",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_s1",
+            "name": "WebSearch",
+            "input": {
+              "query": "Control Systems Inc Dallas TX ownership"
+            }
+          }
+        ]
+      },
+      "parent_tool_use_id": null
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_s1",
+            "content": "Web search results: 1. Control Systems Inc \u2014 About https://www.controlsystems.test/company"
+          }
+        ]
+      },
+      "parent_tool_use_id": null
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-5-5",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_f1",
+            "name": "WebFetch",
+            "input": {
+              "url": "https://www.controlsystems.test/company",
+              "prompt": "Who owns this business?"
+            }
+          }
+        ]
+      },
+      "parent_tool_use_id": null
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_f1",
+            "content": "[synthetic] The page describes a multi-state network of branch offices under one national parent."
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "tool_use_result": {
+        "bytes": 96,
+        "code": 200,
+        "codeText": "OK",
+        "result": "[synthetic]",
+        "durationMs": 640,
+        "url": "https://www.controlsystems.test/company"
+      }
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "duration_ms": 21000,
+      "duration_api_ms": 19000,
+      "is_error": false,
+      "num_turns": 4,
+      "session_id": "judgment-replay",
+      "total_cost_usd": 0.0812,
+      "structured_output": {
+        "rules": [
+          {
+            "rule_id": "national_rollup_no_local_owner",
+            "fired": true,
+            "reason": "The DFW office is one branch of a national network with no local owner.",
+            "citation": {
+              "url": "https://www.controlsystems.test/company",
+              "quote": "[synthetic] a multi-state network of branch offices under one national parent"
+            }
+          }
+        ],
+        "signals": []
+      }
+    }
+  ]
+}

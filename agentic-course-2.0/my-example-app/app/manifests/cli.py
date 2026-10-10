@@ -6,14 +6,20 @@ surface*). ``show`` renders every citation so a person can judge what was resear
 is recorded.
 
 ``propose`` runs the authoring agent (T12) and writes what it found as a **DRAFT** — never ACTIVE.
-It prints the draft with every citation, what was left out and why, the terms-of-use question per
-source, and a standing note that manifest *quality* review is still an open question.
+It prints the draft with every citation, what was left out and why, and the terms-of-use question
+per source.
+
+``dry-run`` (T7) is the manifest quality gate: it runs the free rules over a local extract of the
+real source data, prints the pool after each rule with sample rows and flags, and records the
+result. ``activate`` refuses a manifest that has never been dry-run.
 """
 
 import argparse
 import asyncio
 import re
-from collections.abc import Awaitable, Callable
+import sys
+from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,26 +31,29 @@ from app.manifests.proposal import DraftProposal, build_draft
 from app.manifests.schemas import (
     SLUG_MAX_LENGTH,
     SLUG_PATTERN,
+    DryRunReport,
+    DryRunResponse,
+    DryRunSample,
     ManifestBody,
     ManifestResponse,
     ManifestStatus,
     TermsDecision,
 )
 from app.manifests.service import ManifestService, parse_accept_terms
+from app.qualification.dry_run import dry_run
 from app.shared.provenance import ProvenancedValue
 
 ACTOR_UNSPECIFIED = "cli"
 """Recorded as ``decided_by`` when nobody is named. Single internal user; no auth in the MVP."""
 
 QUALITY_REVIEW_NOTE = (
-    "NOTE: manifest quality review beyond terms of use is still an open question (architecture "
-    "doc -> Open questions). Nothing has checked that these disqualifier rules are right or that "
-    "these sources are the authoritative ones; `activate` records terms of use only. Whoever "
-    "activates this draft should check the disqualifiers and the sources against the citations "
-    "above first."
+    "NOTE: nothing has yet checked these disqualifier rules against real data. Run "
+    "`lpe manifest dry-run <id> --source-file <source>=<extract.csv>` and read the funnel and its "
+    "flags before activating; `activate` refuses a manifest that has never been dry-run. A "
+    "mis-chosen *source* is still only caught by reading the citations above."
 )
-"""Printed on every proposal. A plausible-but-wrong rule fails silently (E10), and the gate that
-would catch it has not been decided — so the reviewer is told, every time, that it is theirs."""
+"""Printed on every proposal. A plausible-but-wrong rule fails silently (E10); the dry-run (T7)
+is the gate that catches it, and the reviewer is told, every time, to run it."""
 
 
 def _slug(raw: str) -> str:
@@ -57,8 +66,21 @@ def _slug(raw: str) -> str:
     return raw
 
 
+def _source_file(raw: str) -> tuple[str, Path]:
+    """argparse type for ``--source-file NAME=PATH``: a source slug and an existing local file."""
+    name, separator, path = raw.partition("=")
+    if not separator or not name or not path:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not NAME=PATH (e.g. fmcsa=census.csv)")
+    if re.fullmatch(SLUG_PATTERN, name) is None:
+        raise argparse.ArgumentTypeError(f"{name!r} is not a source slug")
+    file = Path(path).expanduser()
+    if not file.is_file():
+        raise argparse.ArgumentTypeError(f"{path!r} is not a readable file")
+    return name, file
+
+
 def register(parser: argparse.ArgumentParser) -> None:
-    """Add ``list``, ``show``, ``propose`` and ``activate`` to the ``manifest`` command's parser."""
+    """Add ``list``, ``show``, ``propose``, ``dry-run`` and ``activate`` to ``manifest``."""
     subcommands = parser.add_subparsers(dest="manifest_command", required=True)
 
     list_parser = subcommands.add_parser("list", help="list manifests")
@@ -83,6 +105,26 @@ def register(parser: argparse.ArgumentParser) -> None:
         type=_slug,
         default=None,
         help="the vertical's slug; when omitted the agent proposes one",
+    )
+
+    dry_run_parser = subcommands.add_parser(
+        "dry-run",
+        help="run a manifest's free rules over a local extract and record the funnel",
+    )
+    dry_run_parser.add_argument("manifest_id", type=UUID, help="the manifest's id")
+    dry_run_parser.add_argument(
+        "--source-file",
+        type=_source_file,
+        action="append",
+        required=True,
+        metavar="SOURCE=PATH",
+        help="a local extract of a bulk_file source, e.g. fmcsa=census.csv (repeatable)",
+    )
+    dry_run_parser.add_argument(
+        "--samples", type=int, default=3, help="sample rows to show per rule (default 3)"
+    )
+    dry_run_parser.add_argument(
+        "--actor", default=ACTOR_UNSPECIFIED, help="who ran it, recorded on the dry-run"
     )
 
     activate_parser = subcommands.add_parser(
@@ -120,6 +162,13 @@ def dispatch(args: argparse.Namespace) -> int:
         brief: str = args.brief
         proposed_vertical: str | None = args.vertical
         return asyncio.run(_run_propose(brief, proposed_vertical))
+
+    if subcommand == "dry-run":
+        dry_run_id: UUID = args.manifest_id
+        source_files: list[tuple[str, Path]] = args.source_file
+        samples: int = args.samples
+        dry_run_actor: str = args.actor
+        return asyncio.run(_run_dry_run(dry_run_id, source_files, samples, dry_run_actor))
 
     if subcommand == "activate":
         target_id: UUID = args.manifest_id
@@ -214,6 +263,81 @@ def _print_proposal_review(draft: DraftProposal, cost: RunCost, *, known_cost: b
         " (logged as core.cost.call_recorded)"
     )
     print(f"\n{QUALITY_REVIEW_NOTE}")
+
+
+async def _run_dry_run(
+    manifest_id: UUID, source_files: Sequence[tuple[str, Path]], samples: int, actor: str
+) -> int:
+    """Read the manifest, run the rules with **no session open**, then record the result.
+
+    Mirrors ``_run_propose``: the pass over a ~378k-row extract takes a while, and holding a pooled
+    connection across it buys nothing. Two short sessions instead.
+    """
+    names = [name for name, _ in source_files]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        print(f"error: more than one --source-file for: {', '.join(duplicates)}", file=sys.stderr)
+        return 1
+
+    async def read(session: AsyncSession) -> ManifestResponse:
+        return await ManifestService(session).get(manifest_id)
+
+    manifest = await _with_session(read)
+    report = dry_run(manifest, dict(source_files), samples=samples)
+
+    async def record(session: AsyncSession) -> DryRunResponse:
+        return await ManifestService(session).record_dry_run(manifest_id, report, actor)
+
+    recorded = await _with_session(record)
+    _print_dry_run(manifest, report)
+    print(
+        f"\nrecorded dry-run {recorded.id}; `lpe manifest activate {manifest_id}` will now accept "
+        "this manifest. Read every flag above before you do."
+    )
+    return 0
+
+
+def _print_sample(sample: DryRunSample) -> None:
+    fields = ", ".join(f"{name}={value!r}" for name, value in sample.fields)
+    print(f"      {sample.row_id}: {fields}")
+
+
+def _print_dry_run(manifest: ManifestResponse, report: DryRunReport) -> None:
+    """The funnel per rule, the samples, and the flags a person must read."""
+    print(f"dry-run of {manifest.vertical} v{manifest.version} ({manifest.id})")
+    for file in report.files:
+        print(
+            f"  {file.source_name}: {file.file_name}, {file.rows} rows "
+            f"(row id: {file.row_id_column}), sha256 {file.sha256[:12]}…"
+        )
+
+    print(
+        f"\n{'rule':<28} {'source':<12} {'before':>8} {'removed':>8} {'alone':>8} {'n/a':>6}  flags"
+    )
+    for step in report.steps:
+        flags = ", ".join(flag.value for flag in step.flags) or "-"
+        print(
+            f"{step.rule_id:<28} {step.source:<12} {step.pool_before:>8} {step.removed:>8} "
+            f"{step.matched_standalone:>8} {step.not_evaluable:>6}  {flags}"
+        )
+    for file in report.files:
+        print(f"\n{file.source_name}: {file.rows} rows in, {file.pool_end} left after the rules")
+
+    for step in report.steps:
+        if step.removed_samples:
+            print(f"\n  removed by {step.rule_id}:")
+            for sample in step.removed_samples:
+                _print_sample(sample)
+    for file in report.files:
+        if file.passing_samples:
+            print(f"\n  passing ({file.source_name}):")
+            for sample in file.passing_samples:
+                _print_sample(sample)
+
+    flagged = report.flagged()
+    print("\nFLAGGED:" if flagged else "\nFLAGGED: nothing")
+    for entry in flagged:
+        print(f"  - {entry}")
 
 
 async def _run_activate(manifest_id: UUID, accept_terms: str, actor: str) -> int:

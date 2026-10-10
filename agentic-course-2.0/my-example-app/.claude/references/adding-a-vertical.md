@@ -36,14 +36,21 @@ it on the CLI:
 ```
 uv run lpe manifest propose "collision centers, DFW"
 uv run lpe manifest show <id>
+uv run lpe manifest dry-run <id> --source-file <source>=<local-extract.csv>
 uv run lpe manifest activate <id> --accept-terms fmcsa,places
 ```
+
+**Dry-run before activate** (T7; `activate` refuses otherwise). It runs the manifest's free predicates over a
+local extract of each `bulk_file` source and prints the pool after each rule, sample rows, and flags: a rule
+that matches nothing (freight v1), one shadowed by an earlier rule, one that empties the pool, an unknown field,
+a literal never seen in the data. Read every flag. A predicate on another source names it with `source:`
+(e.g. QCMobile's `allowToOperate`); those are reported as not evaluable offline.
 
 `activate` is where the per-source terms-of-use decision is recorded — the gate that already existed is the
 human approval step, so there is no second review surface to build. A source with no recorded terms-of-use
 decision cannot be marked active.
 
-Known gaps to expect here: the manifest schema itself does not exist yet, nor does the rollup-vs-local
-classifier (E7's rule currently lives in a founder's head and a hand-written skip list). Owner resolution is
+The rollup-vs-local classifier is `classify_rollup` (T7): one judgment call per candidate decides every
+`judgment` rule in the manifest, and a verdict counts only with a citation to a page it actually read. Owner resolution is
 the hardest problem in the system and the one M6 measures — 41% of sourced contacts currently have no person
 identified at all (E18).

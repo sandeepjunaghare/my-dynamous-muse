@@ -52,11 +52,16 @@ class TestAbsentDependencies:
         """D1: the weekly run is a deterministic pipeline, not an agent loop.
 
         The SDK arrived with T12's manifest-authoring agent. It is allowed exactly where the
-        architecture put it — that agent, and (when T6/T7 land) the two judgment nodes
-        `resolve_owner` and `classify_rollup`, which add their modules to this set. An import
+        architecture put it — that agent, the `classify_rollup` judgment node (T7), and, when T6
+        lands, `resolve_owner`. `app/shared/agent_reads.py` imports the SDK's *message types* only,
+        to tell a verified fetch from a claimed one for all three; it never starts a run. An import
         anywhere else is the pipeline quietly growing an agent loop.
         """
-        allowed = {"app/manifests/agent.py"}
+        allowed = {
+            "app/manifests/agent.py",
+            "app/qualification/judgment.py",
+            "app/shared/agent_reads.py",
+        }
         importers: set[str] = set()
         for path in _app_sources():
             tree = ast.parse(path.read_text(encoding="utf-8"))

@@ -178,7 +178,12 @@ class TestProvenanceRoundTrip:
         assert loaded.phone is None
         assert is_promotable(loaded.phone) is False
         assert is_promotable(loaded.legal_name) is True
-        assert loaded.unprovenanced_fields() == ("phone", "website", "business_check")
+        assert loaded.unprovenanced_fields() == (
+            "phone",
+            "website",
+            "business_check",
+            "priority",
+        )
 
     async def test_absent_fields_are_absent_keys_not_nulls(self, db_session: AsyncSession) -> None:
         """What lets the upsert merge without erasing — see ``upsert_candidate``."""

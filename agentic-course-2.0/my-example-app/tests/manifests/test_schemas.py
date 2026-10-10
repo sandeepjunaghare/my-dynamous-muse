@@ -27,6 +27,7 @@ from app.manifests.schemas import (
     Vocabulary,
 )
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
+from tests.manifests.builders import a_body, cited
 
 RETRIEVED_AT = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
 
@@ -311,3 +312,45 @@ class TestJsonRoundTrip:
         assert restored.icp_band.retrieved_at == RETRIEVED_AT
         assert restored.icp_band.retrieved_at.tzinfo is UTC
         assert restored.disqualifier_rules[0].value.operator is RuleOperator.equals
+
+
+class TestRuleSource:
+    """Which declared source a predicate reads — ``allowToOperate`` is QCMobile, not the census."""
+
+    def _rule(self, source: str | None) -> DisqualifierRule:
+        return DisqualifierRule(
+            id="not_allowed",
+            kind=RuleKind.predicate,
+            description="no operating authority",
+            field="allowToOperate",
+            operator=RuleOperator.is_true,
+            source=source,
+        )
+
+    def _body(self, rule: DisqualifierRule) -> ManifestBody:
+        return a_body("fmcsa", "qcmobile").model_copy(update={"disqualifier_rules": (cited(rule),)})
+
+    def test_a_rule_may_name_a_declared_source(self) -> None:
+        body = ManifestBody.model_validate(self._body(self._rule("qcmobile")).model_dump())
+        assert body.source_for(body.disqualifier_rules[0].value) == "qcmobile"
+
+    def test_no_source_means_the_first_declared(self) -> None:
+        """Every row written before ``source`` existed meant exactly this."""
+        body = ManifestBody.model_validate(self._body(self._rule(None)).model_dump())
+        assert body.source_for(body.disqualifier_rules[0].value) == "fmcsa"
+
+    def test_an_undeclared_source_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="undeclared source"):
+            ManifestBody.model_validate(self._body(self._rule("socrata")).model_dump())
+
+    def test_a_judgment_rule_must_not_name_a_source(self) -> None:
+        with pytest.raises(ValidationError, match="judgment rule"):
+            DisqualifierRule(
+                id="rollup", kind=RuleKind.judgment, description="rollup", source="fmcsa"
+            )
+
+    def test_a_row_without_the_key_still_loads(self) -> None:
+        dumped = a_body().model_dump(mode="json")
+        for rule in dumped["disqualifier_rules"]:
+            rule["value"].pop("source", None)
+        assert ManifestBody.model_validate(dumped).disqualifier_rules[0].value.source is None

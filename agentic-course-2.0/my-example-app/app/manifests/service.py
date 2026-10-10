@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.manifests.exceptions import (
     ActiveManifestNotFoundError,
+    DryRunMismatchError,
+    DryRunNotRecordedError,
     ManifestNotDraftError,
     ManifestNotFoundError,
     TermsOfUseNotRecordedError,
@@ -21,6 +23,8 @@ from app.manifests.exceptions import (
 )
 from app.manifests.repository import ManifestRepository
 from app.manifests.schemas import (
+    DryRunReport,
+    DryRunResponse,
     ManifestBody,
     ManifestResponse,
     ManifestStatus,
@@ -86,6 +90,26 @@ class ManifestService:
         await self._session.commit()
         return ManifestResponse.model_validate(manifest)
 
+    async def record_dry_run(
+        self, manifest_id: UUID, report: DryRunReport, actor: str
+    ) -> DryRunResponse:
+        """Record a dry-run of one manifest version — what ``activate`` then requires.
+
+        Any status may be dry-run; the record matters on a DRAFT, where it unblocks activation.
+        """
+        if report.manifest_id != manifest_id:
+            raise DryRunMismatchError(
+                f"the report is for manifest {report.manifest_id}, not {manifest_id}",
+                manifest_id=str(manifest_id),
+            )
+        if await self._repository.get_by_id(manifest_id) is None:
+            raise ManifestNotFoundError(
+                f"no manifest with id {manifest_id}", manifest_id=str(manifest_id)
+            )
+        dry_run = await self._repository.record_dry_run(manifest_id, report, actor)
+        await self._session.commit()
+        return DryRunResponse.model_validate(dry_run)
+
     async def activate(
         self,
         manifest_id: UUID,
@@ -95,9 +119,9 @@ class ManifestService:
     ) -> ManifestResponse:
         """Record a terms-of-use decision per declared source and flip the draft ACTIVE.
 
-        The order is the gate. Nothing is written until every declared source has been named in
-        ``accept_terms``, and the cited content is copied through untouched — activation records a
-        human's decision, it does not re-retrieve anything.
+        The order is the gate. Nothing is written until a dry-run has been recorded (T7) and every
+        declared source has been named in ``accept_terms``, and the cited content is copied through
+        untouched — activation records a human's decision, it does not re-retrieve anything.
         """
         manifest = await self._repository.get_by_id(manifest_id)
         if manifest is None:
@@ -124,6 +148,20 @@ class ManifestService:
                 f"manifest {manifest_id} is {manifest.status}, and only a draft can be activated",
                 manifest_id=str(manifest_id),
                 status=manifest.status,
+            )
+
+        if await self._repository.latest_dry_run(manifest_id) is None:
+            logger.warning(
+                "manifests.service.activation_refused",
+                manifest_id=str(manifest_id),
+                vertical=manifest.vertical,
+                reason="dry_run_missing",
+            )
+            raise DryRunNotRecordedError(
+                f"manifest {manifest_id} has never been dry-run; run "
+                f"`lpe manifest dry-run {manifest_id} --source-file <source>=<extract.csv>`, read "
+                "the funnel and its flags, then activate",
+                manifest_id=str(manifest_id),
             )
 
         body = ManifestBody.model_validate(manifest.body)
