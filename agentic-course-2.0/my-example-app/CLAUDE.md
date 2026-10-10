@@ -20,7 +20,7 @@ place, and clustering and promotion are required to be reproducible.
 **Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), and T13 from Wave 4: the service boots,
 validates clean, the provenance primitive exists, and five slices are built — `manifests/` with its authoring
 agent, the gateway half of `promotion/`, the `sourcing/` data model, and the `cadence/` state machine with
-adoption.
+adoption. From Wave 5, T8: `routing/` and its stage, `cluster_routes`.
 ```
 app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
 app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
@@ -29,9 +29,11 @@ app/manifests/                              # vertical_manifest DRAFT→ACTIVE, 
 app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties, task/activity reads
 app/sourcing/                               # sourcing_run + candidate, field-level provenance, one owning stage per field (stages.py)
 app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, adoption (T13), routes + CLI
+app/routing/                                # route_assignment, the Census Geocoder (never Places), balanced-bisection clustering (T8)
 app/tools/registry.py                       # the Stage contract; a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
+app/tools/cluster_routes.py                 # stage 5: verified addresses → drive routes of ≤ ROUTE_MAX_DOORS (T8)
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
-alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence
+alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0007 routing
 tests/                                      # mirrors app/, plus the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
@@ -47,7 +49,6 @@ infra that predates any feature, and only what 3+ slices need, duplicating until
 app/
   sourcing/        # the pipeline runner and registry search (T5) — the data model above is built
   qualification/   # disqualifier rules + Intensity×Automatable score; owns `disqualification`
-  routing/         # DFW geographic route clustering
   promotion/       # create Company/Contact, own the `promotion` ledger (T9) — the gateway above is built
   tools/           # the stage modules themselves (T5–T8), one file per PipelineStage — the registry above is built
 ```

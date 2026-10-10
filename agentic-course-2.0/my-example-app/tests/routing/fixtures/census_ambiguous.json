@@ -1,0 +1,12 @@
+{
+  "result": {
+    "input": {
+      "address": {"zip": "", "city": "Dallas", "street": "100 Main St", "state": "TX"},
+      "benchmark": {"isDefault": true, "benchmarkDescription": "Public Address Ranges - Current Benchmark", "id": "4", "benchmarkName": "Public_AR_Current"}
+    },
+    "addressMatches": [
+      {"tigerLine": {"side": "L", "tigerLineId": "1"}, "coordinates": {"x": -96.7970, "y": 32.7810}, "addressComponents": {}, "matchedAddress": "100 MAIN ST, DALLAS, TX, 75202"},
+      {"tigerLine": {"side": "L", "tigerLineId": "2"}, "coordinates": {"x": -96.9200, "y": 32.6400}, "addressComponents": {}, "matchedAddress": "100 MAIN ST, DUNCANVILLE, TX, 75116"}
+    ]
+  }
+}

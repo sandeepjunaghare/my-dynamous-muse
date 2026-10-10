@@ -1012,3 +1012,64 @@ Review: `.claude/code-reviews/pr-17-review.md`. Triage: all four fixed in this P
 check, because the Protocol already types `stage` statically. Reading it back as `object` via `getattr` matches the `STAGE` lookup above it.
 **Improve:** a runtime-checkable Protocol proves only that attributes exist. Every attribute the registry reads
 from a loaded module needs its own runtime check.
+
+
+---
+
+# T8 — routing slice: DFW route clustering (2026-10-10)
+
+**Plan:** `.claude/plans/t8-route-clustering.md`. **Branch / worktree:** `feat/t8-routing` · test Postgres on
+**5436** (`lpe-test-pg-t8`; 5435 is T7's) · migration `0007_routing` (`down_revision = "0005_cadence"`, re-chain onto
+T5's `0006` at merge).
+
+**Decided with the human while planning:**
+- Eligibility is a **verified address only**. T8 does not read T7's `disqualification`. Narrowing to qualified
+  candidates is a **T9/T10 follow-up**.
+- Storage is routing's own **`route_assignment`** table. `CandidateFields` and `stages.py` are untouched.
+
+- [x] `route_max_doors` setting (default 12) + `.env.example`
+- [x] `app/routing/schemas.py`, `clustering.py` (recursive balanced median bisection), and 16 unit tests
+- [x] `app/routing/geocoder.py` (Census one-line JSON endpoint, 3 tries, injected transport and sleep), 11 tests over fixtures
+- [x] `route_assignment` model + `0007_routing` + `env.py` registration; repository (replace, list), 5 DB tests
+- [x] `RoutingService.cluster_run` (verified only; misses counted; all-failed raises), 9 DB tests
+- [x] `app/tools/cluster_routes.py` exporting `STAGE`; registry and stage-contract tests (3)
+- [x] Slice README, CLAUDE.md map, ticket note
+
+**Review.** 734 passed with the database tier (0 skipped). ruff, format, mypy and pyright are clean, and `alembic check`
+reports no drift. A live geocode of Dallas City Hall returned 32.7767, −96.7958, so x→longitude holds against real data.
+**Worked:** the clustering function is pure, so determinism, caps and order-independence were proven exhaustively
+(n = 1..60 × three caps) with no database. The DB tests could then stay about behaviour.
+**Didn't:** a first draft of the service test carried a `# type: ignore`. It was caught before any run and replaced with
+a typed helper.
+**Improve / follow-ups:**
+- [ ] **At merge:** re-chain `0007_routing.down_revision` onto T5's `0006_sourcing_pool`.
+- [ ] **After T5 merges:** T5 adds `StageResult.degraded_reason`. Routing should set it when
+  `routing_geocode_failed > 0`, so a partial geocode shows on the run as `degraded` rather than only in the counts.
+- [ ] **T9/T10:** route only qualified candidates, and decide whether to re-route after disqualification. Until then a
+  batch of 150 makes ~13 routes, not 2.
+
+
+## PR #19 review findings: fix M1–M3 and the cheap Lows (2026-10-10)
+
+Review: `.claude/code-reviews/pr-19-review.md` (0 Critical, 0 High, 3 Medium, 6 Low). Triage: M1–M3 and L1, L3–L6 fixed in
+this PR. The L2 composite foreign key is deferred to **#20**, because it needs `unique(run_id, id)` on T4's `candidate`
+during a parallel wave; it is documented as service-enforced in the model docstring.
+
+- [x] **M1.** An all-failed pass with any unreadable body committed an empty success and erased the run's routes. The
+  guard now counts unavailable + unreadable and raises the last error *before* any write.
+- [x] **M2.** `httpx.DecodingError` escaped unretried, and so did an out-of-range coordinate. `_get` now catches
+  `RequestError`, and point construction sits inside the shape-error `try`.
+- [x] **M3.** Tests added: all unreadable, a mix, an unreadable body counted as failed, and a failed re-run keeping the
+  earlier rows.
+- [x] **L1** eligible candidates paired with their address, so there is no unreachable skip. **L3** a `census` fixture
+  closes every geocoder it handed out. **L4** a typed stub instead of the zero-argument lambda. **L5** tests for 429
+  retried, transport error then success, and a corrupt body. **L6** `geocode_missed` moved to debug.
+- [x] Validate, commit, push.
+
+**Review:** 742 passed (8 new tests). ruff, format, mypy and pyright are clean; alembic shows no drift.
+**Worked:** each fix was test-first. The three M1 tests and the two M2 tests failed with exactly the predicted
+behaviour before the fix; the M1 log line showed `routing_clusters=0` committed as a success.
+**Didn't:** a `*args, **kwargs` lambda is "partially unknown" under Pyright strict, so the L4 fix needed a typed
+`def`. A fixture in `tests/routing/conftest.py` is not visible to `tests/tools/`, so the stage test closes its own mock.
+**Improve:** the original all-failed test exercised only the one branch that worked (503s). Test a rule across every
+input class it claims to cover, not just the first one that comes to mind.
