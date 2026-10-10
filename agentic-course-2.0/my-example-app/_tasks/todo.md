@@ -954,3 +954,43 @@ failures exit 0, dropping the parked line, or dropping the enrolled company-only
 to re-credit. It now also checks that a call logged after adoption is counted. **Improve:** when a test
 asserts "nothing happens", pair it with "and the next real thing does", or it passes on broken code.
 
+
+## Wave 5 (revised): T5 ∥ T7 ∥ T8 in parallel worktrees (2026-10-10)
+
+T9 is blocked on T7 and T8, so the parallel set is T5 ∥ T7 ∥ T8; T9 follows after T7 and T8 merge.
+**Decided 2026-10-10:** SPIKE-2's headcount half does not gate T5. The principal half (67%) clears the 50% bar.
+
+- [x] **0. Record the decisions** in `docs/tickets/local-prospect-engine.md`: SPIKE-2 is no longer gating T5, and the wave order is revised.
+- [ ] **1. Seam PR on `main`, merged before the worktrees are cut** (built and validated on `feat/tools-stage-seam`; PR open, not merged): `app/tools/__init__.py` with
+  - a `Stage` Protocol, keyed by the existing `PipelineStage`;
+  - a `StageContext`: run id, active manifest, batch candidate ids, session, cost recorder;
+  - an empty `STAGES` registry, where adding a stage is a one-line append;
+  - a structure test checking that every registered stage is a `PipelineStage` and that no stage is registered twice.
+  - About 60 lines, and green under `/piv-validate`.
+- [ ] **2. Three worktrees** (`/worktree-create`) from the updated `main`: `feat/t5-pipeline-fmcsa`, `feat/t7-qualification`, `feat/t8-routing`.
+- [ ] **3. In each worktree:**
+  - `/piv-plan-implementation` for its ticket, with the plan in `.claude/plans/`;
+  - I review each plan **before** implementation starts;
+  - `/piv-implement`, then `/piv-validate`, then `/piv-create-pr`, then `/piv-review-pr`.
+- [ ] **4. Migration numbers set up front:** T5 → `0006`, T8 → `0007`, T7 → `0008`.
+  - Each starts with `down_revision = "0005"`.
+  - Each is re-chained when it merges, and `alembic check` must pass after every merge.
+- [ ] **5. Merge order** (`/worktree-merge`, with validation after each merge):
+  1. T5, which owns the runner and the stage-1 registration;
+  2. T8, the smallest;
+  3. T7, which adds `lpe manifest dry-run` and the `activate` gate.
+- [ ] **6. After the merge,** plan T9 against the real T7 and T8.
+
+**Risks:**
+- T5 and T7 can both touch `app/sourcing/` (the runner and the re-source suppression check). Each plan has to name which files it edits there.
+- T7 changes `manifests/` (the `activate` gate), and T12 also lives there. That doesn't clash with T5 or T8.
+- Postgres port 5433 is taken. Three worktrees need three test databases: 5434, 5435 and 5436.
+
+**Step 1 changed from the plan:**
+- **No shared list.** A stage registers by **being a file**: `app/tools/<PipelineStage value>.py` exporting `STAGE`,
+  found by `registered_stages()`. A "one-line append" to a shared registry would conflict whenever three
+  branches append at the same spot.
+- **Where the contract lives.** It is in `app/tools/registry.py`, not `__init__.py`: the structure guard rejects a
+  package whose only module is `__init__.py`.
+- **Tests:** 7 new, 689 passed with the database; ruff, mypy and pyright are clean. A mutation check showed that
+  the three guards (missing `STAGE`, misnamed stage, broken import) are each caught by a test.
