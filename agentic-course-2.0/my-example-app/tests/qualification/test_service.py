@@ -29,7 +29,7 @@ from tests.sourcing.builders import a_brief
 pytestmark = requires_db
 
 NOT_ALLOWED = predicate(
-    "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+    "not_allowed_to_operate", "allowedToOperate", RuleOperator.equals, "N", source="qcmobile"
 )
 BODY = a_body_with(
     *FREIGHT_V3_PREDICATES,
@@ -67,7 +67,7 @@ class TestPredicates:
     ) -> None:
         manifest, run, (candidate,) = await a_run_with(db_session, BODY, "555")
         service = QualificationService(db_session)
-        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "N"}}
+        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowedToOperate": "N"}}
 
         fired = await service.disqualify_by_predicates(
             candidate, run, manifest, records, source_urls={"qcmobile": QCMOBILE_LOOKUP}
@@ -82,7 +82,7 @@ class TestPredicates:
         )
         assert row.source_url == QCMOBILE_LOOKUP
         assert row.retrieval_method is RetrievalMethod.registry_api
-        assert row.evidence == "allowToOperate='N'"
+        assert row.evidence == "allowedToOperate='N'"
 
     async def test_without_a_record_url_the_source_base_url_is_cited(
         self, db_session: AsyncSession
@@ -100,7 +100,7 @@ class TestPredicates:
     async def test_a_survivor_is_not_recorded(self, db_session: AsyncSession) -> None:
         manifest, run, (candidate,) = await a_run_with(db_session, BODY, "557")
         service = QualificationService(db_session)
-        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "Y"}}
+        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowedToOperate": "Y"}}
         assert await service.disqualify_by_predicates(candidate, run, manifest, records) is None
         assert await service.list_for_candidate(candidate.id) == []
 

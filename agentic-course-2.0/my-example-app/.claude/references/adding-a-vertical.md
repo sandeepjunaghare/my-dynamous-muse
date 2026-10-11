@@ -44,7 +44,10 @@ uv run lpe manifest activate <id> --accept-terms fmcsa,places
 local extract of each `bulk_file` source and prints the pool after each rule, sample rows, and flags: a rule
 that matches nothing (freight v1), one shadowed by an earlier rule, one that empties the pool, an unknown field,
 a literal never seen in the data. Read every flag. A predicate on another source names it with `source:`
-(e.g. QCMobile's `allowToOperate`); those are reported as not evaluable offline.
+(e.g. QCMobile's `allowedToOperate`); those are reported as not evaluable offline. **Without `source:` a rule
+reads the first declared source** — and a negated rule (`not_equals`, `not_in_set`, `not_contains`) fires on a
+field that source never has. A run refuses such a rule on the census before taking a batch; on other sources
+nothing catches a typo in the field name, so check it against a live record.
 
 `activate` is where the per-source terms-of-use decision is recorded — the gate that already existed is the
 human approval step, so there is no second review surface to build. A source with no recorded terms-of-use

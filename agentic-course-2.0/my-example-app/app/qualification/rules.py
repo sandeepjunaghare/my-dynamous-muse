@@ -12,7 +12,12 @@ The semantics, decided once so the dry-run and the pipeline cannot disagree:
 * ``greater_than`` / ``less_than`` cast the field to a number here — census numerics such as
   ``power_units`` arrive as text, and a compare that silently ran on strings would sort ``"9"``
   above ``"10"``.
-* A record the rule cannot judge — its source or field is absent or blank, or the text is not the
+* **A field absent or blank from a record that exists fires the three negated operators**
+  (``not_equals``, ``not_in_set``, ``not_contains``) and no other. That is how T5's SoQL pushdown
+  reads the same rule — a null ``phy_state`` is not ``'TX'`` — so the dry-run funnel and the live
+  pool agree (owner decision, T7 Phase 6). An entity with no broker authority on file is not ``A``.
+* A record the rule cannot judge — its **source** is absent (never looked, the lookup failed, the
+  source found nothing), its field is absent for a positive operator, or the text is not the
   number or boolean the operator needs — is :attr:`~OutcomeKind.not_evaluable`, and **that never
   disqualifies**. An unjudgeable record stays in the pool and is counted, so a person sees it.
 * A rule whose operator and value do not fit raises :class:`RuleNotEvaluableError`: that is the
@@ -25,6 +30,11 @@ from typing import assert_never
 from app.manifests.schemas import DisqualifierRule, ManifestBody, RuleKind, RuleOperator
 from app.qualification.exceptions import RuleNotEvaluableError
 from app.qualification.schemas import OutcomeKind, PredicateResult, RecordSet, RuleOutcome
+
+NEGATED_OPERATORS = frozenset(
+    {RuleOperator.not_equals, RuleOperator.not_in_set, RuleOperator.not_contains}
+)
+"""The operators an absent field satisfies: "not X" holds of a value that is not there."""
 
 TRUE_TEXT = frozenset({"Y", "YES", "TRUE", "T", "1"})
 FALSE_TEXT = frozenset({"N", "NO", "FALSE", "F", "0"})
@@ -137,6 +147,9 @@ def evaluate(rule: DisqualifierRule, records: RecordSet, *, source: str) -> Rule
         return unjudged("source_missing")
     raw = record.get(field)
     if raw is None or not raw.strip():
+        if operator in NEGATED_OPERATORS:
+            # `observed=None` is the evidence: the field was looked for and was not there.
+            return RuleOutcome(rule_id=rule.id, source=source, field=field, kind=OutcomeKind.fired)
         return unjudged("field_missing")
     text = raw.strip()
 

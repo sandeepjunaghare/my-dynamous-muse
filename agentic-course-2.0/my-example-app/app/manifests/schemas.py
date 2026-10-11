@@ -87,7 +87,7 @@ class RuleOperator(StrEnum):
     less_than = "less_than"
     is_true = "is_true"
     """Fires when the field reads as true (``Y``, ``YES``, ``TRUE``, ``T``, ``1``). There is no
-    ``is_false``: to disqualify on a false flag — FMCSA's ``allowToOperate = N`` — use
+    ``is_false``: to disqualify on a false flag — FMCSA's ``allowedToOperate = N`` — use
     ``equals "N"``, which also leaves a blank or unknown value unjudged rather than disqualified."""
 
 
@@ -165,7 +165,7 @@ class DisqualifierRule(BaseModel):
     """Which declared source a predicate's ``field`` is read from. ``None`` means the manifest's
     first declared source — which is what every row written before this field existed meant.
 
-    Needed because one vertical reads several sources: FMCSA's ``allowToOperate`` is a QCMobile
+    Needed because one vertical reads several sources: FMCSA's ``allowedToOperate`` is a QCMobile
     field, not a census column, and a join (the revocations dataset) arrives as a field on its own
     declared source rather than as an operator the rule language would need to grow."""
 

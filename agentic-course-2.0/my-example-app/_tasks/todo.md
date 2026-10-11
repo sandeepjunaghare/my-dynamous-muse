@@ -1257,3 +1257,53 @@ plus L1, L2, L3, L5 and L6; defer L4 (#22) and checking quotes against fetched t
       columns are refused · **L5** a judgment-disqualified candidate gets no `priority` · **L6** the inverted test
       rule is now `not_allowed_to_operate` (`equals "N"`), with `is_true` documented
 - [x] Mutation-checked: re-introducing each bug (H1, M1, M2 ×2, L1, L2, L3, L5) fails its new test.
+
+
+## T7 Phase 6 (task 28): wire the evaluator into the pipeline (2026-10-10)
+
+`main` (T5, T8, #26–#28) merged into `feat/t7-qualification` as `a1448b3`, with `0008` moved onto `0007_routing`
+(task 27): 1,036 passed. Task 28 as written predates T5. Its "interim filter in the pool build" doesn't exist,
+because T5 pushes census rules into SoQL instead. Re-scoped to how T5 actually works.
+
+**Decided (owner, 2026-10-10):**
+- **Null semantics:** on a *found* record, a missing or blank field **fires** `not_equals`, `not_in_set` and
+  `not_contains`, matching T5's SoQL pushdown, so the dry-run and the live pool agree. A missing *record* (never
+  looked, lookup failed, or QCMobile found nothing) stays `not_evaluable` for every operator.
+- **Placement:** the free predicates run at the **end of `search_registry`** (stage 1), before any paid step (D8).
+  `app/tools/` calls `QualificationService`, so `sourcing/` still never imports `qualification/`.
+
+- [x] `rules.py`: the new missing-field rule for the three negated operators; module docstring; `test_rules.py`
+  cases (each negated op fires on a missing field; positive ops stay `not_evaluable`; a missing source stays
+  `not_evaluable` for all).
+- [x] `dry_run.py`: confirm it calls the same evaluator. Re-pin any funnel counts the semantics change moves, and
+  say why in the test.
+- [x] `qualification/records.py` (new): `records_from(fields) -> (RecordSet, source_urls)`. One-row sources become
+  `{field: str(value)}`. `rows=()` and multi-row sources (revocations) are left out; they are the judgment node's.
+  Each source's citation URL feeds `disqualify_by_predicates(source_urls=…)`.
+- [x] `tools/search_registry.py`: after `record_candidates`, run `disqualify_by_predicates` per candidate. Before
+  selection, pass `suppressed_registry_ids(vertical, pull ids)` into `refresh_pool_and_select(exclude=…)`. New
+  counts: `qualification_disqualified`, `qualification_not_evaluable`, `pool_suppressed`.
+- [x] `sourcing/service.py`, `sourcing/pool.py`: `exclude` on selection. The pool row stays; it just isn't selected.
+- [x] Evidence text for a missing field: `brokerAuthorityStatus absent`, not `=None`.
+- [x] Tests:
+  - the two-run test. Run 1 disqualifies a QCMobile `brokerAuthorityStatus 'I'` candidate and then fails, so its
+    batch goes back. Run 2 takes the rest of that batch but not the suppressed one.
+  - a candidate with no QCMobile record is never disqualified by a QCMobile rule.
+  - the "one evaluator" grep guard.
+  - `source` routing on a stage run.
+- [x] Docs: the sourcing README's *Contract with T7* (confirmed, with the owner's decision), the qualification
+  README, the T7 plan's AMENDMENTS, the ticket note, and the PR #18 body.
+- [x] `/piv-validate`, commit, push, re-review PR #18.
+
+**After merge (data, not code):** freight v7 sets `source: fmcsa_qcmobile` on `not_allowed_to_operate` and
+`broker_authority_not_active`. Without it they read the census record and never fire. Then `lpe manifest dry-run`
+(T7's activation gate) and activate. Dev Supabase needs `0008` (`alembic upgrade head`).
+
+**Review:** 1,081 passed, 2 skipped. ruff, format, mypy and pyright clean. Mutation check 6/6.
+**Worked:** tracing a v6 run through the new code *before* running it found the one-run backlog wipe-out
+(a QCMobile rule with no `source` reading the census, absent on every record, firing everywhere). The guard
+now refuses that run before taking a batch.
+**Didn't:** the plan's "one evaluator" grep could never pass beside T5's SoQL translation. It was replaced
+by a parity test that compares what the two do rather than counting them.
+**Improve:** when a semantics change widens what fires, look for the inputs that make it fire on *everything*.
+

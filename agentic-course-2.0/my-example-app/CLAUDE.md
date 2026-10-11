@@ -35,7 +35,7 @@ app/qualification/                          # free predicate evaluator, classify
 app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, adoption (T13), routes + CLI
 app/routing/                                # route_assignment, the Census Geocoder (never Places), balanced-bisection clustering (T8)
 app/tools/registry.py                       # the Stage contract; a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
-app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushdown, refresh the pool, take a batch best first, free evidence
+app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushdown, refresh the pool, take a batch best first, free evidence, free predicates (T7)
 app/tools/classify_rollup.py                # stage 4 of 5 (T7)
 app/tools/cluster_routes.py                 # stage 5 of 5 (T8): verified addresses → drive routes of ≤ ROUTE_MAX_DOORS
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group

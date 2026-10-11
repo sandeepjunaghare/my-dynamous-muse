@@ -315,14 +315,14 @@ class TestJsonRoundTrip:
 
 
 class TestRuleSource:
-    """Which declared source a predicate reads — ``allowToOperate`` is QCMobile, not the census."""
+    """Which declared source a predicate reads: ``allowedToOperate`` is QCMobile, not census."""
 
     def _rule(self, source: str | None) -> DisqualifierRule:
         return DisqualifierRule(
             id="not_allowed_to_operate",
             kind=RuleKind.predicate,
             description="no operating authority",
-            field="allowToOperate",
+            field="allowedToOperate",
             operator=RuleOperator.equals,
             value="N",
             source=source,

@@ -1,8 +1,8 @@
 # Implementation Report — T7: qualification slice
 
-**Plan**: `.claude/plans/t7-qualification.md`   **Branch**: `feat/t7-qualification`   **Status**: PARTIAL by
-design. Phases 1–5 (tasks 1–26) are complete. Phase 6 (tasks 27–28, wiring into T5) waits until T5 and T8
-merge, as the plan specifies.
+**Plan**: `.claude/plans/t7-qualification.md`   **Branch**: `feat/t7-qualification`   **Status**: COMPLETE.
+Phases 1–5 (tasks 1–26) were built first. Phase 6 (tasks 27–28, wiring into T5) followed once T5 and T8 merged;
+see *Phase 6* at the end.
 
 ## Summary
 T7 adds `app/qualification/`, with five parts:
@@ -105,3 +105,62 @@ About 145 new tests:
 - Human:
   - Dry-run freight v3 on the real census extract and confirm DFW 45,855 → 4,518 → 4,449.
   - Supply at least 20 labelled local fire companies for the live eval.
+
+## Phase 6 — merge and wiring (2026-10-10)
+
+**Task 27: merge.** `main` (T5, T8, #26–#28) was merged in as `a1448b3`, and `0008` now revises `0007_routing`.
+The six conflicts all kept both sides:
+- `CandidateFields` holds both `source_records` and `priority`. The D13 walk over tuple fields comes from T5,
+  calling T7's public `is_google_maps`.
+- `FIELD_OWNERS`, the alembic model registry and the schema tests keep both entries.
+- `CLAUDE.md` gets a combined architecture map, and `todo.md` keeps both logs.
+
+A stale local merge of an unpushed `main` was set aside as `backup/t7-local-merge-110c796`.
+
+**Task 28: wiring, re-scoped to T5 as built.** T5 pushes census rules into SoQL, so there is no in-code pool
+filter to replace. Two decisions came from the owner:
+1. On a found record, an absent or blank field fires `not_equals`, `not_in_set` and `not_contains`, as the
+   pushdown already does. A missing record stays `not_evaluable`.
+2. The free predicates run at the end of `search_registry`.
+
+What was built:
+- `rules.py`: `NEGATED_OPERATORS`, the absent-field rule, and the module docstring.
+- `qualification/records.py` (new): `records_from`, which turns `source_records` into a `RecordSet` plus record
+  URLs. One row becomes text; no rows and many rows are left out.
+- `tools/search_registry.py`:
+  - suppression is passed into selection;
+  - `disqualify_by_predicates` runs per recorded candidate;
+  - new counts `pool_suppressed` and `qualification_disqualified`;
+  - `_refuse_misrouted_rules`.
+- `sourcing/pool.py` and `sourcing/service.py`: `exclude` on availability, the count, and selection.
+- `sources/base.py` and `fmcsa.py`: `DiscoveryPull.known_fields`, which the census sets to `CENSUS_COLUMNS`.
+- `qualification/service.py`: the evidence for an absent field reads "`<field>` absent".
+- The old spelling `allowToOperate` was renamed in T7's code, tests and the adding-a-vertical guide.
+
+**Deviations from task 28 as written**
+- **The guard.** The plan asked for a grep guard ("one evaluator"). T5's SoQL translation is a second operator
+  implementation by design, so the grep could never pass. It was replaced by `tests/qualification/test_parity.py`,
+  which checks per operator that the evaluator fires on an absent field exactly when the SQL drops the row.
+- **No `qualification_not_evaluable` count.** It would need the rules evaluated twice. The service already logs
+  `qualification.service.evaluation_incomplete` per candidate.
+- **Added: the misrouted-rule refusal (not in the plan).** A rule without `source` reads the census. Under the
+  new semantics, freight v6's `broker_authority_not_active` (`brokerAuthorityStatus not_equals 'A'`, no
+  `source`) would fire on every candidate and suppress the whole backlog for the vertical. The refusal costs
+  one pull. The T5 test builder's QCMobile rule now names its source.
+
+**Tests:** 1,081 passed, 2 skipped (the paid live evals).
+- New: `test_qualification_wiring.py` (5, including the two-run test), `test_records.py` (4), `test_parity.py`
+  (8), and the rewritten absent-field cases in `test_rules.py`.
+- **Mutation check:** 6 of 6 caught. The six breaks were:
+  - suppression dropped;
+  - the guard not called;
+  - an absent field never firing (twice: the wiring test and the parity test);
+  - an empty record kept;
+  - the predicates not run.
+
+**Still open**
+- **Freight v7.** Set `source: fmcsa_qcmobile` on `not_allowed_to_operate` and `broker_authority_not_active`,
+  dry-run it, and activate it before the next live run; otherwise the run refuses. Dev also needs
+  `alembic upgrade head` for `0008`.
+- **Residual risk.** A typo in the field of a negated rule on a non-discovery source (QCMobile) would fire on
+  every candidate. QCMobile publishes no field list to check against.

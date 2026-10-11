@@ -178,7 +178,8 @@ by vertical or by source name (`sources/base.py`). Three roles:
 
 ## Contract with T7
 
-T5 fetches; T7 decides. Nothing is dropped after the pool.
+T5 fetches; T7 decides. **Confirmed by T7 (Phase 6, 2026-10-10)**, with the owner's two decisions
+recorded in item 3 and item 6.
 
 1. **Where rule fields live**: `candidate.fields.source_records`, one cited `SourceRecord` per source:
    ```
@@ -186,19 +187,32 @@ T5 fetches; T7 decides. Nothing is dropped after the pool.
    SourceRecord(source="fmcsa_qcmobile",       rows=(SourceRow(values=(("allowedToOperate", "Y"), …)),))  # () = looked, not found
    SourceRecord(source="fmcsa_revocations",    rows=(SourceRow(…), SourceRow(…)))                     # () = no revocations
    ```
-   `source` is the manifest's source name. **An absent record** means never looked or the lookup
-   failed; an evaluator that cannot find its field must treat the rule as **unevaluable**, not passed.
+   `source` is the manifest's source name. **An absent record** — never looked, the lookup failed,
+   or `rows=()` (looked, found nothing) — makes every rule on that source **unevaluable**, never a
+   drop. `app/qualification/records.py` turns these into the evaluator's `RecordSet`: a one-row
+   source is its record as text; no rows and many rows (the revocations) are left out.
 2. **Values** are `str | int`. Census `power_units`, `truck_units`, `total_drivers`, `total_cdl` and
    `driver_inter_total` are cast to `int` at the adapter (a non-number is left out, not zeroed).
    Everything else is the source's text, unchanged; census dates stay `YYYYMMDD`. QCMobile's field
    spelling is stored as returned: `allowedToOperate`, verified live 2026-10-10 (the docs say
    `allowToOperate`; manifests up to freight v4 used that and would never have matched).
    QCMobile's `ein` is **never stored** (`_QCMOBILE_NEVER_STORED`); no rule may read it.
-3. **Null semantics** the pushdown uses: `not_equals`, `not_in_set` and `not_contains` **fire** on an
-   absent field; `equals`, `in_set`, `contains`, `greater_than`, `less_than` and `is_true` do not.
+3. **Null semantics**, shared by the pushdown and T7's evaluator (owner decision): on a record that
+   exists, `not_equals`, `not_in_set` and `not_contains` **fire** on an absent or blank field;
+   `equals`, `in_set`, `contains`, `greater_than`, `less_than` and `is_true` do not.
+   `tests/qualification/test_parity.py` fails if the SQL and the Python ever read it differently.
 4. **Which rules were pushed down** is logged (`sourcing.socrata.where_built`, `rule_ids`) and counted
    (`pool_rules_pushed_down`). Re-evaluating one on a candidate passes by construction.
-5. **Suppression key**: `(vertical, registry_id)`.
+5. **Suppression key**: `(vertical, registry_id)`. Selection never takes a suppressed id
+   (`pool_suppressed`); the pool row stays.
+6. **Where the predicates run** (owner decision): at the end of `search_registry`, once the batch's
+   evidence is recorded and before any paid step. `app/tools/search_registry.py` calls
+   `QualificationService`, so `app/sourcing/` never imports `app/qualification/`. The first rule to
+   fire is a cited `disqualification` (`qualification_disqualified`); `classify_rollup` skips it.
+7. **A rule must read the source that holds its field.** Without `source`, a rule reads the first
+   declared source (the census). The census pull reports its columns (`DiscoveryPull.known_fields`),
+   and a predicate routed there on a field it never has **refuses the run before any batch** — an
+   absent field would fire a negated rule on every candidate and suppress the whole backlog.
 
 ## `lpe sourcing run`
 

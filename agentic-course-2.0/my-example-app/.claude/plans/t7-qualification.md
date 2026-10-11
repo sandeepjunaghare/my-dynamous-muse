@@ -947,3 +947,10 @@ covers the judgment node, stage, scoring and live eval. PR A alone unblocks acti
   - `value_not_seen` fires only when none of a rule's literals is seen.
   - Repository tests are folded into `test_service.py`.
   - Four log event names were renamed for the naming guard.
+
+- 2026-10-10 — Task 27 done at merge `a1448b3` (`0008` → `0007_routing`). Task 28 re-scoped to T5 as built: T5
+  pushes census rules into SoQL (there is no in-code pool filter to replace), and stores evidence as
+  `CandidateFields.source_records`, which a new `records_from` turns into a `RecordSet`. **Owner decisions:**
+  (1) on a found record, a missing or blank field fires `not_equals` / `not_in_set` / `not_contains`, matching
+  T5's pushdown; a missing record stays `not_evaluable`. (2) The free predicates run at the end of
+  `search_registry`, before any paid step. Full checklist: `_tasks/todo.md`, "T7 Phase 6".

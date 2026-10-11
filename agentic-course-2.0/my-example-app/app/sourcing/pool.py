@@ -5,7 +5,7 @@ repository for re-source suppression, and two branches editing one file is the m
 Wave 5 seam exists to avoid.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import date
 from uuid import UUID
 
@@ -87,24 +87,40 @@ class PoolRepository:
         )
         return new or 0
 
-    def _available(self, vertical: str, run_id: UUID) -> ColumnElement[bool]:
-        """Seen by this run's refresh, and never batched — or batched by a run that failed."""
+    def _available(
+        self, vertical: str, run_id: UUID, exclude: Collection[str]
+    ) -> ColumnElement[bool]:
+        """Seen by this run's refresh, and never batched — or batched by a run that failed — and
+        not in ``exclude`` (the registry ids qualification has already rejected)."""
         failed_runs = select(SourcingRun.id).where(SourcingRun.status == RunStatus.failed.value)
-        return and_(
+        condition = and_(
             SourcingPool.vertical == vertical,
             SourcingPool.last_seen_run_id == run_id,
             SourcingPool.batched_run_id.is_(None) | SourcingPool.batched_run_id.in_(failed_runs),
         )
+        if exclude:
+            condition = and_(condition, SourcingPool.registry_id.not_in(sorted(exclude)))
+        return condition
 
-    async def count_available(self, vertical: str, run_id: UUID) -> int:
+    async def count_available(
+        self, vertical: str, run_id: UUID, *, exclude: Collection[str] = frozenset()
+    ) -> int:
         """How many entries this run could take, before it takes any."""
         count = await self._session.scalar(
-            select(func.count()).select_from(SourcingPool).where(self._available(vertical, run_id))
+            select(func.count())
+            .select_from(SourcingPool)
+            .where(self._available(vertical, run_id, exclude))
         )
         return count or 0
 
     async def select_batch(
-        self, vertical: str, run_id: UUID, *, size: int, currency_cutoff: date
+        self,
+        vertical: str,
+        run_id: UUID,
+        *,
+        size: int,
+        currency_cutoff: date,
+        exclude: Collection[str] = frozenset(),
     ) -> list[SourcingPool]:
         """Take up to ``size`` available entries, best first, and mark them batched by ``run_id``.
 
@@ -121,7 +137,7 @@ class PoolRepository:
         principal = case((SourcingPool.has_principal, 1), else_=0)
         result = await self._session.scalars(
             select(SourcingPool)
-            .where(self._available(vertical, run_id))
+            .where(self._available(vertical, run_id, exclude))
             .order_by(
                 current.desc(),
                 principal.desc(),

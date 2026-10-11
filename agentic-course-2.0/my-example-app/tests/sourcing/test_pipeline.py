@@ -227,6 +227,8 @@ class TestEvidence:
             "lookup_not_found": 0,
             "lookup_failed": 0,
             "join_matched": 2,
+            "pool_suppressed": 0,
+            "qualification_disqualified": 0,
         }
         candidates = {c.registry_id: c.fields for c in await _candidates(session_factory, run)}
         for fields in candidates.values():

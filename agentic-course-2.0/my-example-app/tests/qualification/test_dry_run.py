@@ -25,7 +25,7 @@ V1_RULE = predicate("v1_asset_based", "carrier_operation", RuleOperator.equals, 
 SHADOWED_RULE = predicate("out_of_state_county", "phy_cnty", RuleOperator.equals, "201")
 UNKNOWN_FIELD_RULE = predicate("stale_mcs150", "mcs150_date", RuleOperator.less_than, 2024)
 QCMOBILE_RULE = predicate(
-    "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+    "not_allowed_to_operate", "allowedToOperate", RuleOperator.equals, "N", source="qcmobile"
 )
 MALFORMED_RULE = predicate("bad_set", "phy_cnty", RuleOperator.in_set, "113")
 

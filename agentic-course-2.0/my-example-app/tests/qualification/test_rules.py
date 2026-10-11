@@ -69,10 +69,60 @@ class TestOperators:
         assert _kind(RuleOperator.greater_than, 10, "9") is PASSED
 
 
+class TestAnAbsentFieldOnAFoundRecord:
+    """Owner decision (T7 Phase 6): "not X" holds of a missing value, exactly as T5's SoQL pushdown
+    reads the same rule, so the dry-run and the live pool cannot disagree."""
+
+    @pytest.mark.parametrize("text", [None, "", "   "])
+    @pytest.mark.parametrize(
+        ("operator", "value"),
+        [
+            (RuleOperator.not_equals, "A"),
+            (RuleOperator.not_in_set, ("A", "P")),
+            (RuleOperator.not_contains, "B"),
+        ],
+    )
+    def test_fires_a_negated_operator(
+        self, operator: RuleOperator, value: RuleValue, text: str | None
+    ) -> None:
+        rule = predicate("r", "f", operator, value)
+        outcome = evaluate(rule, {"fmcsa": {"f": text}}, source="fmcsa")
+        assert outcome.kind is FIRED
+        assert outcome.observed is None
+        assert outcome.reason is None
+
+    def test_fires_when_the_key_is_not_in_the_record_at_all(self) -> None:
+        rule = predicate("r", "brokerAuthorityStatus", RuleOperator.not_equals, "A")
+        assert evaluate(rule, {"qcmobile": {"legalName": "X"}}, source="qcmobile").kind is FIRED
+
+
 class TestUnjudgeableRecordsAreNeverDisqualified:
     @pytest.mark.parametrize("text", [None, "", "   "])
-    def test_a_blank_or_absent_field(self, text: str | None) -> None:
-        assert _kind(RuleOperator.not_contains, "B", text) is UNSURE
+    @pytest.mark.parametrize(
+        ("operator", "value"),
+        [
+            (RuleOperator.equals, "N"),
+            (RuleOperator.in_set, ("I", "N")),
+            (RuleOperator.contains, "B"),
+            (RuleOperator.greater_than, 10),
+            (RuleOperator.less_than, 10),
+            (RuleOperator.is_true, None),
+        ],
+    )
+    def test_a_blank_or_absent_field_for_a_positive_operator(
+        self, operator: RuleOperator, value: RuleValue, text: str | None
+    ) -> None:
+        assert _kind(operator, value, text) is UNSURE
+
+    @pytest.mark.parametrize(
+        "operator", [RuleOperator.not_equals, RuleOperator.equals, RuleOperator.not_contains]
+    )
+    def test_a_missing_source_even_for_a_negated_operator(self, operator: RuleOperator) -> None:
+        """No record at all (never looked, lookup failed, found nothing) is never a drop."""
+        rule = predicate("r", "brokerAuthorityStatus", operator, "A", source="qcmobile")
+        outcome = evaluate(rule, {"fmcsa": census_row()}, source="qcmobile")
+        assert outcome.kind is UNSURE
+        assert outcome.reason == "source_missing"
 
     @pytest.mark.parametrize("text", ["N/A", "ten", "NaN", "inf"])
     def test_text_where_a_number_belongs(self, text: str) -> None:
@@ -87,7 +137,11 @@ class TestUnjudgeableRecordsAreNeverDisqualified:
 
     def test_a_missing_source(self) -> None:
         rule = predicate(
-            "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+            "not_allowed_to_operate",
+            "allowedToOperate",
+            RuleOperator.equals,
+            "N",
+            source="qcmobile",
         )
         outcome = evaluate(rule, {"fmcsa": census_row()}, source="qcmobile")
         assert outcome.kind is UNSURE
@@ -158,17 +212,21 @@ class TestApplyPredicates:
         assert len(apply_predicates(body, {"fmcsa": census_row()}).outcomes) == 3
 
     def test_a_rule_reads_its_declared_source(self) -> None:
-        """``allowToOperate`` is a QCMobile field, not a census column."""
+        """``allowedToOperate`` is a QCMobile field, not a census column."""
         rule = predicate(
-            "not_allowed_to_operate", "allowToOperate", RuleOperator.equals, "N", source="qcmobile"
+            "not_allowed_to_operate",
+            "allowedToOperate",
+            RuleOperator.equals,
+            "N",
+            source="qcmobile",
         )
         body = a_body_with(
             rule,
             sources=(("fmcsa", SourceKind.bulk_file), ("qcmobile", SourceKind.registry_api)),
         )
-        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "Y"}}
+        records: RecordSet = {"fmcsa": census_row(), "qcmobile": {"allowedToOperate": "Y"}}
         assert apply_predicates(body, records).outcomes[0].kind is PASSED
-        records = {"fmcsa": census_row(), "qcmobile": {"allowToOperate": "N"}}
+        records = {"fmcsa": census_row(), "qcmobile": {"allowedToOperate": "N"}}
         assert apply_predicates(body, records).outcomes[0].kind is FIRED
 
     def test_a_rule_without_a_source_reads_the_first_declared(self) -> None:

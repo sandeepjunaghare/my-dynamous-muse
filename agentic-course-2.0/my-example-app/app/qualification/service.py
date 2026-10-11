@@ -3,7 +3,7 @@
 Two writers and one reader:
 
 * :meth:`QualificationService.disqualify_by_predicates` — the free checks on a batch (QCMobile's
-  ``allowToOperate``, the revocations join), recorded with the source's citation. Only the first
+  ``allowedToOperate``, the revocations join), recorded with the source's citation. Only the first
   rule to fire is recorded: one reason is enough to stop paying for a candidate.
 * :meth:`QualificationService.record_judgment` — every judgment rule the ``classify_rollup`` node
   fired *and could cite*. An uncited verdict never reaches here (``admit_judgment`` drops it).
@@ -81,7 +81,11 @@ class QualificationService:
             # `SourceKind` and `RetrievalMethod` are parallel by design: the method a source's
             # field was read by is the kind of source it is.
             retrieval_method=RetrievalMethod(source.kind.value),
-            evidence=f"{fired.field}={fired.observed!r}",
+            evidence=(
+                f"{fired.field} absent"
+                if fired.observed is None
+                else f"{fired.field}={fired.observed!r}"
+            ),
         )
         await self._session.commit()
         logger.info(
