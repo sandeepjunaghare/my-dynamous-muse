@@ -1327,3 +1327,17 @@ easy to unit-test.
 **Didn't:** the first missing-source test passed with or without the fix. The mutation check caught it, and the
 test was rewritten so unknown carriers must neither dilute a trip nor make up the sample.
 **Improve:** for a guard, test the direction the guard tightens, not only the direction it loosens.
+
+## Dry-run row id (2026-10-11)
+
+The freight v8 dry-run labelled census samples by `mcs150_date`: Socrata's export leads with it, and the dry-run took
+the first column.
+
+- [x] `qualification/dry_run.py`: `_row_id_column` takes the first column named `id` or ending in `_id`, `_number`
+  or `_no`, falling back to the first column. Chosen by name, so no source is named in code.
+- [x] Tests: Socrata column order gives `dot_number`; with no identifier-like column, the first column is used.
+- [x] Checked against the real extracts: census gives `dot_number`, revocations gives `docket_number`.
+
+**Review:** 1,089 passed, 2 skipped; ruff, mypy and pyright clean. **Trade-off:** a name heuristic can pick an
+id-like column that isn't the key (a `phone_number` before the real id). It's only a label, and the report prints
+the column it used. A `--row-id SOURCE=COLUMN` override can follow if a source ever needs one.
