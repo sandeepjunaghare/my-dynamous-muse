@@ -14,9 +14,17 @@ table this stage is built with.
    against every bound join source (Motus revocations).
 4. **Record** each candidate, its identity cited to the registry and every source's raw record
    cited to that source.
+5. **Apply the free predicates** (T7, ``app/qualification/``) to each candidate's records: the first
+   rule to fire is recorded as a cited ``disqualification``, and ``classify_rollup`` skips the
+   candidate. The whole batch is evaluated first; a rule that fires on nearly all of it is
+   presumed wrong and fails the run with nothing recorded (``check_batch``). Before selection,
+   registry ids the vertical already rejected are **suppressed**, so a batch handed back by a
+   failed run never re-spends a slot on them. Before the pull, a predicate rule that could never
+   be judged fairly (malformed, or reading a join source) refuses the run.
 
-It decides nothing. ``allowedToOperate`` and the revocations are *evidence*, stored for T7's rule
-evaluator; no candidate is dropped after the pool.
+The stage fetches; qualification decides. It calls ``QualificationService`` rather than the
+sourcing slice doing so, so ``app/sourcing/`` never imports ``app/qualification/``. A candidate is
+never dropped for evidence it lacks: no QCMobile record means its QCMobile rules cannot judge it.
 
 **A batch is never spent without its evidence unless someone said so** (PR #21 review, M1). A
 candidate batched without its QCMobile record is never looked up again, so a source that cannot
@@ -34,6 +42,11 @@ import httpx
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.manifests.schemas import RuleKind
+from app.qualification.exceptions import RuleNotEvaluableError
+from app.qualification.records import records_from
+from app.qualification.rules import check_shape, predicate_rules
+from app.qualification.service import QualificationService
 from app.shared.provenance import ProvenancedValue
 from app.sourcing.exceptions import SourceAuthError, SourceUnavailableError
 from app.sourcing.schemas import CandidateFields, PoolEntry, SourceRecord
@@ -111,6 +124,7 @@ class SearchRegistryStage:
         settings = get_settings()
         size = self._batch_size or settings.sourcing_batch_size
         service = SourcingService(context.session)
+        qualification = QualificationService(context.session)
         reasons: list[str] = []
 
         async with httpx.AsyncClient(transport=self._transport, timeout=_HTTP_TIMEOUT) as client:
@@ -126,13 +140,19 @@ class SearchRegistryStage:
                 raise self._refuse(bound.degraded, when="no batch was taken")
             reasons.extend(bound.degraded)
 
+            _refuse_unevaluable_rules(context, tuple(join.name for join in bound.joins))
             rules = [cited.value for cited in context.manifest.body.disqualifier_rules]
             pull = await bound.discovery.pull(rules)
+            _refuse_misrouted_rules(context, bound.discovery.name, pull.known_fields)
+            suppressed = await qualification.suppressed_registry_ids(
+                context.manifest.vertical, [record.registry_id for record in pull.records]
+            )
             selection = await service.refresh_pool_and_select(
                 context.run_id,
                 pull.records,
                 size=size,
                 currency_cutoff=self._clock().date() - CURRENCY_WINDOW,
+                exclude=suppressed,
             )
             batch = [_as_pool_record(entry) for entry in selection.selected]
 
@@ -180,9 +200,16 @@ class SearchRegistryStage:
                         matched += 1 if cited.value.rows else 0
 
         candidates = [_with_evidence(record, evidence[record.registry_id]) for record in batch]
+        disqualified = 0
         if candidates:
-            await service.record_candidates(
+            recorded = await service.record_candidates(
                 context.run_id, candidates, stage=PipelineStage.search_registry
+            )
+            run = await service.get_run(context.run_id)
+            disqualified = await qualification.disqualify_batch(
+                run,
+                context.manifest,
+                [(candidate, records_from(candidate.fields)) for candidate in recorded],
             )
 
         counts = {
@@ -196,6 +223,8 @@ class SearchRegistryStage:
             "lookup_not_found": not_found,
             "lookup_failed": failed,
             "join_matched": matched,
+            "pool_suppressed": len(suppressed),
+            "qualification_disqualified": disqualified,
         }
         logger.info(
             "tools.search_registry.stage_completed",
@@ -205,6 +234,55 @@ class SearchRegistryStage:
             **counts,
         )
         return StageResult(counts=counts, degraded_reason="; ".join(reasons) or None)
+
+
+def _refuse_unevaluable_rules(context: StageContext, joins: tuple[str, ...]) -> None:
+    """Raise before the pull if a predicate rule could never be judged fairly here.
+
+    * Its operator and value do not fit (``check_shape``): better found now than after the batch's
+      free lookups are spent.
+    * It reads a **join** source (the revocations). A join repeats: a carrier may have several
+      rows, and only a one-row source is a record a predicate can read, so the verdict would turn
+      on the row count. Reading those rows is a judgment rule's job.
+    """
+    body = context.manifest.body
+    for rule in predicate_rules(body):
+        check_shape(rule)
+        source = body.source_for(rule)
+        if source in joins:
+            raise RuleNotEvaluableError(
+                f"rule {rule.id!r} is a predicate on {source!r}, a join source whose rows repeat "
+                "per business — make it a judgment rule, or read a one-row source. Refused before "
+                "the pull",
+                rule_id=rule.id,
+            )
+
+
+def _refuse_misrouted_rules(
+    context: StageContext, discovery: str, known_fields: frozenset[str] | None
+) -> None:
+    """Raise before any batch is taken if a predicate rule reads the discovery source for a field
+    that source never holds.
+
+    A rule with no ``source`` reads the manifest's first declared source. A QCMobile field left
+    that way (freight v6's ``brokerAuthorityStatus``) would be absent from every census record,
+    and an absent field fires a negated operator — so every candidate would be disqualified, and
+    suppressed for the vertical for good. Refusing costs one pull; that would cost the backlog.
+    """
+    if known_fields is None:
+        return
+    body = context.manifest.body
+    for cited in body.disqualifier_rules:
+        rule = cited.value
+        if rule.kind is not RuleKind.predicate or rule.field is None:
+            continue
+        if body.source_for(rule) == discovery and rule.field not in known_fields:
+            raise RuleNotEvaluableError(
+                f"rule {rule.id!r} reads {rule.field!r} from {discovery!r}, which has no such "
+                "field — set the rule's `source` to the source that holds it (a new manifest "
+                "version). Refused before taking a batch",
+                rule_id=rule.id,
+            )
 
 
 def _as_pool_record(entry: PoolEntry) -> PoolRecord:

@@ -18,6 +18,7 @@ from app.manifests.schemas import ManifestStatus, RuleKind, SourceKind
 from app.manifests.service import ManifestService
 from app.shared.provenance import RetrievalMethod
 from tests.conftest import requires_db
+from tests.manifests.builders import dry_run_recorded
 
 pytestmark = requires_db
 
@@ -103,6 +104,7 @@ class TestFire:
         """AC12, and the reason fire ships DRAFT: Places' terms are an open question."""
         service = ManifestService(db_session)
         fire_id = await _seeded_id(db_session, "fire")
+        await dry_run_recorded(db_session, fire_id)
 
         with pytest.raises(TermsOfUseNotRecordedError) as exc_info:
             await service.activate(fire_id, frozenset({"tx_fire_marshal"}), "sandeep")

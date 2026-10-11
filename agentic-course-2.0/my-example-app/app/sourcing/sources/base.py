@@ -73,6 +73,12 @@ class DiscoveryPull:
     not_pushed_down: tuple[str, ...] = ()
     """Predicate rules on fields this source holds that it could not express — left for T7."""
 
+    known_fields: frozenset[str] | None = None
+    """Every field this source's records can hold, when the source knows (the census's columns).
+    Lets the stage refuse a rule routed here on a field the source never has, which the evaluator
+    would otherwise read as absent — and an absent field fires a negated rule on every record.
+    ``None``: the source does not say, and no such check is made."""
+
 
 class DiscoverySource(Protocol):
     """Enumerates the pool from the manifest's one registry."""

@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -74,3 +75,26 @@ class VerticalManifest(Base):
             postgresql_where=text("status = 'active'"),
         ),
     )
+
+
+class ManifestDryRun(Base):
+    """One recorded ``lpe manifest dry-run`` of one manifest version (T7).
+
+    ``activate`` refuses a manifest with none. The report is read whole, so it is JSONB, shaped by
+    :class:`~app.manifests.schemas.DryRunReport`. It lives in this slice because it is manifest
+    lifecycle state that ``activate`` reads; the evaluator that produces it is qualification's.
+    """
+
+    __tablename__ = "manifest_dry_run"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+    manifest_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey(VerticalManifest.id), nullable=False
+    )
+    ran_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    ran_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    report: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (Index("ix_manifest_dry_run_manifest_id", "manifest_id"),)

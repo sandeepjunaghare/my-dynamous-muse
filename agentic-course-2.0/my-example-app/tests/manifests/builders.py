@@ -5,10 +5,14 @@ couple these tests to whatever the seed migration happens to contain.
 """
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.manifests.repository import ManifestRepository
 from app.manifests.schemas import (
     DisqualifierRule,
+    DryRunReport,
     IcpBand,
     ManifestBody,
     ManifestSource,
@@ -69,3 +73,13 @@ def a_body(*source_names: str) -> ManifestBody:
         icp_band=cited(IcpBand(headcount_min=20, headcount_max=200, requires_office_function=True)),
         vocabulary=cited(Vocabulary(terms=("loads", "lanes"))),
     )
+
+
+def a_dry_run(manifest_id: UUID) -> DryRunReport:
+    """An empty dry-run report: enough for ``activate``'s gate in tests about other rules."""
+    return DryRunReport(manifest_id=manifest_id, files=(), steps=())
+
+
+async def dry_run_recorded(session: AsyncSession, manifest_id: UUID) -> None:
+    """Record a dry-run through the repository (no commit), so ``activate`` will accept the row."""
+    await ManifestRepository(session).record_dry_run(manifest_id, a_dry_run(manifest_id), "test")

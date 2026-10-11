@@ -23,9 +23,7 @@ Pure on purpose: no SDK import, no I/O. The agent boundary lives in ``agent.py``
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
 from functools import partial
-from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -45,6 +43,7 @@ from app.manifests.schemas import (
     SourceKind,
     Vocabulary,
 )
+from app.shared.page_reads import PageRead, normalize_url
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
 
 logger = get_logger(__name__)
@@ -136,14 +135,6 @@ class AgentProposal(BaseModel):
 
 
 @dataclass(frozen=True)
-class PageRead:
-    """One page the agent fetched successfully, and when this process saw the result."""
-
-    url: str
-    read_at: datetime
-
-
-@dataclass(frozen=True)
 class OmittedField:
     """A proposed field that was left out of the draft, and why."""
 
@@ -177,18 +168,6 @@ class DraftProposal:
     cited: tuple[CitedField, ...]
     omitted: tuple[OmittedField, ...]
     terms_questions: tuple[TermsQuestion, ...]
-
-
-def normalize_url(url: str) -> str:
-    """The comparison key for "is this the page that was read".
-
-    Scheme and host are case-insensitive and a fragment never names a different page; a trailing
-    slash is how the same page is written two ways. Query strings are kept — they often do select
-    a different record. Raises ValueError for a URL that does not parse.
-    """
-    parts = urlsplit(url.strip())
-    path = parts.path.rstrip("/")
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
 
 
 class _Gate:

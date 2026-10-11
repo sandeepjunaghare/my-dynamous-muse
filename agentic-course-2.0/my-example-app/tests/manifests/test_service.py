@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.manifests.exceptions import (
     ActiveManifestNotFoundError,
+    DryRunMismatchError,
+    DryRunNotRecordedError,
     ManifestNotDraftError,
     ManifestNotFoundError,
     TermsOfUseNotRecordedError,
@@ -21,7 +23,7 @@ from app.manifests.exceptions import (
 from app.manifests.schemas import ManifestStatus, TermsDecision
 from app.manifests.service import ManifestService, parse_accept_terms
 from tests.conftest import requires_db
-from tests.manifests.builders import a_body, a_vertical
+from tests.manifests.builders import a_body, a_dry_run, a_vertical, dry_run_recorded
 
 
 @requires_db
@@ -33,6 +35,7 @@ class TestTheTermsGate:
         service = ManifestService(db_session)
         vertical = a_vertical()
         draft = await service.create_draft(vertical, a_body("fmcsa", "places"))
+        await dry_run_recorded(db_session, draft.id)
 
         with pytest.raises(TermsOfUseNotRecordedError) as exc_info:
             await service.activate(draft.id, frozenset({"fmcsa"}), "sandeep")
@@ -47,6 +50,7 @@ class TestTheTermsGate:
         """Accepting terms for a source that is not declared is a typo, not a decision."""
         service = ManifestService(db_session)
         draft = await service.create_draft(a_vertical(), a_body("fmcsa"))
+        await dry_run_recorded(db_session, draft.id)
 
         with pytest.raises(UnknownSourceError) as exc_info:
             await service.activate(draft.id, frozenset({"fmcsa", "fcmsa"}), "sandeep")
@@ -56,6 +60,7 @@ class TestTheTermsGate:
     async def test_accepting_every_source_activates(self, db_session: AsyncSession) -> None:
         service = ManifestService(db_session)
         draft = await service.create_draft(a_vertical(), a_body("fmcsa", "places"))
+        await dry_run_recorded(db_session, draft.id)
 
         activated = await service.activate(
             draft.id, frozenset({"fmcsa", "places"}), "sandeep", {"fmcsa": "CC PDM 1.0"}
@@ -84,6 +89,7 @@ class TestActivationPreconditions:
     ) -> None:
         service = ManifestService(db_session)
         draft = await service.create_draft(a_vertical(), a_body())
+        await dry_run_recorded(db_session, draft.id)
         await service.activate(draft.id, frozenset({"fmcsa"}), "sandeep")
 
         with pytest.raises(ManifestNotDraftError) as exc_info:
@@ -97,7 +103,9 @@ class TestActivationPreconditions:
         service = ManifestService(db_session)
         vertical = a_vertical()
         first = await service.create_draft(vertical, a_body())
+        await dry_run_recorded(db_session, first.id)
         second = await service.create_draft(vertical, a_body())
+        await dry_run_recorded(db_session, second.id)
         await service.activate(first.id, frozenset({"fmcsa"}), "sandeep")
         await service.activate(second.id, frozenset({"fmcsa"}), "sandeep")
 
@@ -114,7 +122,9 @@ class TestSupersede:
         service = ManifestService(db_session)
         vertical = a_vertical()
         first = await service.create_draft(vertical, a_body())
+        await dry_run_recorded(db_session, first.id)
         second = await service.create_draft(vertical, a_body())
+        await dry_run_recorded(db_session, second.id)
 
         await service.activate(first.id, frozenset({"fmcsa"}), "sandeep")
         await service.activate(second.id, frozenset({"fmcsa"}), "sandeep")
@@ -127,6 +137,7 @@ class TestSupersede:
         """A bump is how a manifest *changes*; activation is how a version is *accepted*."""
         service = ManifestService(db_session)
         draft = await service.create_draft(a_vertical(), a_body())
+        await dry_run_recorded(db_session, draft.id)
 
         activated = await service.activate(draft.id, frozenset({"fmcsa"}), "sandeep")
 
@@ -142,6 +153,7 @@ class TestCitationsSurviveActivation:
         service = ManifestService(db_session)
         body = a_body("fmcsa", "places")
         draft = await service.create_draft(a_vertical(), body)
+        await dry_run_recorded(db_session, draft.id)
 
         activated = await service.activate(draft.id, frozenset({"fmcsa", "places"}), "sandeep")
 
@@ -186,3 +198,53 @@ class TestParseAcceptTerms:
     def test_ordinary_typing_is_not_an_error(self, raw: str | None, expected: set[str]) -> None:
         """Trailing commas and stray spaces carry no meaning to lose."""
         assert parse_accept_terms(raw) == frozenset(expected)
+
+
+@requires_db
+class TestTheDryRunGate:
+    """Decided 2026-10-09: ``activate`` requires a recorded dry-run (T7)."""
+
+    async def test_activation_without_a_dry_run_is_refused_and_writes_nothing(
+        self, db_session: AsyncSession
+    ) -> None:
+        service = ManifestService(db_session)
+        draft = await service.create_draft(a_vertical(), a_body("fmcsa"))
+
+        with pytest.raises(DryRunNotRecordedError) as exc_info:
+            await service.activate(draft.id, frozenset({"fmcsa"}), "sandeep")
+
+        assert "lpe manifest dry-run" in exc_info.value.message
+        unchanged = await service.get(draft.id)
+        assert unchanged.status is ManifestStatus.draft
+        assert unchanged.body.terms == ()
+
+    async def test_the_dry_run_is_checked_before_the_terms(self, db_session: AsyncSession) -> None:
+        """Both missing: the person is sent to read the data before the legal question."""
+        service = ManifestService(db_session)
+        draft = await service.create_draft(a_vertical(), a_body("fmcsa", "places"))
+        with pytest.raises(DryRunNotRecordedError):
+            await service.activate(draft.id, frozenset(), "sandeep")
+
+    async def test_a_recorded_dry_run_unblocks_activation(self, db_session: AsyncSession) -> None:
+        service = ManifestService(db_session)
+        draft = await service.create_draft(a_vertical(), a_body("fmcsa"))
+
+        recorded = await service.record_dry_run(draft.id, a_dry_run(draft.id), "sandeep")
+        activated = await service.activate(draft.id, frozenset({"fmcsa"}), "sandeep")
+
+        assert recorded.manifest_id == draft.id
+        assert recorded.ran_by == "sandeep"
+        assert activated.status is ManifestStatus.active
+
+    async def test_a_report_for_another_manifest_is_refused(self, db_session: AsyncSession) -> None:
+        service = ManifestService(db_session)
+        draft = await service.create_draft(a_vertical(), a_body("fmcsa"))
+        with pytest.raises(DryRunMismatchError):
+            await service.record_dry_run(draft.id, a_dry_run(uuid4()), "sandeep")
+
+    async def test_a_dry_run_of_an_unknown_manifest_is_a_not_found(
+        self, db_session: AsyncSession
+    ) -> None:
+        missing = uuid4()
+        with pytest.raises(ManifestNotFoundError):
+            await ManifestService(db_session).record_dry_run(missing, a_dry_run(missing), "x")

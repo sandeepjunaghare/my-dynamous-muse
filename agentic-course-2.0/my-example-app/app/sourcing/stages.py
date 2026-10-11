@@ -58,6 +58,8 @@ FIELD_OWNERS: Final[Mapping[str, PipelineStage]] = MappingProxyType(
         # Every source's raw record (T5). The registry stage writes the whole batch's records in one
         # write per candidate, so a retry replaces them whole rather than merging stale ones in.
         "source_records": PipelineStage.search_registry,
+        # The judgment node's score, from cited qualifying-signal answers (T7).
+        "priority": PipelineStage.classify_rollup,
     }
 )
 """``CandidateFields`` field name → the one stage allowed to overwrite it."""

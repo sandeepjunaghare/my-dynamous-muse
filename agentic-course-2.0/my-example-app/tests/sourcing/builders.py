@@ -116,7 +116,8 @@ PLACES_SOURCE_URL = "https://developers.google.com/maps/documentation/places/web
 
 
 def freight_v3_rules() -> tuple[DisqualifierRule, ...]:
-    """Freight v3's disqualifier rules, copied from the dev manifest (``ecdc1c8e``, 2026-10-09)."""
+    """Freight v3's disqualifier rules, copied from the dev manifest (``ecdc1c8e``, 2026-10-09),
+    with the QCMobile rule routed to its source as T7 requires (freight v7 does the same)."""
     predicate = RuleKind.predicate
     return (
         DisqualifierRule(
@@ -138,6 +139,7 @@ def freight_v3_rules() -> tuple[DisqualifierRule, ...]:
         DisqualifierRule(
             id="not_allowed_to_operate", kind=predicate, description="QCMobile says N",
             field="allowedToOperate", operator=RuleOperator.equals, value="N",
+            source="fmcsa_qcmobile",
         ),
         DisqualifierRule(
             id="authority_revoked", kind=RuleKind.judgment, description="in the revocations"

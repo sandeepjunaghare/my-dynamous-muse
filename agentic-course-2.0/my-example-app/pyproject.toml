@@ -86,3 +86,6 @@ reportMissingTypeStubs = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+markers = [
+    "live: calls a paid external API; skipped unless LPE_LIVE_EVAL=1",
+]

@@ -275,6 +275,7 @@ class CensusSource:
             records=tuple(records[key] for key in sorted(records)),
             pushed_down=pushdown.pushed_down,
             not_pushed_down=pushdown.not_pushed_down,
+            known_fields=CENSUS_COLUMNS,
         )
 
 

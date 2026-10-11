@@ -55,3 +55,8 @@ class TestTheWritingStageIsRequired:
         assert stage.kind is inspect.Parameter.KEYWORD_ONLY
         assert stage.default is inspect.Parameter.empty
         assert stage.annotation in (PipelineStage, "PipelineStage")
+
+
+class TestPriorityOwner:
+    def test_the_judgment_node_owns_the_priority_score(self) -> None:
+        assert owns(PipelineStage.classify_rollup, "priority")

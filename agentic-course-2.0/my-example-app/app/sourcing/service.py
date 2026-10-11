@@ -10,7 +10,7 @@ The service owns the transaction; the repository below it flushes and never comm
 lives here — T5 builds the runner that calls these three methods in order.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date, timedelta
 from uuid import UUID
 
@@ -178,18 +178,20 @@ class SourcingService:
         *,
         size: int,
         currency_cutoff: date,
+        exclude: Collection[str] = frozenset(),
     ) -> PoolSelection:
         """Refresh the vertical's backlog from this run's pull, then take this run's batch (D12).
 
         One commit for both, so a refreshed pool with no batch marked — or a batch marked against a
-        refresh that never landed — cannot be left behind.
+        refresh that never landed — cannot be left behind. ``exclude`` is never selected: the caller
+        passes the registry ids qualification rejected, so sourcing need not know why.
         """
         run = await self._require_running(run_id, action="refresh_pool_and_select")
         pool = PoolRepository(self._session)
         new = await pool.refresh(run.vertical, run.id, records)
-        available = await pool.count_available(run.vertical, run.id)
+        available = await pool.count_available(run.vertical, run.id, exclude=exclude)
         selected = await pool.select_batch(
-            run.vertical, run.id, size=size, currency_cutoff=currency_cutoff
+            run.vertical, run.id, size=size, currency_cutoff=currency_cutoff, exclude=exclude
         )
         await self._session.commit()
 

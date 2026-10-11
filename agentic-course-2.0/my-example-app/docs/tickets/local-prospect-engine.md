@@ -151,7 +151,7 @@ E10 · **SPIKE-2 result** (below).
 
 **Built 2026-10-10** (plan `.claude/plans/t5-pipeline-fmcsa.md`). What T7, T6 and the first live run need to know:
 - **The backlog is its own table**, `sourcing_pool` (migration `0006`), keyed `(vertical, registry_id)`; each run's batch becomes ordinary `candidate` rows. A failed or reaped run hands its batch back.
-- **T5 fetches, T7 decides.** QCMobile and revocations are stored as cited `CandidateFields.source_records`; nothing is dropped after the pool. **T7: read *Contract with T7* in `app/sourcing/README.md`** — where rule fields live, `str|int` values, the null semantics the pushdown uses, the suppression key.
+- **T5 fetches, T7 decides.** QCMobile and revocations are stored as cited `CandidateFields.source_records`; T7's free predicates run on them at the end of the stage (Phase 6). *Contract with T7* in `app/sourcing/README.md` is confirmed: where rule fields live, `str|int` values, the shared null semantics, the suppression key.
 - **Census predicates are pushed down to SoQL** in T5. Freight v3's five census rules leave **4,464** rows live (2026-10-10; 4,449 by hand on 10-09).
 - **FMCSA moved to Motus on 2026-05-14.** Freight v3 declares the frozen legacy revocations file (`rwr4-5nkg`); T5 binds only Motus RevokeSuspend (`wb4f-neki`). Freight v4 onwards point revocations at `https://data.transportation.gov/d/wb4f-neki`.
 - **Without an FMCSA webKey** runs refuse before taking a batch (PR #21 review M1); `--allow-degraded` runs anyway, without `allowedToOperate`. **Settled live 2026-10-10:** QCMobile says `allowedToOperate`, not the docs' `allowToOperate`. Freight v4 (`9c2d4a48…`, Motus revocations) kept the wrong spelling; v5 (`6454f442…`) fixed it.
@@ -197,6 +197,24 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
 
 **Per-ticket context:** E7 · E9 · architecture → *Missing pieces* ("a rollup-vs-local classifier") · M6 ·
 PRD §4 WRONG condition (founder rejects ≥30% → qualification judgment cannot be encoded).
+- **Decided while planning (2026-10-10):** T7 owns the evaluator and wires it into T5's backlog and batch
+  selection **at merge** (one evaluator, never two). The dry-run reads **local bulk-file extracts**
+  (`--source-file fmcsa=census.csv`); rules on per-record APIs are reported, not called. `classify_rollup` gets
+  WebSearch + WebFetch, its citations held to verified reads by the read tracker, now in `app/shared/`. Rules gain an
+  optional `source` (default: the first declared). Suppression is keyed on `(vertical, registry_id)`, because every
+  run writes new candidate rows. M6's <5% is an opt-in `live` eval on a founder-labelled set; replay proves wiring.
+- **Wired at merge (Phase 6, 2026-10-10)**, re-scoped to T5 as built. **Decided by the owner:**
+  - a negated operator **fires** on a field absent from a found record, matching T5's SoQL pushdown (a parity
+    test pins it); a missing record never disqualifies;
+  - the free predicates run **at the end of `search_registry`**, before any paid step.
+
+  Built:
+  - `records_from` bridges `source_records` to `RecordSet`;
+  - selection skips suppressed ids;
+  - a rule routed to the census on a field the census lacks refuses the run before any batch.
+
+  **Freight v6 is that case.** Its QCMobile rules have no `source`, so a **freight v7** with
+  `source: fmcsa_qcmobile` (then a dry-run, then activation) must come before the next run.
 **Files:** `app/qualification/*`, `app/tools/classify_rollup.py`, `alembic/versions/`, `tests/qualification/`
 **Size:** ~900–1300 lines · **Depends on:** T2, T4 · **Parallel with:** T5, T6, T8. In the run, the judgment call consumes T6's verified fields; that is a data contract on `candidate` (T4), so it is not a build dependency.
 

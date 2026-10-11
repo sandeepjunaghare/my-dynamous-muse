@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.manifests.service import ManifestService
 from tests.conftest import requires_db
-from tests.manifests.builders import a_body, a_vertical
+from tests.manifests.builders import a_body, a_vertical, dry_run_recorded
 
 pytestmark = requires_db
 
@@ -38,6 +38,7 @@ class TestListManifests:
         service = ManifestService(db_session)
         vertical = a_vertical()
         draft = await service.create_draft(vertical, a_body())
+        await dry_run_recorded(db_session, draft.id)
         await service.activate(draft.id, frozenset({"fmcsa"}), "sandeep")
 
         drafts = await client_with_db.get(
@@ -63,6 +64,7 @@ class TestGetActive:
         service = ManifestService(db_session)
         vertical = a_vertical()
         draft = await service.create_draft(vertical, a_body())
+        await dry_run_recorded(db_session, draft.id)
         await service.activate(draft.id, frozenset({"fmcsa"}), "sandeep")
 
         response = await client_with_db.get(f"/manifests/active/{vertical}")
