@@ -1111,9 +1111,9 @@ reports no drift. A live geocode of Dallas City Hall returned 32.7767, −96.795
 a typed helper.
 **Improve / follow-ups:**
 - [ ] **At merge:** re-chain `0007_routing.down_revision` onto T5's `0006_sourcing_pool`.
-- [ ] **After T5 merges:** T5 adds `StageResult.degraded_reason`. Routing should set it when
+- [x] **After T5 merges:** T5 adds `StageResult.degraded_reason`. Routing should set it when
   `routing_geocode_failed > 0`, so a partial geocode shows on the run as `degraded` rather than only in the counts.
-- [ ] **T9/T10:** route only qualified candidates, and decide whether to re-route after disqualification. Until then a
+- [x] **T9/T10:** *(handed over: now in T9/T10 acceptance criteria)* route only qualified candidates, and decide whether to re-route after disqualification. Until then a
   batch of 150 makes ~13 routes, not 2.
 
 
@@ -1141,3 +1141,25 @@ behaviour before the fix; the M1 log line showed `routing_clusters=0` committed 
 `def`. A fixture in `tests/routing/conftest.py` is not visible to `tests/tools/`, so the stage test closes its own mock.
 **Improve:** the original all-failed test exercised only the one branch that worked (503s). Test a rule across every
 input class it claims to cover, not just the first one that comes to mind.
+
+
+## T8 follow-ups after merge: degraded on failed geocodes, hand-over to T9/T10 (2026-10-10)
+
+PR #19 merged as `a218da9` (with `0007_routing` re-chained onto `0006_sourcing_pool`). Two of its three follow-ups land
+here; the third, the composite foreign key, stays parked on **#20** until T7 merges.
+
+- [x] `cluster_routes` sets `StageResult.degraded_reason` when `routing_geocode_failed > 0` ("1 of 3 geocode(s) failed;
+  those candidates are on no route"), so the runner finishes the run `degraded`. Unmatched and ambiguous never degrade.
+- [x] Tests: a partial failure is degraded, an unmatched address is not, and a clean run has no reason.
+- [x] Tickets doc: the qualified-only rule added to T9's and T10's acceptance criteria, where their planners will read
+  it. Routing README updated.
+- [x] Validate, commit, PR.
+
+**Review:** the reason is computed in the stage from the service's counts, so `RoutingService` is unchanged.
+**Worked:** test-first. The degraded test failed (no reason) before the change and passed after.
+**Improve:** a decision that binds a later ticket belongs in that ticket's acceptance criteria from the start, not
+only in the ticket that made it.
+
+**PR #25 review** (`.claude/code-reviews/pr-25-review.md`): approve, 4 Low. Fixed L1 (the unmatched test now also
+scripts an ambiguous match and asserts `failed == 0` and no reason) and L2 (one `_run_stage` helper replaces the
+three copies of setup). L3 wording and L4 key coupling left as noted; both optional.

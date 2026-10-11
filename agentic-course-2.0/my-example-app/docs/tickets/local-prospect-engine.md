@@ -229,6 +229,7 @@ hand today") · PRD §6 step 5.
 - Create Company + Contact at a **`pending review`** stage with the custom properties from T3 — review happens in HubSpot; there is no frontend and no second login.
 - `promotion` ledger: candidate → the HubSpot company/contact ids it became. Idempotent: re-running promotes nothing twice.
 - **Hands off to T11** for the cadence: promotion's job ends when the record exists and the first touch has been requested.
+- **Routes carry only qualified candidates** *(handed over from T8, 2026-10-10)*. T8 routes every candidate with a verified address and does not read T7's `disqualification`, so `route_assignment` holds disqualified doors too. Whatever promotion attaches a route to, or shows a founder, reads only qualified candidates' rows. Filtering `route_assignment` by qualification is not enough on its own, because the remaining routes are then lopsided; T10 decides whether to re-route instead.
 - **Adopted contacts (T13) already exist in HubSpot and carry no provenance.** The first field write to one of them cites `retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's create date — honest, not an exemption *(moved here from T13, 2026-10-10)*.
 
 **Per-ticket context:** `.claude/references/hubspot-integration.md` · architecture → *Review surface: HubSpot,
@@ -300,6 +301,7 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 - Friday report: the four numbers unchanged from the playbook — doors knocked · owner conversations · assessments booked · paid assessments sold — read from HubSpot, not from a spreadsheet.
 - **M3 renders `not configured`, never `0`** — the `$999 assessment` pipeline does not exist and we have decided not to create it (D10, GATE-A). An uninstrumented zero and a real zero are different facts.
 - Failure semantics: a degraded enrichment run still promotes what it can cite, and says what it dropped.
+- **Routes after qualification** *(handed over from T8, 2026-10-10)*. `cluster_routes` routes every verified address, disqualified or not. Before routes reach a founder, decide and build one: run `cluster_routes` after qualification over qualified candidates only, or re-run it once qualification is done. The stage replaces its rows, so a re-run is cheap. Geocodes that failed already finish the run `degraded` with a count; the Friday report should surface that, not hide it.
 - **Before the first real run (Spike 1 checkpoint, 2026-10-09):** read M5 on the T13-adopted prospects. If touches still are not getting done with the machine running, fix that before the run adds volume. This is a human check, not a code gate.
 
 **Per-ticket context:** PRD §6 steps 1–8 · M7 · architecture → *Scheduling: boring on purpose*, *Cost* ·
