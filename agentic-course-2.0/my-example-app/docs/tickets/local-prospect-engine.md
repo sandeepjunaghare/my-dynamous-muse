@@ -138,7 +138,7 @@ declarative manifest, not code* and *Missing pieces* · PRD §6 portability tabl
 - **FMCSA adapter, census-file-first.** QCMobile is a *lookup* API keyed on USDOT/MC, not a search-by-geography API — so: pull the bulk Company Census File, filter to DFW counties + active broker authority, then QCMobile per record for MC number, authority status, fleet size, BOC-3 filings. (E10: this is the exact judgment whose absence produced a 74-row file of BOC-3 process agents instead of brokers.)
 - Brief → `sourcing_run` → candidates persisted with provenance on every field.
 - **The backlog and the batch (D12, 2026-10-09).** The census filter runs over the whole pool once (4,449 for freight v3) and persists it. Each run then selects a **fixed batch** (setting, default 150) **best first**, with a deterministic order: current MCS-150 filing (within 2 years) first, then a named `company_officer_1`, then the stable tie-breaker. Selected candidates are marked so a candidate is never batched twice, and the pool works down run over run. **Test:** two runs over one fixture pool select disjoint batches in the same order every time.
-- **Free checks before anything paid (D8):** QCMobile `allowToOperate` and the revocations join run on the batch in code, not by a model. They need a free FMCSA webKey. **`power_units` and other numeric census fields arrive as text**, so cast them at the adapter.
+- **Free checks before anything paid (D8):** QCMobile `allowedToOperate` and the revocations join run on the batch in code, not by a model. They need a free FMCSA webKey. **`power_units` and other numeric census fields arrive as text**, so cast them at the adapter.
 - **Portability test:** pointing the same stage at the fire manifest hits the fire source with **no code change** (stub source in tests).
 - **Determinism test:** same fixture input → identical candidate set and ordering across runs.
 - Recorded fixtures; no live network in tests.
@@ -153,8 +153,8 @@ E10 · **SPIKE-2 result** (below).
 - **The backlog is its own table**, `sourcing_pool` (migration `0006`), keyed `(vertical, registry_id)`; each run's batch becomes ordinary `candidate` rows. A failed or reaped run hands its batch back.
 - **T5 fetches, T7 decides.** QCMobile and revocations are stored as cited `CandidateFields.source_records`; nothing is dropped after the pool. **T7: read *Contract with T7* in `app/sourcing/README.md`** — where rule fields live, `str|int` values, the null semantics the pushdown uses, the suppression key.
 - **Census predicates are pushed down to SoQL** in T5. Freight v3's five census rules leave **4,464** rows live (2026-10-10; 4,449 by hand on 10-09).
-- **FMCSA moved to Motus on 2026-05-14.** Freight v3 declares the frozen legacy revocations file (`rwr4-5nkg`); T5 binds only Motus RevokeSuspend (`wb4f-neki`). **A freight v4 pointing revocations at `https://data.transportation.gov/d/wb4f-neki` is needed before the first live run.**
-- **No FMCSA webKey yet:** runs refuse before taking a batch (PR #21 review M1, fixed in a follow-up); `--allow-degraded` runs anyway, without `allowToOperate`. Once one exists, capture a real `/carriers/{dot}` answer — the docs say `allowToOperate`, v3's rule says the same, and neither is verified live.
+- **FMCSA moved to Motus on 2026-05-14.** Freight v3 declares the frozen legacy revocations file (`rwr4-5nkg`); T5 binds only Motus RevokeSuspend (`wb4f-neki`). Freight v4 points revocations at `https://data.transportation.gov/d/wb4f-neki` (draft, 2026-10-10).
+- **Without an FMCSA webKey** runs refuse before taking a batch (PR #21 review M1); `--allow-degraded` runs anyway, without `allowedToOperate`. **Settled live 2026-10-10:** QCMobile says `allowedToOperate`, not the docs' `allowToOperate`. Freight v4 (`9c2d4a48…`, Motus revocations) kept the wrong spelling; **freight v5 (`6454f442…`) fixes it and is the one to activate.**
 - One QCMobile call per candidate (`/carriers/{dot}`), not three: no rule reads `/authority` or `/docket-numbers`.
 
 ---
@@ -185,7 +185,7 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
 - Disqualifier rule engine driven entirely by the manifest (no rule literals in the slice). Free, and runs before anything billable. **What the evaluator has to handle, from the freight v3 review:**
   - **All the operators,** including `not_contains` and `not_in_set` (PRs #10, #11).
   - **Casts:** census numerics such as `power_units` arrive as text.
-  - **A field's source:** `allowToOperate` lives in QCMobile, not the census, so a predicate needs to know which source its field comes from.
+  - **A field's source:** `allowedToOperate` lives in QCMobile, not the census, so a predicate needs to know which source its field comes from.
   - **Joins:** `authority_revoked` is a join against the revocations dataset, so give it a mechanical path rather than a model call.
 - Stage 4 of 5: `classify_rollup_vs_local`, **the second Agent SDK judgment node**, with a citation attached to the verdict. **One call per candidate decides every judgment rule in the manifest** (D12), e.g. rollup, `self_employed_shell` and `authority_revoked`'s reason, never one call per rule. It reads T6's Places response as evidence, in the same run, and discards it afterwards (D13). Only the verdict and its citation are stored. ~$0.08 a candidate, measured.
 - `disqualification` table: candidate + the rule that fired + when. **Re-source suppression:** a disqualified candidate is not re-sourced next run — tested across two runs. This is the thing a HubSpot-only model cannot do.

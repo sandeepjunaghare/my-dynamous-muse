@@ -107,7 +107,7 @@ def pushdown_where(
 ) -> Pushdown:
     """Translate every predicate rule on one of ``columns`` into a ``$where``, in rule order.
 
-    Judgment rules and rules on other fields (``allowToOperate`` lives in QCMobile, not the
+    Judgment rules and rules on other fields (``allowedToOperate`` lives in QCMobile, not the
     census) are not this dataset's to apply, and appear in neither list.
     """
     clauses: list[str] = []

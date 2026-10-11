@@ -15,7 +15,7 @@ table this stage is built with.
 4. **Record** each candidate, its identity cited to the registry and every source's raw record
    cited to that source.
 
-It decides nothing. ``allowToOperate`` and the revocations are *evidence*, stored for T7's rule
+It decides nothing. ``allowedToOperate`` and the revocations are *evidence*, stored for T7's rule
 evaluator; no candidate is dropped after the pool.
 
 **A batch is never spent without its evidence unless someone said so** (PR #21 review, M1). A

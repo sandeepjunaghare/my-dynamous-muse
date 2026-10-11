@@ -69,7 +69,7 @@ through the paid steps. The batch size, not the pool size, sets the bill (~$25â€
 150). Disqualified candidates are suppressed (T7), so the pool works down and new registrations top it up.
 Inside a batch the order is **free before paid, and cheaper paid before dearer paid**:
 
-1. **Free:** census predicates, then QCMobile `allowToOperate` and the revocations join, done in code, never by a model.
+1. **Free:** census predicates, then QCMobile `allowedToOperate` and the revocations join, done in code, never by a model.
 2. **Cheapest paid:** a Places **check** (Pro tier, inside the 5,000 a month free at a batch of 150). It confirms the census record is a real, operating business, and the response is the evidence the next step reads. It is **used and discarded, never stored** (D13).
 3. **Dearest paid:** **one** `classify_rollup` call per candidate covering every judgment rule (~$0.08, measured
    from the live `propose` run at ~$0.02 a turn).

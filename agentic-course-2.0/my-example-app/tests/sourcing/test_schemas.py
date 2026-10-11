@@ -329,9 +329,9 @@ class TestSourceRecords:
             SourceRow(values=((" ", "B"),))
 
     def test_get_returns_the_stated_value_or_none(self) -> None:
-        row = SourceRow(values=(("allowToOperate", "Y"),))
-        assert row.get("allowToOperate") == "Y"
-        assert row.get("outOfService") is None
+        row = SourceRow(values=(("allowedToOperate", "Y"),))
+        assert row.get("allowedToOperate") == "Y"
+        assert row.get("allowToOperate") is None
 
     def test_empty_rows_mean_looked_and_found_nothing(self) -> None:
         """Distinct from an absent record, which means never looked."""
