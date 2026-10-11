@@ -967,7 +967,8 @@ T9 is blocked on T7 and T8, so the parallel set is T5 ∥ T7 ∥ T8; T9 follows 
   - an empty `STAGES` registry, where adding a stage is a one-line append;
   - a structure test checking that every registered stage is a `PipelineStage` and that no stage is registered twice.
   - About 60 lines, and green under `/piv-validate`.
-- [ ] **2. Three worktrees** (`/worktree-create`) from the updated `main`: `feat/t5-pipeline-fmcsa`, `feat/t7-qualification`, `feat/t8-routing`.
+- [x] **2. Three worktrees** (`/worktree-create`) from the updated `main`: `feat/t5-pipeline-fmcsa`, `feat/t7-qualification`, `feat/t8-routing`.
+  - Done 2026-10-10, cut from `5a80710`, at `my-dynamous-muse/worktrees/{t5,t7,t8}`: the git toplevel, not the app folder, so `mypy .` in the main checkout never scans them. App dir: `<worktree>/agentic-course-2.0/my-example-app`. In each: `.env` copied, `uv sync`, ruff, mypy and pyright clean, pytest 455 passed and 235 skipped (no database).
 - [ ] **3. In each worktree:**
   - `/piv-plan-implementation` for its ticket, with the plan in `.claude/plans/`;
   - I review each plan **before** implementation starts;
