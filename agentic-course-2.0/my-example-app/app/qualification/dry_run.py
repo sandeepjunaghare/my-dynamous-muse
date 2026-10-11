@@ -49,6 +49,9 @@ _LITERAL_OPERATORS = frozenset(
 
 _HASH_CHUNK = 1 << 20
 
+_ID_SUFFIXES = ("_id", "_number", "_no")
+"""Column-name endings that mark an identifier, for :func:`_row_id_column`."""
+
 
 @dataclass
 class _Tally:
@@ -120,6 +123,21 @@ def _check_files(manifest: ManifestResponse, files: Mapping[str, Path]) -> None:
         )
 
 
+def _row_id_column(columns: Sequence[str]) -> str:
+    """The column a sample row is labelled by: the first that is named like an identifier.
+
+    Not simply the first column: Socrata's census export leads with ``mcs150_date``, so samples were
+    labelled by a filing date a person cannot look a business up by. Chosen by name alone, so no
+    source is named here; falls back to the first column when none looks like an identifier. The
+    report records which column it used.
+    """
+    for column in columns:
+        lowered = column.lower()
+        if lowered == "id" or lowered.endswith(_ID_SUFFIXES):
+            return column
+    return columns[0]
+
+
 def _run_source(
     name: str, path: Path, tallies: Sequence[_Tally], *, samples: int
 ) -> tuple[DryRunSourceFile, frozenset[str]]:
@@ -141,7 +159,7 @@ def _run_source(
             raise DryRunSourceError(
                 f"{path.name} repeats header column(s): {', '.join(duplicates)}", source_name=name
             )
-        row_id_column = columns[0]
+        row_id_column = _row_id_column(columns)
         for raw in reader:
             if not any(cell.strip() for cell in raw):
                 continue  # a blank line is not a row, and must not inflate the pool

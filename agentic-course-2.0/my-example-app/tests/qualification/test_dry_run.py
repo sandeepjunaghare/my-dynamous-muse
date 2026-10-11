@@ -174,6 +174,24 @@ class TestRefusals:
         assert report.files[0].row_id_column == "dot_number"
         assert all(DryRunFlag.unknown_field not in step.flags for step in report.steps)
 
+    def test_rows_are_labelled_by_the_first_identifier_column(self, tmp_path: Path) -> None:
+        """Socrata's census export leads with ``mcs150_date``; a date identifies no business."""
+        extract = tmp_path / "socrata_order.csv"
+        extract.write_text(
+            "mcs150_date,add_date,status_code,dot_number,phy_cnty,carship,power_units\n"
+            "20250328,20200101,A,1000001,201,C;B,4\n",
+            encoding="utf-8",
+        )
+        report = dry_run(a_manifest(a_body_with(*FREIGHT_V3_PREDICATES)), {"fmcsa": extract})
+        assert report.files[0].row_id_column == "dot_number"
+        assert [s.row_id for s in _step(report, "outside_dfw_metro").removed_samples] == ["1000001"]
+
+    def test_with_no_identifier_column_rows_are_labelled_by_the_first(self, tmp_path: Path) -> None:
+        extract = tmp_path / "no_id.csv"
+        extract.write_text("phy_cnty,carship,power_units\n201,C;B,4\n", encoding="utf-8")
+        report = dry_run(a_manifest(a_body_with(*FREIGHT_V3_PREDICATES)), {"fmcsa": extract})
+        assert report.files[0].row_id_column == "phy_cnty"
+
     def test_blank_lines_are_not_rows(self, tmp_path: Path) -> None:
         """A blank line would otherwise join the pool and skew the numbers a person reconciles."""
         extract = tmp_path / "blank.csv"
