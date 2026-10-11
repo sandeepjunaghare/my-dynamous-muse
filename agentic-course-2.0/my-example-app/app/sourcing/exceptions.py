@@ -80,3 +80,22 @@ class SourceAuthError(SourceRequestError):
     """
 
     default_code: ClassVar[str] = "source_auth_failed"
+
+
+class SourceUnavailableError(SourcingError):
+    """A source the manifest declares cannot run here, and the run was not told to go on without it.
+
+    Raised by ``search_registry`` **before** a batch is taken when a recognised source is
+    unavailable (no webKey), and mid-batch when a key is refused. A batch taken without its free
+    evidence is never looked up again — nothing re-asks QCMobile about a candidate already
+    batched — so the default is to fail the run, which leaves the backlog untouched (or hands the
+    batch back).
+    ``--allow-degraded`` is the explicit choice to spend the batch anyway (PR #21 review, M1).
+    """
+
+    default_code: ClassVar[str] = "source_unavailable"
+    status_code: ClassVar[int] = 409
+
+    def __init__(self, message: str, *, reasons: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.reasons = reasons

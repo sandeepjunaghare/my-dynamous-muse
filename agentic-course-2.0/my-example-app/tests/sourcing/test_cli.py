@@ -114,10 +114,27 @@ class TestRun:
     ) -> None:
         monkeypatch.setenv("FMCSA_WEBKEY", "")
         get_settings.cache_clear()
-        assert main(["sourcing", "run", "--vertical", committed_freight]) == 0
+        assert main(["sourcing", "run", "--vertical", committed_freight, "--allow-degraded"]) == 0
         captured = capsys.readouterr()
         assert "degraded" in captured.out
         assert "warning:" in captured.err and "FMCSA_WEBKEY" in captured.err
+
+    def test_an_unusable_source_is_refused_without_allow_degraded(
+        self,
+        committed_freight: str,
+        mock_registry: MockFmcsa,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """M1: the batch is not spent without its evidence unless the person says so."""
+        monkeypatch.setenv("FMCSA_WEBKEY", "")
+        get_settings.cache_clear()
+        assert main(["sourcing", "run", "--vertical", committed_freight]) == 1
+        err = capsys.readouterr().err
+        (message,) = [line for line in err.splitlines() if line.startswith("error: ")]
+        assert "FMCSA_WEBKEY is not set" in message
+        assert "--allow-degraded" in message
+        assert mock_registry.requests == []
 
     def test_a_vertical_with_no_active_manifest_is_one_line_not_a_traceback(
         self, cli_database: str, mock_registry: MockFmcsa, capsys: pytest.CaptureFixture[str]

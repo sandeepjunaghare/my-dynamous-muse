@@ -123,7 +123,8 @@ The cadence is synced **daily by an external launchd job**, not by the weekly ru
 plain enrol command by design — adoption reconstructs, and T9 enrols in code).
 
 Sourcing is run by hand until T10's `POST /runs` (T5): `uv run lpe sourcing run --vertical <slug> [--batch-size N]`
-— ACTIVE manifests only; without `FMCSA_WEBKEY` the run ends `degraded` (no QCMobile evidence).
+— ACTIVE manifests only. Without `FMCSA_WEBKEY` it refuses before taking a batch; `--allow-degraded` spends the
+batch without QCMobile evidence, which is never looked up again.
 
 Database-backed tests need a throwaway Postgres and skip without one:
 `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·

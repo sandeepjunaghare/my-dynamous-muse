@@ -4,6 +4,10 @@ The same pipeline T10 will trigger weekly: refresh the vertical's backlog from i
 batch best first, gather the free evidence, record cited candidates. It runs under the vertical's
 **ACTIVE** manifest only — a draft is refused, because nobody has decided its sources' terms.
 
+``--allow-degraded`` is the one way to spend a batch without a declared source's evidence (no
+webKey): without it, the run refuses before taking a batch, because a candidate already batched is
+never looked up again.
+
 The brief's ICP band is the active manifest's own: the CLI asks for "the vertical's run", and a
 band typed here would only be recorded, never applied (T7 reconciles bands).
 """
@@ -55,6 +59,14 @@ def register(parser: argparse.ArgumentParser) -> None:
         metavar="N",
         help="candidates to take from the backlog this run (default SOURCING_BATCH_SIZE, 150)",
     )
+    run.add_argument(
+        "--allow-degraded",
+        action="store_true",
+        help=(
+            "go on when a declared source cannot run (e.g. no FMCSA_WEBKEY); the batch is used up "
+            "without that source's evidence and is never looked up again"
+        ),
+    )
 
 
 def dispatch(args: argparse.Namespace) -> int:
@@ -64,28 +76,29 @@ def dispatch(args: argparse.Namespace) -> int:
         vertical: str = args.vertical
         geography: str = args.geography
         batch_size: int | None = args.batch_size
-        return asyncio.run(_run(vertical, geography, batch_size))
+        allow_degraded: bool = args.allow_degraded
+        return asyncio.run(_run(vertical, geography, batch_size, allow_degraded))
     raise AssertionError(f"unreachable: argparse accepted unknown subcommand {subcommand!r}")
 
 
-def _stages(batch_size: int | None) -> tuple[Stage, ...]:
-    """Every registered stage, with ``search_registry`` rebuilt for a batch size given here."""
-    if batch_size is None:
-        return registered_stages()
+def _stages(batch_size: int | None, allow_degraded: bool) -> tuple[Stage, ...]:
+    """Every registered stage, ``search_registry`` carrying this run's options."""
     return tuple(
-        stage.with_batch_size(batch_size) if isinstance(stage, SearchRegistryStage) else stage
+        stage.configured(batch_size=batch_size, allow_degraded=allow_degraded)
+        if isinstance(stage, SearchRegistryStage)
+        else stage
         for stage in registered_stages()
     )
 
 
-async def _run(vertical: str, geography: str, batch_size: int | None) -> int:
+async def _run(vertical: str, geography: str, batch_size: int | None, allow_degraded: bool) -> int:
     try:
         async with get_sessionmaker()() as session:
             manifest = await ManifestService(session).get_active(vertical)
         brief = SourcingBrief(
             vertical=vertical, geography=geography, icp_band=manifest.body.icp_band.value
         )
-        run = await SourcingPipeline(stages=_stages(batch_size)).run(brief)
+        run = await SourcingPipeline(stages=_stages(batch_size, allow_degraded)).run(brief)
     finally:
         await dispose_engine()
     _print(run)
