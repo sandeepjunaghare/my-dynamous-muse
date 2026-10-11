@@ -138,7 +138,7 @@ declarative manifest, not code* and *Missing pieces* · PRD §6 portability tabl
 - **FMCSA adapter, census-file-first.** QCMobile is a *lookup* API keyed on USDOT/MC, not a search-by-geography API — so: pull the bulk Company Census File, filter to DFW counties + active broker authority, then QCMobile per record for MC number, authority status, fleet size, BOC-3 filings. (E10: this is the exact judgment whose absence produced a 74-row file of BOC-3 process agents instead of brokers.)
 - Brief → `sourcing_run` → candidates persisted with provenance on every field.
 - **The backlog and the batch (D12, 2026-10-09).** The census filter runs over the whole pool once (4,449 for freight v3) and persists it. Each run then selects a **fixed batch** (setting, default 150) **best first**, with a deterministic order: current MCS-150 filing (within 2 years) first, then a named `company_officer_1`, then the stable tie-breaker. Selected candidates are marked so a candidate is never batched twice, and the pool works down run over run. **Test:** two runs over one fixture pool select disjoint batches in the same order every time.
-- **Free checks before anything paid (D8):** QCMobile `allowedToOperate` and the revocations join run on the batch in code, not by a model. They need a free FMCSA webKey. **`power_units` and other numeric census fields arrive as text**, so cast them at the adapter.
+- **Free checks before anything paid (D8):** QCMobile `allowedToOperate` (a `"Y"`/`"N"` string, so cast it like the census numerics) and the revocations join run on the batch in code, not by a model. They need a free FMCSA webKey. **`power_units` and other numeric census fields arrive as text**, so cast them at the adapter.
 - **Portability test:** pointing the same stage at the fire manifest hits the fire source with **no code change** (stub source in tests).
 - **Determinism test:** same fixture input → identical candidate set and ordering across runs.
 - Recorded fixtures; no live network in tests.
@@ -446,8 +446,8 @@ against a guess.
 - **Who rewrites the opener, and by when** (E16) — blocks the email leg, not any ticket here, because
   nothing sends.
 
-**Credentials:** HubSpot private app token ✅ · Anthropic API key ✅ · FMCSA webkey ❌ (free, ~2 min; not
-needed if SPIKE-2 runs against the census file) · Google Places ❌ (needs a GCP project with billing; not
+**Credentials:** HubSpot private app token ✅ · Anthropic API key ✅ · FMCSA webkey ✅ (in `.env` as `FMCSA_WEBKEY`, checked against QCMobile 2026-10-10) ·
+Google Places ❌ (needs a GCP project with billing; not
 needed until T6, which builds against fixtures).
 
 **Deliberately absent, and staying absent:** Redis · Langfuse · Celery/queues · the template's Vite/React
