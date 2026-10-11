@@ -10,7 +10,7 @@ asked only about the batch.
 legacy "Revocation - All With History" dataset (``sa6p-acbp``, blob ``rwr4-5nkg``) has not been
 updated since, so it is deliberately *not* bound: a frozen list reads as "no revocations", which is
 the one wrong answer that looks right. Only Motus RevokeSuspend (``wb4f-neki``) binds. Freight v3
-declares the legacy blob, so under v3 the join is unbound and a v4 is needed (see the T5 plan).
+declares the legacy blob, so under v3 the join is unbound; v4 onwards declare Motus (v6 is active).
 
 Shapes, read live 2026-10-10:
 
