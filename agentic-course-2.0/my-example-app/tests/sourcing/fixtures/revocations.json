@@ -1,0 +1,31 @@
+[
+  {
+    "docket_number": "MC-900003",
+    "usdot_number": "1000003",
+    "op_auth_type": "Broker of Property (Except Household Goods)",
+    "order1_serve_date": "20260521",
+    "order1_type_desc": "Operating Authority Involuntary Suspension Notice",
+    "order1_effective_date": "20260620"
+  },
+  {
+    "docket_number": "MC-900003",
+    "usdot_number": "1000003",
+    "op_auth_type": "Broker of Property (Except Household Goods)",
+    "order1_serve_date": "20260521",
+    "order1_type_desc": "Operating Authority Involuntary Suspension Notice",
+    "order1_effective_date": "20260620"
+  },
+  {
+    "usdot_number": "1000003",
+    "order1_serve_date": "20260827",
+    "order1_type_desc": "Notice Of Operating Authority Voluntary Suspension"
+  },
+  {
+    "docket_number": "MC-900005",
+    "usdot_number": "1000005",
+    "op_auth_type": "Broker of Property (Except Household Goods)",
+    "order1_serve_date": "20251001",
+    "order1_type_desc": "Operating Authority Revocation",
+    "order1_effective_date": "20251101"
+  }
+]

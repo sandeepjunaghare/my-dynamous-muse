@@ -41,3 +41,61 @@ class SourcingRunNotRunningError(SourcingError):
         super().__init__(message)
         self.run_id = run_id
         self.status = status
+
+
+class NoRegistrySourceError(SourcingError):
+    """The manifest binds no discovery source, or more than one.
+
+    Every candidate comes from the one registry a manifest names (D13 rule 3: Places never
+    discovers). Zero means nothing to search; two would mean two pools with no rule for merging
+    them. Either way the manifest needs fixing, not the run retrying.
+    """
+
+    default_code: ClassVar[str] = "no_registry_source"
+    status_code: ClassVar[int] = 409
+
+    def __init__(self, message: str, *, manifest_id: str, bound: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.manifest_id = manifest_id
+        self.bound = bound
+
+
+class SourceRequestError(SourcingError):
+    """A declared source failed after retries, or answered something unusable."""
+
+    default_code: ClassVar[str] = "source_request_failed"
+    status_code: ClassVar[int] = 502
+
+    def __init__(self, message: str, *, source: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.source = source
+        self.status = status
+
+
+class SourceAuthError(SourceRequestError):
+    """A source refused our credential, or we have none to send (QCMobile's webKey).
+
+    Distinct from a transient failure: retrying the next record will not help, so the stage stops
+    calling that source for the rest of the run and finishes ``degraded``.
+    """
+
+    default_code: ClassVar[str] = "source_auth_failed"
+
+
+class SourceUnavailableError(SourcingError):
+    """A source the manifest declares cannot run here, and the run was not told to go on without it.
+
+    Raised by ``search_registry`` **before** a batch is taken when a recognised source is
+    unavailable (no webKey), and mid-batch when a key is refused. A batch taken without its free
+    evidence is never looked up again — nothing re-asks QCMobile about a candidate already
+    batched — so the default is to fail the run, which leaves the backlog untouched (or hands the
+    batch back).
+    ``--allow-degraded`` is the explicit choice to spend the batch anyway (PR #21 review, M1).
+    """
+
+    default_code: ClassVar[str] = "source_unavailable"
+    status_code: ClassVar[int] = 409
+
+    def __init__(self, message: str, *, reasons: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.reasons = reasons

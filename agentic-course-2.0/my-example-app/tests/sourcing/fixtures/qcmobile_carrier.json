@@ -1,0 +1,28 @@
+{
+  "content": {
+    "_links": {
+      "self": {
+        "href": "https://mobile.fmcsa.dot.gov/qc/services/carriers/1000001"
+      }
+    },
+    "carrier": {
+      "allowToOperate": "Y",
+      "brokerAuthorityStatus": "A",
+      "commonAuthorityStatus": "N",
+      "dotNumber": 1000001,
+      "legalName": "ALPHA LOGISTICS LLC",
+      "outOfService": "N",
+      "phyCity": "ARLINGTON",
+      "phyState": "TX",
+      "totalPowerUnits": 0,
+      "totalDrivers": 0,
+      "isPassengerCarrier": false,
+      "oosDate": null,
+      "carrierOperation": {
+        "carrierOperationCode": "A",
+        "carrierOperationDesc": "Interstate"
+      }
+    }
+  },
+  "retrievalDate": "2026-10-10T12:00:00.000+0000"
+}

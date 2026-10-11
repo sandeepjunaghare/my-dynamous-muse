@@ -6,11 +6,11 @@ rows, so a candidate is on at most one route.
 
 Hand-written to match ``app/routing/models.py`` exactly, so ``alembic check`` stays clean.
 
-Pre-numbered for Wave 5 (T5 ``0006``, T8 ``0007``, T7 ``0008``). ``down_revision`` is the head at
-fork time; re-chain it onto T5's ``0006`` at merge.
+Pre-numbered for Wave 5 (T5 ``0006``, T8 ``0007``, T7 ``0008``), and chained onto T5's ``0006``
+when T8 merged.
 
 Revision ID: 0007_routing
-Revises: 0005_cadence
+Revises: 0006_sourcing_pool
 Create Date: 2026-10-10
 
 """
@@ -23,7 +23,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "0007_routing"
-down_revision: str | None = "0005_cadence"
+down_revision: str | None = "0006_sourcing_pool"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

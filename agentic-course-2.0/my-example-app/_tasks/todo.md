@@ -1016,6 +1016,74 @@ from a loaded module needs its own runtime check.
 
 ---
 
+# T5 — pipeline, `search_registry`, FMCSA adapter: plan (2026-10-10)
+
+**Plan:** `.claude/plans/t5-pipeline-fmcsa.md`, **awaiting human review before `/piv-implement`** (Wave 5 step 3).
+**Branch / worktree:** `feat/t5-pipeline-fmcsa` · test Postgres on **5434** · migration `0006_sourcing_pool`.
+
+**Decided with the human while planning:**
+- The backlog is a new `sourcing_pool` table keyed `(vertical, registry_id)`. A failed run's batch returns to the pool.
+- **T5 fetches, T7 decides.** QCMobile and revocations are stored as cited `CandidateFields.source_records`. T5
+  drops nothing after the pool. The plan's *Contract with T7* (where rule fields live, `str|int` values, null
+  semantics, the suppression key) must be read by T7's plan.
+- Census predicate rules are pushed down to SoQL in T5. `allowToOperate` is left for T7.
+- `lpe sourcing run` is added as the manual entry point before T10.
+
+**Found while planning (research 2026-10-10):**
+- FMCSA moved to **Motus** on 2026-05-14. The legacy revocation dataset freight v3 declares (`rwr4-5nkg` /
+  `sa6p-acbp`) is **frozen**. T5 binds only Motus RevokeSuspend `wb4f-neki`.
+- [ ] **Human, before the first live run:** freight v4 with revocations → `https://data.transportation.gov/d/wb4f-neki`
+  (and consider Motus Carrier `inys-ebih` for authority history)
+- [ ] **Human:** get the FMCSA webKey (Login.gov). Without it, runs end `degraded`. Then capture one real
+  `/carriers/{dot}` response to settle `allowToOperate` vs `allowedToOperate`
+- [ ] T7's plan confirms or objects to the pushdown null semantics
+
+**Closes deferred items:** #2 (`source_url` URL shape) · T4 review decisions 3 and 4 (crash path on a fresh
+session, DB-clock and conditional finish, stale-run reaper, `run_id` in the log context, `usdot:` namespacing).
+
+## T5 implementation (2026-10-10)
+
+- [x] Plan executed task by task on `feat/t5-pipeline-fmcsa`; report at `.claude/reports/t5-pipeline-fmcsa-report.md`
+- [x] Level 4 checked **before** coding, live and read-only: SoQL `contains()` and `::number` work; v3's `$where` → **4,464**; Motus `usdot_number` unpadded
+- [x] Validation: ruff, format, mypy, pyright clean; **816 passed, 0 skipped** with the DB (690 → 816); one migration head `0006_sourcing_pool`; `alembic check` clean
+- [x] Mutation check: 10 of 11 deliberate breaks caught (never-batched-twice, failed-run returns batch, rollback before finish, portability, best-first order, conditional finish, webKey in citation, stop after auth failure, reaper)
+- [x] Commit (`d4ed48f`), PR #21, review (`.claude/code-reviews/pr-21-review.md`): approve, 0 Critical/High, 1 Medium, 5 Low; merged on the human's call
+- [x] **M1** — fixed on `fix/t5-allow-degraded` (section below). Was: **decide before the first live run:** a `degraded` run keeps its batch, so with no webKey every live run would burn 150 candidates without `allowToOperate`. Recommended: refuse to batch when a recognised lookup source is unavailable, unless `--allow-degraded` is passed
+- [ ] PR #21 Lows, deferred: L1 orphan `running` if `ManifestService.get` fails after `start_run` · L2 unbound sources silent in the run output · L3 webKey as `SecretStr` and quiet the httpx logger · L4 build `PoolSelection` before commit · L5 weak tests
+- [ ] Untracked `.claude/plans/t8-route-clustering.md` sits in this worktree — not T5's; left alone, not committed
+
+### Review
+**Worked.** Hitting the live public endpoints before writing code (four `curl`s) turned the plan's top three risks into facts, and the
+fixtures copy real shapes. Mutation testing caught one test that could not fail as written (the "zero-padded" join) and one design point
+the plan overstated (below).
+**Didn't.** The one surviving mutation: finishing on the *same* session after the rollback also works, so no test can show the fresh
+session is needed — it only matters when the rollback itself fails (dropped connection). Kept as defence, docstring corrected, not claimed
+as tested. Two lint-guard surprises cost a round each: the event-name regex (`action_state` has exactly one underscore) and a `# pyright: ignore`
+written by reflex in a zero-suppression codebase.
+**Improve.** Plans should name the event-name guard's regex when they list log events, and the session-factory fixture should live in
+the root `tests/conftest.py` if a second package needs it.
+
+---
+
+# PR #21 M1: refuse to batch when a lookup source can't run, unless `--allow-degraded` (2026-10-10)
+
+**Why:** a `degraded` run keeps its batch, and nothing re-looks those candidates up. With no webKey yet, every
+live run would take 150 candidates without `allowToOperate` and move on. **Branch:** `fix/t5-allow-degraded` off `main` @ `ba5f76e`.
+
+- [x] `app/sourcing/exceptions.py`: `SourceUnavailableError` (409). It names the source and the reason, and tells the person to fix it or pass `--allow-degraded`
+- [x] `app/tools/search_registry.py`: `allow_degraded: bool = False`. After `bind_sources` and **before** the pull or pool refresh, raise if `bound.degraded` is non-empty, so the run is `failed` and no batch is taken. With the flag, today's behaviour. `with_batch_size` becomes `configured(batch_size=…, allow_degraded=…)`, which keeps the rest of the stage's configuration
+- [x] Refused key mid-batch (`SourceAuthError`): the same rule. Without the flag, re-raise → run `failed` → the batch goes back to the pool. With it, today's behaviour (stop asking, `degraded`). *(decided by the human: fail the run)*
+- [x] Sporadic per-candidate lookup failures (5xx after retries) stay `degraded` either way: a transient blip should not throw away a batch. Recorded as a known gap
+- [x] `app/sourcing/cli.py`: `--allow-degraded` flag, with help text naming the cost (the batch is used up without that evidence)
+- [x] Tests:
+  - [x] no webKey → `failed`, no batch taken (the next run takes the same entries), zero census or QCMobile calls
+  - [x] no webKey + flag → `degraded`, as today
+  - [x] refused key mid-batch → `failed`, batch returned / with the flag → `degraded`
+  - [x] CLI: refusal → exit 1 with one `error:` line naming `--allow-degraded`; flag → exit 0 with a warning
+  - [x] mutation-check the guard
+- [x] Docs: `app/sourcing/README.md` (the run section and the CLI), the T5 ticket note, the `CLAUDE.md` command line, and M1 ticked in this file
+- [x] `/piv-validate` → commit → PR. 820 passed, 0 skipped (816 + 4 new); ruff, mypy and pyright clean; 4 of 4 mutations of the guard caught
+
 # T8 — routing slice: DFW route clustering (2026-10-10)
 
 **Plan:** `.claude/plans/t8-route-clustering.md`. **Branch / worktree:** `feat/t8-routing` · test Postgres on
