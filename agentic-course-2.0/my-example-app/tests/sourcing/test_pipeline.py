@@ -11,7 +11,9 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select, text, update
 
+from app.core.config import get_settings
 from app.manifests.exceptions import ActiveManifestNotFoundError
+from app.sourcing.exceptions import SourceUnavailableError
 from app.sourcing.models import SourcingRun
 from app.sourcing.pipeline import SourcingPipeline
 from app.sourcing.schemas import CandidateResponse, RunStatus, SourcingRunResponse
@@ -35,13 +37,16 @@ def _webkey(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOCRATA_APP_TOKEN", "")
 
 
-def registry_stage(mock: MockFmcsa, batch_size: int = 3) -> SearchRegistryStage:
+def registry_stage(
+    mock: MockFmcsa, batch_size: int = 3, *, allow_degraded: bool = False
+) -> SearchRegistryStage:
     return SearchRegistryStage(
         transport=mock.transport(),
         clock=a_clock(),
         batch_size=batch_size,
         backoff_seconds=0.0,
         throttle=False,
+        allow_degraded=allow_degraded,
     )
 
 
@@ -247,15 +252,44 @@ class TestEvidence:
         assert len(mock.calls_to("az4n-8mr2")) == 1
         assert len(mock.calls_to("wb4f-neki")) == 1
 
-    async def test_no_webkey_is_degraded_and_candidates_are_still_recorded(
+    async def test_no_webkey_fails_the_run_before_any_batch_is_taken(
+        self, session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """M1: a batch spent without its QCMobile evidence is never looked up again, so without
+        ``--allow-degraded`` the run refuses before it pulls — the backlog is untouched."""
+        monkeypatch.setenv("FMCSA_WEBKEY", "")
+        vertical = await _freight(session_factory)
+        mock = MockFmcsa()
+        with pytest.raises(SourceUnavailableError, match="--allow-degraded") as refused:
+            await SourcingPipeline(session_factory, stages=[registry_stage(mock)]).run(
+                a_brief(vertical)
+            )
+        assert refused.value.reasons == ("fmcsa_qcmobile: FMCSA_WEBKEY is not set",)
+
+        (failed,) = await _runs(session_factory, vertical)
+        assert failed.status is RunStatus.failed
+        assert failed.status_detail is not None and "no batch was taken" in failed.status_detail
+        assert await _candidates(session_factory, failed) == []
+        assert mock.requests == []
+
+        monkeypatch.setenv("FMCSA_WEBKEY", TEST_WEBKEY)
+        get_settings.cache_clear()
+        retry = await SourcingPipeline(session_factory, stages=[registry_stage(MockFmcsa())]).run(
+            a_brief(vertical)
+        )
+        assert {c.registry_id for c in await _candidates(session_factory, retry)} == set(
+            BEST_FIRST[0:3]
+        )
+
+    async def test_no_webkey_with_allow_degraded_spends_the_batch_without_qcmobile(
         self, session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("FMCSA_WEBKEY", "")
         vertical = await _freight(session_factory)
         mock = MockFmcsa()
-        run = await SourcingPipeline(session_factory, stages=[registry_stage(mock)]).run(
-            a_brief(vertical)
-        )
+        run = await SourcingPipeline(
+            session_factory, stages=[registry_stage(mock, allow_degraded=True)]
+        ).run(a_brief(vertical))
 
         assert run.status is RunStatus.degraded
         assert run.status_detail is not None and "FMCSA_WEBKEY is not set" in run.status_detail
@@ -266,15 +300,39 @@ class TestEvidence:
             assert "fmcsa_qcmobile" not in sources
         assert mock.calls_to("/carriers/") == []
 
-    async def test_a_refused_key_mid_batch_stops_lookups_and_degrades(
+    async def test_a_refused_key_mid_batch_fails_the_run_and_returns_the_batch(
         self, session_factory: SessionFactory
     ) -> None:
         vertical = await _freight(session_factory)
         mock = MockFmcsa()
         mock.carriers["1000005"] = (401, {})
-        run = await SourcingPipeline(session_factory, stages=[registry_stage(mock)]).run(
+        with pytest.raises(SourceUnavailableError, match="refused the webKey"):
+            await SourcingPipeline(session_factory, stages=[registry_stage(mock)]).run(
+                a_brief(vertical)
+            )
+        (failed,) = await _runs(session_factory, vertical)
+        assert failed.status is RunStatus.failed
+        assert (
+            failed.status_detail is not None and "goes back to the backlog" in failed.status_detail
+        )
+        assert await _candidates(session_factory, failed) == []
+
+        retry = await SourcingPipeline(session_factory, stages=[registry_stage(MockFmcsa())]).run(
             a_brief(vertical)
         )
+        assert {c.registry_id for c in await _candidates(session_factory, retry)} == set(
+            BEST_FIRST[0:3]
+        )
+
+    async def test_a_refused_key_mid_batch_with_allow_degraded_stops_lookups_and_degrades(
+        self, session_factory: SessionFactory
+    ) -> None:
+        vertical = await _freight(session_factory)
+        mock = MockFmcsa()
+        mock.carriers["1000005"] = (401, {})
+        run = await SourcingPipeline(
+            session_factory, stages=[registry_stage(mock, allow_degraded=True)]
+        ).run(a_brief(vertical))
         assert run.status is RunStatus.degraded
         assert run.status_detail is not None and "refused the webKey" in run.status_detail
         # Batch order is 1000001, 1000005, 1000002: the second refused, the third never asked.
@@ -283,6 +341,20 @@ class TestEvidence:
             "1000005",
         ]
         assert run.counts["lookup_found"] == 1
+        assert len(await _candidates(session_factory, run)) == 3
+
+    async def test_a_sporadic_lookup_failure_still_degrades_without_the_flag(
+        self, session_factory: SessionFactory
+    ) -> None:
+        """One 5xx outlasting its retries is a blip, not an unusable source: the run goes on."""
+        vertical = await _freight(session_factory)
+        mock = MockFmcsa()
+        mock.carriers["1000005"] = (500, {})
+        run = await SourcingPipeline(session_factory, stages=[registry_stage(mock)]).run(
+            a_brief(vertical)
+        )
+        assert run.status is RunStatus.degraded
+        assert run.counts["lookup_failed"] == 1
         assert len(await _candidates(session_factory, run)) == 3
 
 

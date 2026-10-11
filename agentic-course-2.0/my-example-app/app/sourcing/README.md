@@ -165,7 +165,12 @@ by vertical or by source name (`sources/base.py`). Three roles:
 - A declared source no adapter matches is **unbound** and skipped: Places (never a discovery source,
   D13), FMCSA authority history, and the **legacy revocations file** (`rwr4-5nkg`/`sa6p-acbp`, frozen
   since Motus went live on 2026-05-14 — freight v3 declares it, so v3 needs a v4).
-- A recognised source that cannot run here (no webKey) makes the run **degraded**, not failed.
+- A recognised source that cannot run here (no webKey, or a key refused mid-batch) **fails the run**,
+  unless `--allow-degraded` is given (PR #21 review, M1). A candidate batched without its QCMobile
+  record is never looked up again, so spending a batch without its evidence has to be a choice. Before
+  the pull, the refusal leaves the backlog untouched; mid-batch, the failed run hands its batch back.
+  With the flag, the run goes on without that source and finishes `degraded`. A *sporadic* lookup
+  failure (a 5xx outlasting its retries) is `degraded` either way.
 - **Pushdown** (`sources/socrata.py`): each predicate rule on a census column becomes a SoQL *keep*
   clause. Freight v3's five census rules leave 4,464 rows (live, 2026-10-10).
 - Registry ids are namespaced: `usdot:7989`.
@@ -196,11 +201,13 @@ T5 fetches; T7 decides. Nothing is dropped after the pool.
 ## `lpe sourcing run`
 
 ```
-uv run lpe sourcing run --vertical freight [--batch-size N] [--geography dfw]
+uv run lpe sourcing run --vertical freight [--batch-size N] [--geography dfw] [--allow-degraded]
 ```
 
 Runs every registered stage under the vertical's **ACTIVE** manifest, then prints the run id, status,
-counts and cost. `degraded` exits 0 with a `warning:` line; no active manifest is `error:` and exit 1.
+counts and cost. A source that cannot run (no `FMCSA_WEBKEY`) is `error:` and exit 1, with no batch
+taken, unless `--allow-degraded`; then `degraded` exits 0 with a `warning:` line. No active manifest
+is `error:` and exit 1.
 Free sources only today: the census, QCMobile and Motus.
 
 ## Adding a field

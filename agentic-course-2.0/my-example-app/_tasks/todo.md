@@ -1048,7 +1048,7 @@ session, DB-clock and conditional finish, stale-run reaper, `run_id` in the log 
 - [x] Validation: ruff, format, mypy, pyright clean; **816 passed, 0 skipped** with the DB (690 → 816); one migration head `0006_sourcing_pool`; `alembic check` clean
 - [x] Mutation check: 10 of 11 deliberate breaks caught (never-batched-twice, failed-run returns batch, rollback before finish, portability, best-first order, conditional finish, webKey in citation, stop after auth failure, reaper)
 - [x] Commit (`d4ed48f`), PR #21, review (`.claude/code-reviews/pr-21-review.md`): approve, 0 Critical/High, 1 Medium, 5 Low; merged on the human's call
-- [ ] **M1, decide before the first live run:** a `degraded` run keeps its batch, so with no webKey every live run would burn 150 candidates without `allowToOperate`. Recommended: refuse to batch when a recognised lookup source is unavailable, unless `--allow-degraded` is passed
+- [x] **M1** — fixed on `fix/t5-allow-degraded` (section below). Was: **decide before the first live run:** a `degraded` run keeps its batch, so with no webKey every live run would burn 150 candidates without `allowToOperate`. Recommended: refuse to batch when a recognised lookup source is unavailable, unless `--allow-degraded` is passed
 - [ ] PR #21 Lows, deferred: L1 orphan `running` if `ManifestService.get` fails after `start_run` · L2 unbound sources silent in the run output · L3 webKey as `SecretStr` and quiet the httpx logger · L4 build `PoolSelection` before commit · L5 weak tests
 - [ ] Untracked `.claude/plans/t8-route-clustering.md` sits in this worktree — not T5's; left alone, not committed
 
@@ -1062,3 +1062,24 @@ as tested. Two lint-guard surprises cost a round each: the event-name regex (`ac
 written by reflex in a zero-suppression codebase.
 **Improve.** Plans should name the event-name guard's regex when they list log events, and the session-factory fixture should live in
 the root `tests/conftest.py` if a second package needs it.
+
+---
+
+# PR #21 M1: refuse to batch when a lookup source can't run, unless `--allow-degraded` (2026-10-10)
+
+**Why:** a `degraded` run keeps its batch, and nothing re-looks those candidates up. With no webKey yet, every
+live run would take 150 candidates without `allowToOperate` and move on. **Branch:** `fix/t5-allow-degraded` off `main` @ `ba5f76e`.
+
+- [x] `app/sourcing/exceptions.py`: `SourceUnavailableError` (409). It names the source and the reason, and tells the person to fix it or pass `--allow-degraded`
+- [x] `app/tools/search_registry.py`: `allow_degraded: bool = False`. After `bind_sources` and **before** the pull or pool refresh, raise if `bound.degraded` is non-empty, so the run is `failed` and no batch is taken. With the flag, today's behaviour. `with_batch_size` becomes `configured(batch_size=…, allow_degraded=…)`, which keeps the rest of the stage's configuration
+- [x] Refused key mid-batch (`SourceAuthError`): the same rule. Without the flag, re-raise → run `failed` → the batch goes back to the pool. With it, today's behaviour (stop asking, `degraded`). *(decided by the human: fail the run)*
+- [x] Sporadic per-candidate lookup failures (5xx after retries) stay `degraded` either way: a transient blip should not throw away a batch. Recorded as a known gap
+- [x] `app/sourcing/cli.py`: `--allow-degraded` flag, with help text naming the cost (the batch is used up without that evidence)
+- [x] Tests:
+  - [x] no webKey → `failed`, no batch taken (the next run takes the same entries), zero census or QCMobile calls
+  - [x] no webKey + flag → `degraded`, as today
+  - [x] refused key mid-batch → `failed`, batch returned / with the flag → `degraded`
+  - [x] CLI: refusal → exit 1 with one `error:` line naming `--allow-degraded`; flag → exit 0 with a warning
+  - [x] mutation-check the guard
+- [x] Docs: `app/sourcing/README.md` (the run section and the CLI), the T5 ticket note, the `CLAUDE.md` command line, and M1 ticked in this file
+- [x] `/piv-validate` → commit → PR. 820 passed, 0 skipped (816 + 4 new); ruff, mypy and pyright clean; 4 of 4 mutations of the guard caught

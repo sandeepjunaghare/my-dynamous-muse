@@ -16,8 +16,15 @@ table this stage is built with.
    cited to that source.
 
 It decides nothing. ``allowToOperate`` and the revocations are *evidence*, stored for T7's rule
-evaluator; no candidate is dropped after the pool. Lookups that fail, or a source that cannot run
-here (no webKey), leave the candidate without that source's record and the run ``degraded``.
+evaluator; no candidate is dropped after the pool.
+
+**A batch is never spent without its evidence unless someone said so** (PR #21 review, M1). A
+candidate batched without its QCMobile record is never looked up again, so a source that cannot
+run here — no webKey before the batch, a refused key during it — fails the run with
+:class:`SourceUnavailableError`: before the pull, the backlog is untouched; mid-batch, the failed
+run hands its batch back. ``allow_degraded`` (``lpe sourcing run --allow-degraded``) is the explicit
+choice to go on without that source, finishing ``degraded``. A *sporadic* lookup failure (a 5xx
+outlasting its retries) stays ``degraded`` either way: one blip should not throw away a batch.
 """
 
 from collections.abc import Callable, Sequence
@@ -28,7 +35,7 @@ import httpx
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.shared.provenance import ProvenancedValue
-from app.sourcing.exceptions import SourceAuthError
+from app.sourcing.exceptions import SourceAuthError, SourceUnavailableError
 from app.sourcing.schemas import CandidateFields, PoolEntry, SourceRecord
 from app.sourcing.service import SourcingService
 from app.sourcing.sources import http
@@ -63,6 +70,7 @@ class SearchRegistryStage:
         batch_size: int | None = None,
         backoff_seconds: float = http.DEFAULT_BACKOFF_SECONDS,
         throttle: bool = True,
+        allow_degraded: bool = False,
     ) -> None:
         self._factories = tuple(factories)
         self._transport = transport
@@ -70,20 +78,32 @@ class SearchRegistryStage:
         self._batch_size = batch_size
         self._backoff_seconds = backoff_seconds
         self._throttle = throttle
+        self._allow_degraded = allow_degraded
 
     @property
     def stage(self) -> PipelineStage:
         return PipelineStage.search_registry
 
-    def with_batch_size(self, batch_size: int) -> "SearchRegistryStage":
-        """This stage, configured identically, taking ``batch_size`` candidates a run."""
+    def configured(
+        self, *, batch_size: int | None = None, allow_degraded: bool | None = None
+    ) -> "SearchRegistryStage":
+        """This stage with a per-run option changed and everything else kept as it was built."""
         return SearchRegistryStage(
             factories=self._factories,
             transport=self._transport,
             clock=self._clock,
-            batch_size=batch_size,
+            batch_size=batch_size if batch_size is not None else self._batch_size,
             backoff_seconds=self._backoff_seconds,
             throttle=self._throttle,
+            allow_degraded=(allow_degraded if allow_degraded is not None else self._allow_degraded),
+        )
+
+    def _refuse(self, reasons: tuple[str, ...], *, when: str) -> SourceUnavailableError:
+        logger.warning("tools.search_registry.run_refused", reasons=list(reasons), when=when)
+        return SourceUnavailableError(
+            f"{'; '.join(reasons)} — {when}. Fix it, or pass --allow-degraded to go on without "
+            "that source; the batch is then used up without its evidence",
+            reasons=reasons,
         )
 
     async def run(self, context: StageContext) -> StageResult:
@@ -102,6 +122,8 @@ class SearchRegistryStage:
                 throttle=self._throttle,
             )
             bound = bind_sources(context.manifest, self._factories, env)
+            if bound.degraded and not self._allow_degraded:
+                raise self._refuse(bound.degraded, when="no batch was taken")
             reasons.extend(bound.degraded)
 
             rules = [cited.value for cited in context.manifest.body.disqualifier_rules]
@@ -123,8 +145,15 @@ class SearchRegistryStage:
                     try:
                         cited = await lookup.lookup(record)
                     except SourceAuthError as exc:
+                        reason = f"{lookup.name}: {exc.message}"
+                        if not self._allow_degraded:
+                            # The run fails, so its batch goes back to the pool for a run that can
+                            # gather the evidence.
+                            raise self._refuse(
+                                (reason,), when="this run's batch goes back to the backlog"
+                            ) from exc
                         # The key will not get better on the next record. Stop asking this source.
-                        reasons.append(f"{lookup.name}: {exc.message}")
+                        reasons.append(reason)
                         logger.warning(
                             "tools.search_registry.source_abandoned",
                             source=lookup.name,
