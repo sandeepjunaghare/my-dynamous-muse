@@ -49,8 +49,8 @@ class Settings(BaseSettings):
     # A run still `running` this long after it started was killed without finishing; the next run
     # of the vertical marks it failed, which also hands its batch back to the pool.
     sourcing_stale_run_hours: int = Field(default=6, gt=0)
-    # FMCSA QCMobile webKey — free, through a Login.gov developer account. Unset, QCMobile is
-    # skipped and every run finishes `degraded`: candidates are recorded, without `allowToOperate`.
+    # FMCSA QCMobile webKey — free, through a Login.gov developer account. Unset, a run refuses
+    # before taking a batch; `--allow-degraded` records candidates without `allowedToOperate`.
     fmcsa_webkey: str | None = None
     # Socrata app token for data.transportation.gov. Optional: without it SODA throttles per IP.
     socrata_app_token: str | None = None

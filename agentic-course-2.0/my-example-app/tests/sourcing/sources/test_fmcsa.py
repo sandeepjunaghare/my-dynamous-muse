@@ -1,6 +1,7 @@
 """The FMCSA adapters against the mock FMCSA — no database, no network."""
 
 from datetime import date
+from typing import cast
 
 import pytest
 from structlog.testing import capture_logs
@@ -117,14 +118,28 @@ class TestQcMobile:
         assert cited.source_url == "https://mobile.fmcsa.dot.gov/qc/services/carriers/1000001"
         assert cited.retrieval_method is RetrievalMethod.registry_api
         (row,) = cited.value.rows
-        assert row.get("allowToOperate") == "Y"
+        # The spelling a live /carriers response uses (2026-10-10), not the docs' allowToOperate.
+        assert row.get("allowedToOperate") == "Y"
+        assert row.get("allowToOperate") is None
         assert row.get("dotNumber") == 1000001
-        # A bool, a null and a nested object are skipped, never converted.
-        assert row.get("isPassengerCarrier") is None
+        assert row.get("isPassengerCarrier") == "N"
+        # A null and a nested object are skipped, never converted.
         assert row.get("oosDate") is None
         assert row.get("carrierOperation") is None
         (request,) = mock_fmcsa.calls_to("/carriers/")
         assert request.url.params["webKey"] == TEST_WEBKEY
+
+    async def test_a_boolean_is_skipped_never_converted(
+        self, source_env: SourceEnv, mock_fmcsa: MockFmcsa
+    ) -> None:
+        body = cast(dict[str, dict[str, dict[str, object]]], load_fixture("qcmobile_carrier"))
+        body["content"]["carrier"]["isPassengerCarrier"] = False
+        mock_fmcsa.carriers["1000001"] = (200, body)
+        cited = await QcMobileSource("q", source_env).lookup(_record())
+        assert cited is not None
+        (row,) = cited.value.rows
+        assert row.get("isPassengerCarrier") is None
+        assert row.get("allowedToOperate") == "Y"
 
     @pytest.mark.parametrize(
         ("status", "body"),
@@ -143,7 +158,12 @@ class TestQcMobile:
 
     @pytest.mark.parametrize(
         ("status", "body"),
-        [(404, load_fixture("qcmobile_missing_webkey")), (401, {}), (403, {"content": "no"})],
+        [
+            (404, load_fixture("qcmobile_missing_webkey")),
+            (404, load_fixture("qcmobile_webkey_not_found")),
+            (401, {}),
+            (403, {"content": "no"}),
+        ],
     )
     async def test_a_refused_key_raises_so_the_stage_stops_asking(
         self, source_env: SourceEnv, mock_fmcsa: MockFmcsa, status: int, body: object

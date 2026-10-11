@@ -183,7 +183,7 @@ T5 fetches; T7 decides. Nothing is dropped after the pool.
 1. **Where rule fields live**: `candidate.fields.source_records`, one cited `SourceRecord` per source:
    ```
    SourceRecord(source="fmcsa_company_census", rows=(SourceRow(values=(("carship", "B"), ("power_units", 0), …)),))
-   SourceRecord(source="fmcsa_qcmobile",       rows=(SourceRow(values=(("allowToOperate", "Y"), …)),))  # () = looked, not found
+   SourceRecord(source="fmcsa_qcmobile",       rows=(SourceRow(values=(("allowedToOperate", "Y"), …)),))  # () = looked, not found
    SourceRecord(source="fmcsa_revocations",    rows=(SourceRow(…), SourceRow(…)))                     # () = no revocations
    ```
    `source` is the manifest's source name. **An absent record** means never looked or the lookup
@@ -191,7 +191,8 @@ T5 fetches; T7 decides. Nothing is dropped after the pool.
 2. **Values** are `str | int`. Census `power_units`, `truck_units`, `total_drivers`, `total_cdl` and
    `driver_inter_total` are cast to `int` at the adapter (a non-number is left out, not zeroed).
    Everything else is the source's text, unchanged; census dates stay `YYYYMMDD`. QCMobile's field
-   spelling is stored as returned (`allowToOperate` per the docs; unverified live).
+   spelling is stored as returned: `allowedToOperate`, verified live 2026-10-10 (the docs say
+   `allowToOperate`; manifests up to freight v4 used that and never matched).
 3. **Null semantics** the pushdown uses: `not_equals`, `not_in_set` and `not_contains` **fire** on an
    absent field; `equals`, `in_set`, `contains`, `greater_than`, `less_than` and `is_true` do not.
 4. **Which rules were pushed down** is logged (`sourcing.socrata.where_built`, `rule_ids`) and counted

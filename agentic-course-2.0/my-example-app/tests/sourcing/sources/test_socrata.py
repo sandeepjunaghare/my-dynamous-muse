@@ -146,7 +146,7 @@ class TestPushdownRefusals:
 
     def test_judgment_rules_and_foreign_fields_are_not_this_datasets(self) -> None:
         judgment = DisqualifierRule(id="j", kind=RuleKind.judgment, description="rollup")
-        foreign = rule(RuleOperator.equals, "N", "allowToOperate", "q")
+        foreign = rule(RuleOperator.equals, "N", "allowedToOperate", "q")
         pushdown = pushdown_where([judgment, foreign], columns=COLUMNS)
         assert pushdown == pushdown_where([], columns=COLUMNS)
 

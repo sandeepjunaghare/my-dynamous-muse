@@ -18,8 +18,10 @@ Shapes, read live 2026-10-10:
   ``number`` but arrives as ``"7989"``; dates are ``YYYYMMDD``; ``power_units`` and the other fleet
   counts are text and are cast here (T5 ticket: "cast them at the adapter").
 * Motus ``usdot_number`` is unpadded (``"1006607"``); rows repeat, and some lack a docket.
-* QCMobile's field spelling (``allowToOperate`` per the docs) is **not yet verified** against a live
-  response — there is no webKey yet. Values are stored exactly as returned, never renamed.
+* QCMobile ``/carriers/{dot}`` says ``allowedToOperate`` (``"Y"``/``"N"``), not the docs'
+  ``allowToOperate``; ``isPassengerCarrier`` is ``"N"``, not a boolean. An unknown USDOT is a 200
+  with ``content: null``; a bad key, a 404 saying "Webkey not found". Values are stored exactly as
+  returned, never renamed.
 
 **The webKey never leaves the request.** It is a query parameter, so citations carry the carrier
 URL without it, and ``sources/http.py`` logs URLs without their query strings.
@@ -303,7 +305,7 @@ def _as_list(value: object) -> list[object] | None:
 
 
 class QcMobileSource:
-    """One QCMobile ``/carriers/{dot}`` call per batch candidate: ``allowToOperate`` and friends."""
+    """One QCMobile ``/carriers/{dot}`` call per batch candidate: ``allowedToOperate`` and more."""
 
     def __init__(self, name: str, env: SourceEnv) -> None:
         self._name = name

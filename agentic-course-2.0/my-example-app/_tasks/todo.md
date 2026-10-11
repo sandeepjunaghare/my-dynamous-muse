@@ -1163,3 +1163,21 @@ only in the ticket that made it.
 **PR #25 review** (`.claude/code-reviews/pr-25-review.md`): approve, 4 Low. Fixed L1 (the unmatched test now also
 scripts an ambiguous match and asserts `failed == 0` and no reason) and L2 (one `_run_stage` helper replaces the
 three copies of setup). L3 wording and L4 key coupling left as noted; both optional.
+
+
+## QCMobile field spelling: `allowedToOperate`, verified live (2026-10-10)
+
+With the webKey in hand, one live `/carriers/7989` call settled T5's open question: QCMobile says `allowedToOperate`,
+not the docs' `allowToOperate`. Freight v4 (`9c2d4a48…`, Motus revocations) kept the wrong spelling, so its
+`not_allowed_to_operate` rule would never fire. **Freight v5 (`6454f442…`) is the draft to activate**: the field
+renamed, and `authority_revoked` cited to Motus. The adapter stores fields as returned, so no code change was needed.
+
+- [x] Fixture `qcmobile_carrier.json` rebuilt on the live key set (identity and values made up): `allowedToOperate`,
+  `isPassengerCarrier` as `"N"`, no `outOfService`, the live `_links`.
+- [x] New fixture `qcmobile_webkey_not_found.json`, the live 404 for a bad key, added to the refused-key cases.
+- [x] The bool-skip assertion moved to its own test, since the live record has no booleans.
+- [x] Builders, schema and socrata tests, docstrings, README contract, config comment (stale since M1), docs renamed.
+- [x] Validate, commit, PR.
+
+**Also seen live:** an unknown USDOT is `200 {"content": null}` (matches the fixture); a missing key is a 404 saying
+"Must provide Webkey".

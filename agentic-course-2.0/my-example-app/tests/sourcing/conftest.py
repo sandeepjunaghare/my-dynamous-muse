@@ -4,8 +4,7 @@
 the census, Motus revocations and QCMobile from recorded fixtures and **raises on any request it
 has no route for** — the same stance as ``tests/promotion/conftest.py``'s ``MockPortal``, so
 "fixtures only" is a proven property rather than an intention. The fixture shapes were taken from
-one live read of each public dataset on 2026-10-10; QCMobile's follows its documentation, since
-there is no webKey yet to record a real answer.
+one live read of each source on 2026-10-10, QCMobile included; identities and values are made up.
 """
 
 import json

@@ -137,7 +137,7 @@ def freight_v3_rules() -> tuple[DisqualifierRule, ...]:
         ),
         DisqualifierRule(
             id="not_allowed_to_operate", kind=predicate, description="QCMobile says N",
-            field="allowToOperate", operator=RuleOperator.equals, value="N",
+            field="allowedToOperate", operator=RuleOperator.equals, value="N",
         ),
         DisqualifierRule(
             id="authority_revoked", kind=RuleKind.judgment, description="in the revocations"
