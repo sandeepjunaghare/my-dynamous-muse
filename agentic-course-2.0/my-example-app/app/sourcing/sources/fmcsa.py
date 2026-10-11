@@ -120,6 +120,9 @@ _JOIN_CHUNK = 100
 _QCMOBILE_MIN_INTERVAL_SECONDS = 0.2
 """QCMobile publishes no rate limit, so stay at five a second: 150 lookups take about 30 s."""
 _QCMOBILE_MAX_ATTEMPTS = 3
+_QCMOBILE_NEVER_STORED = frozenset({"ein"})
+"""QCMobile keys dropped before a record is stored. The carrier's EIN is a tax identifier no rule
+reads; public or not, it is not kept (owner decision, PR #26 review L3)."""
 
 _UNAUTHORIZED = 401
 _FORBIDDEN = 403
@@ -277,11 +280,12 @@ class CensusSource:
 
 def _scalars(carrier: Mapping[object, object]) -> SourceRow:
     """A QCMobile carrier's ``str`` and ``int`` values, unchanged. Booleans, nulls and nested
-    objects are skipped by key and logged — converting them would be inventing a spelling."""
+    objects are skipped by key and logged — converting them would be inventing a spelling. Keys in
+    ``_QCMOBILE_NEVER_STORED`` are dropped whatever their value."""
     values: list[tuple[str, SourceValue]] = []
     skipped: list[str] = []
     for key, value in carrier.items():
-        if not isinstance(key, str):
+        if not isinstance(key, str) or key in _QCMOBILE_NEVER_STORED:
             continue
         if isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool)):
             values.append((key, value))
