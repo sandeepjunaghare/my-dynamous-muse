@@ -1047,7 +1047,9 @@ session, DB-clock and conditional finish, stale-run reaper, `run_id` in the log 
 - [x] Level 4 checked **before** coding, live and read-only: SoQL `contains()` and `::number` work; v3's `$where` → **4,464**; Motus `usdot_number` unpadded
 - [x] Validation: ruff, format, mypy, pyright clean; **816 passed, 0 skipped** with the DB (690 → 816); one migration head `0006_sourcing_pool`; `alembic check` clean
 - [x] Mutation check: 10 of 11 deliberate breaks caught (never-batched-twice, failed-run returns batch, rollback before finish, portability, best-first order, conditional finish, webKey in citation, stop after auth failure, reaper)
-- [ ] Commit, `/piv-create-pr`, `/piv-review-pr`
+- [x] Commit (`d4ed48f`), PR #21, review (`.claude/code-reviews/pr-21-review.md`): approve, 0 Critical/High, 1 Medium, 5 Low; merged on the human's call
+- [ ] **M1, decide before the first live run:** a `degraded` run keeps its batch, so with no webKey every live run would burn 150 candidates without `allowToOperate`. Recommended: refuse to batch when a recognised lookup source is unavailable, unless `--allow-degraded` is passed
+- [ ] PR #21 Lows, deferred: L1 orphan `running` if `ManifestService.get` fails after `start_run` · L2 unbound sources silent in the run output · L3 webKey as `SecretStr` and quiet the httpx logger · L4 build `PoolSelection` before commit · L5 weak tests
 - [ ] Untracked `.claude/plans/t8-route-clustering.md` sits in this worktree — not T5's; left alone, not committed
 
 ### Review
