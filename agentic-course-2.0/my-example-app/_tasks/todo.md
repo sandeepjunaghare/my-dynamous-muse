@@ -1181,3 +1181,19 @@ renamed, and `authority_revoked` cited to Motus. The adapter stores fields as re
 
 **Also seen live:** an unknown USDOT is `200 {"content": null}` (matches the fixture); a missing key is a 404 saying
 "Must provide Webkey".
+
+
+## Freight v5 → first live batch → v6 active; doc follow-ups (2026-10-10)
+
+- [x] Freight v5 (`6454f442…`) activated. First run failed in `cluster_routes`: dev lacked `0007_routing`. The failed
+  run handed its batch back, and the rerun took the same 10. Applied `0007`; run `f033aebe` completed: pool 4,464,
+  10 batched, QCMobile 10/10 found, 0 revocation matches, routing 10 `unverified_address` (no T6 yet), $0.00.
+- [x] 4 of the 10 had QCMobile `brokerAuthorityStatus` `I`, and 1 had every authority field null. Freight v6
+  (`0cc09930…`) adds `broker_authority_not_active` (`not_equals 'A'`, so it fires on absent too) and is ACTIVE.
+- [x] Doc follow-ups from the PR #26 review: L1 (`fmcsa.py` "a v4 is needed"), L2 (README "would never have
+  matched"), and the T5 ticket note now names v6 as active. The review file is committed.
+
+**Worked:** the failed-run path (batch returned, same 10 re-taken) held on its first live outing.
+**Didn't:** a run needs every merged migration on dev. T8's `0007` landed between activation and the run.
+**Improve:** run `alembic upgrade head` on dev as part of every merge that adds a migration, not at first use.
+**Open:** PR #26 L3, whether the QCMobile scalars (incl. `ein`) are stored whole or deny-listed. Needs a decision.

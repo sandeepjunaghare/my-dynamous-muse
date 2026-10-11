@@ -192,7 +192,7 @@ T5 fetches; T7 decides. Nothing is dropped after the pool.
    `driver_inter_total` are cast to `int` at the adapter (a non-number is left out, not zeroed).
    Everything else is the source's text, unchanged; census dates stay `YYYYMMDD`. QCMobile's field
    spelling is stored as returned: `allowedToOperate`, verified live 2026-10-10 (the docs say
-   `allowToOperate`; manifests up to freight v4 used that and never matched).
+   `allowToOperate`; manifests up to freight v4 used that and would never have matched).
 3. **Null semantics** the pushdown uses: `not_equals`, `not_in_set` and `not_contains` **fire** on an
    absent field; `equals`, `in_set`, `contains`, `greater_than`, `less_than` and `is_true` do not.
 4. **Which rules were pushed down** is logged (`sourcing.socrata.where_built`, `rule_ids`) and counted
