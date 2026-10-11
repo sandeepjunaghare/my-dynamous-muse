@@ -17,7 +17,7 @@ door placed from a guess sends a founder to the wrong street.
 > T7's `disqualification` table was built in parallel, so this slice does not read it (decided
 > 2026-10-10). Before routes reach a founder, T9/T10 must narrow them to candidates that qualified.
 > They must also decide whether routing re-runs after that. Re-running is cheap, because the stage
-> replaces its rows.
+> replaces its rows. This is now in T9's and T10's acceptance criteria in the tickets doc.
 
 ## Where the coordinates come from (D13)
 
@@ -30,9 +30,11 @@ lat/lng may be cached for only 30 days and is barred as input to point-in-polygo
 - **No match** is *unmatched*, and **two or more** is *ambiguous*. Both are left out and counted. We
   never pick one of several matches.
 - **A geocode failing** for one address (unreachable after 3 tries, or an unreadable body) leaves
-  that candidate out as `routing_geocode_failed`. If **every** address fails, for any mix of those
-  reasons, the stage raises **before writing anything**. A geocoder outage cannot pass as a quiet
-  week, and a failed re-run keeps the run's earlier routes.
+  that candidate out as `routing_geocode_failed`, and the stage finishes **degraded**: "2 of 40
+  geocode(s) failed", so the run ends `degraded` rather than `completed`. If **every** address
+  fails, for any mix of those reasons, the stage raises **before writing anything**. A geocoder
+  outage cannot pass as a quiet week, and a failed re-run keeps the run's earlier routes. Unmatched
+  and ambiguous addresses are answers, not failures, and never degrade the run.
 
 ## The algorithm (`clustering.py`)
 
