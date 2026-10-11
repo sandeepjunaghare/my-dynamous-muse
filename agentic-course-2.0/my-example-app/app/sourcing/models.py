@@ -148,6 +148,10 @@ class Candidate(Base):
 
     __table_args__ = (
         UniqueConstraint("run_id", "registry_id", name="uq_candidate_run_registry_id"),
+        # The target of the run-scoped foreign keys (`route_assignment`, `disqualification`): a row
+        # that names a candidate must name that candidate's own run (#20). `id` alone is already
+        # unique; this exists so `(run_id, id)` can be referenced.
+        UniqueConstraint("run_id", "id", name="uq_candidate_run_id_id"),
         # See REGISTRY_ID_IS_CITED: the key agrees with the citation, and the citation is complete.
         CheckConstraint(REGISTRY_ID_IS_CITED, name="ck_candidate_registry_id_is_cited"),
     )

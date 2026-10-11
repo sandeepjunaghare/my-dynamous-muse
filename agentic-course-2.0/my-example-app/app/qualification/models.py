@@ -9,13 +9,22 @@ The candidate, run and manifest are still recorded, so a person can see exactly 
 rule fired on which sourcing.
 
 Every constraint is declared here **and** hand-written in ``alembic/versions/0008_qualification.py``
-so ``alembic check`` sees them (T2's lesson).
+(the run-scoped foreign key in ``0009``) so ``alembic check`` sees them (T2's lesson).
 """
 
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy import func as sql_func
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -32,12 +41,13 @@ class Disqualification(Base):
     __tablename__ = "disqualification"
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
-    candidate_id: Mapped[UUID] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey(Candidate.id), nullable=False
-    )
+    candidate_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
     run_id: Mapped[UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey(SourcingRun.id), nullable=False
     )
+    """The candidate's own run, **enforced in the database** by the composite foreign key
+    ``(run_id, candidate_id) → candidate(run_id, id)`` (#20): a run's disqualified candidates are
+    read back by ``run_id``."""
     manifest_id: Mapped[UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey(VerticalManifest.id), nullable=False
     )
@@ -58,6 +68,11 @@ class Disqualification(Base):
     )
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "candidate_id"],
+            [Candidate.run_id, Candidate.id],
+            name="fk_disqualification_run_candidate",
+        ),
         UniqueConstraint("candidate_id", "rule_id", name="uq_disqualification_candidate_rule"),
         CheckConstraint(
             "rule_kind in ('predicate', 'judgment')", name="ck_disqualification_rule_kind"

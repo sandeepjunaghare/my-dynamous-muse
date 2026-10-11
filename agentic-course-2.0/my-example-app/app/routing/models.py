@@ -6,7 +6,8 @@ field (``app/sourcing/stages.py``). A candidate that was not clustered has no ro
 say why.
 
 Every constraint below is declared here **and** written by hand in
-``alembic/versions/0007_routing.py``, so ``alembic check`` can see them (T2's finding).
+``alembic/versions/0007_routing.py`` (the run-scoped foreign key in ``0009``), so ``alembic check``
+can see them (T2's finding).
 """
 
 from datetime import datetime
@@ -16,6 +17,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     SmallInteger,
     String,
@@ -41,16 +43,13 @@ class RouteAssignment(Base):
         ForeignKey(SourcingRun.id),
         nullable=False,
     )
-    candidate_id: Mapped[UUID] = mapped_column(
-        PgUUID(as_uuid=True),
-        ForeignKey(Candidate.id),
-        nullable=False,
-    )
+    candidate_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
     """Unique: a candidate is on at most one route.
 
-    That the candidate belongs to ``run_id`` is **service-enforced**: ``RoutingService`` only routes
-    the run's own candidates. A composite foreign key would need ``unique(run_id, id)`` on
-    ``candidate``, which is T4's table (PR #19 review, L2, deferred)."""
+    It must be one of ``run_id``'s own candidates, **enforced in the database** by the composite
+    foreign key ``(run_id, candidate_id) → candidate(run_id, id)`` (#20). The run's rows are
+    replaced by ``run_id``, so a row naming another run's candidate would be missed by one re-run
+    and erased by the wrong one."""
 
     cluster_index: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     """The route's position in label order: 0 is route A, west of route B."""
@@ -70,6 +69,11 @@ class RouteAssignment(Base):
     )
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "candidate_id"],
+            [Candidate.run_id, Candidate.id],
+            name="fk_route_assignment_run_candidate",
+        ),
         UniqueConstraint("candidate_id", name="uq_route_assignment_candidate_id"),
         CheckConstraint(
             "cluster_index >= 0",

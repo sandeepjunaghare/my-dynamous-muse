@@ -99,6 +99,24 @@ class TestRoutingRepository:
         with pytest.raises(IntegrityError, match="uq_route_assignment_candidate_id"):
             await db_session.flush()
 
+    async def test_a_candidate_from_another_run_is_refused(self, db_session: AsyncSession) -> None:
+        # Issue #20: the run's rows are replaced by run_id, so a row pairing run B with run A's
+        # candidate would be missed by B's re-run and erased by the wrong one.
+        _, candidate_id, _ = await _one_routed(db_session)
+        other_run_id = await a_running_run(db_session)
+        db_session.add(
+            RouteAssignment(
+                run_id=other_run_id,
+                candidate_id=candidate_id,
+                cluster_index=0,
+                cluster_label="A · 75238",
+                point=_cited(32.88, -96.71).model_dump(mode="json"),
+            )
+        )
+
+        with pytest.raises(IntegrityError, match="fk_route_assignment_run_candidate"):
+            await db_session.flush()
+
     async def test_a_negative_route_index_is_refused(self, db_session: AsyncSession) -> None:
         run_id, candidate_id, _ = await _one_routed(db_session)
         db_session.add(
