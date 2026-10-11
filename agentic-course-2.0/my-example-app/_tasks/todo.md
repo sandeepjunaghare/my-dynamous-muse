@@ -1197,3 +1197,16 @@ renamed, and `authority_revoked` cited to Motus. The adapter stores fields as re
 **Didn't:** a run needs every merged migration on dev. T8's `0007` landed between activation and the run.
 **Improve:** run `alembic upgrade head` on dev as part of every merge that adds a migration, not at first use.
 **Open:** PR #26 L3, whether the QCMobile scalars (incl. `ein`) are stored whole or deny-listed. Needs a decision.
+
+
+## Drop `ein` from the stored QCMobile record (2026-10-10)
+
+PR #26 review L3, decided by the owner: the QCMobile adapter kept every scalar, so each looked-up carrier's EIN was
+stored in `source_records`. Now `_QCMOBILE_NEVER_STORED = {"ein"}` drops it in `_scalars`, whatever its type.
+
+- [x] `fmcsa.py`: deny-list plus docstring. README contract: "never stored; no rule may read it".
+- [x] Test: an int or string EIN never reaches the row, the serialised record or a log line. It fails without the fix.
+- [x] Validate, commit, PR.
+
+**Open:** the 20 candidate rows already in dev (runs `61aadfb4` and `f033aebe`) still carry `ein`. Scrubbing them is a
+separate, irreversible data write and needs the owner's go-ahead.

@@ -141,6 +141,22 @@ class TestQcMobile:
         assert row.get("isPassengerCarrier") is None
         assert row.get("allowedToOperate") == "Y"
 
+    @pytest.mark.parametrize("ein", [990000001, "990000001"])
+    async def test_the_ein_is_never_stored(
+        self, source_env: SourceEnv, mock_fmcsa: MockFmcsa, ein: object
+    ) -> None:
+        body = cast(dict[str, dict[str, dict[str, object]]], load_fixture("qcmobile_carrier"))
+        body["content"]["carrier"]["ein"] = ein
+        mock_fmcsa.carriers["1000001"] = (200, body)
+        with capture_logs() as logs:
+            cited = await QcMobileSource("q", source_env).lookup(_record())
+        assert cited is not None
+        (row,) = cited.value.rows
+        assert "ein" not in dict(row.values)
+        assert "990000001" not in cited.value.model_dump_json()
+        assert "990000001" not in repr(logs)
+        assert row.get("legalName") == "ALPHA LOGISTICS LLC"
+
     @pytest.mark.parametrize(
         ("status", "body"),
         [
