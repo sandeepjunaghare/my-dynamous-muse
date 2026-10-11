@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     fmcsa_webkey: str | None = None
     # Socrata app token for data.transportation.gov. Optional: without it SODA throttles per IP.
     socrata_app_token: str | None = None
+    # Routing (T8). The most doors one route may hold: the cadence plans ~10-12 doors an outing and
+    # 20 names in two routes a week (E3, E4). A cap per route, so the number of routes follows from
+    # how many candidates there are, never the other way round.
+    route_max_doors: int = Field(default=12, gt=0)
 
     # Integrations. Optional at T1 — T3 is what first needs a token.
     hubspot_private_app_token: str | None = None
