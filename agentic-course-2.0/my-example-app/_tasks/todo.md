@@ -1159,3 +1159,7 @@ here; the third, the composite foreign key, stays parked on **#20** until T7 mer
 **Worked:** test-first. The degraded test failed (no reason) before the change and passed after.
 **Improve:** a decision that binds a later ticket belongs in that ticket's acceptance criteria from the start, not
 only in the ticket that made it.
+
+**PR #25 review** (`.claude/code-reviews/pr-25-review.md`): approve, 4 Low. Fixed L1 (the unmatched test now also
+scripts an ambiguous match and asserts `failed == 0` and no reason) and L2 (one `_run_stage` helper replaces the
+three copies of setup). L3 wording and L4 key coupling left as noted; both optional.
