@@ -1342,3 +1342,32 @@ the first column.
 **Review:** 1,089 passed, 2 skipped; ruff, mypy and pyright clean. **Trade-off:** a name heuristic can pick an
 id-like column that isn't the key (a `phone_number` before the real id). It's only a label, and the report prints
 the column it used. A `--row-id SOURCE=COLUMN` override can follow if a source ever needs one.
+
+
+## Issue #20: a routed (or disqualified) candidate must belong to its run, enforced in the database (2026-10-11)
+
+Issue: https://github.com/sandeepjunaghare/my-dynamous-muse/issues/20 (deferred from PR #19 review, L2). Wave 5 has
+merged (T5 #21, T8 #19, T7 #18), so `candidate` is safe to change. T7's `disqualification` has the same gap: separate
+`candidate_id` and `run_id` FKs, and `run_id` means the candidate's run (`disqualified_candidate_ids(run_id)`).
+
+- [x] Branch `fix/candidate-run-scoped-fks` off main.
+- [x] `0009_candidate_run_scoped_fks`, hand-written, revising `0008_qualification`:
+  - `candidate`: add `uq_candidate_run_id_id` = `unique(run_id, id)` (the composite FK's target).
+  - `route_assignment`: replace `route_assignment_candidate_id_fkey` with `fk_route_assignment_run_candidate`,
+    `(run_id, candidate_id) → candidate(run_id, id)`.
+  - `disqualification` (in scope, decided 2026-10-11): the same, as `fk_disqualification_run_candidate`.
+  - The `run_id → sourcing_run` FKs stay. Downgrade reverses every step.
+  - Existing rows that break the rule make the upgrade fail loudly, which is wanted: there should be none.
+- [x] Models declare the same constraints (so `alembic check` stays clean); `RouteAssignment`'s
+  "service-enforced" docstring becomes "database-enforced".
+- [x] Tests, test-first: a row pairing run A with run B's candidate is refused with `IntegrityError` naming the
+  constraint (route_assignment and disqualification); the existing round trips still pass.
+- [x] CLAUDE.md alembic line gains `0009`; validate; PR with "Closes #20".
+
+**Review:** 1,091 passed, 2 skipped (the paid live eval); ruff, mypy, pyright clean; `alembic check` clean after
+upgrade, after a downgrade/upgrade round trip, and on a fresh 0001→0009 build.
+**Worked:** test-first. Both new tests failed with "DID NOT RAISE" before the migration. The names of the keys being
+replaced were read from a migrated database rather than guessed: Postgres named them `<table>_candidate_id_fkey`.
+**Note:** `alembic upgrade head` on the dev and prod Supabase projects will refuse if any existing row already pairs
+a run with another run's candidate. None should exist; if one does, the upgrade names it.
+

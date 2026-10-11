@@ -39,7 +39,7 @@ app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushd
 app/tools/classify_rollup.py                # stage 4 of 5 (T7)
 app/tools/cluster_routes.py                 # stage 5 of 5 (T8): verified addresses → drive routes of ≤ ROUTE_MAX_DOORS
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
-alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification
+alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification · 0009 run-scoped candidate FKs
 tests/                                      # mirrors app/, plus the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
