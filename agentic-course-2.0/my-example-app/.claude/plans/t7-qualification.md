@@ -954,3 +954,7 @@ covers the judgment node, stage, scoring and live eval. PR A alone unblocks acti
   (1) on a found record, a missing or blank field fires `not_equals` / `not_in_set` / `not_contains`, matching
   T5's pushdown; a missing record stays `not_evaluable`. (2) The free predicates run at the end of
   `search_registry`, before any paid step. Full checklist: `_tasks/todo.md`, "T7 Phase 6".
+- 2026-10-11: PR #18 Phase 6 review fixes. **M1:** a batch-wide circuit breaker (`rules.check_batch`,
+  `QualificationService.disqualify_batch`) refuses a rule that fires on ≥90% of the judged batch (min 5) before
+  anything is recorded. **M2:** a predicate on a join source refuses before the pull. **L1:** `check_shape` runs
+  before the pull. Details: the report's "PR #18 Phase 6 review fixes".

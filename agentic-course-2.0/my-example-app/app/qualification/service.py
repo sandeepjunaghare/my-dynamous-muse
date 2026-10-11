@@ -2,9 +2,12 @@
 
 Two writers and one reader:
 
-* :meth:`QualificationService.disqualify_by_predicates` — the free checks on a batch (QCMobile's
-  ``allowedToOperate``, the revocations join), recorded with the source's citation. Only the first
-  rule to fire is recorded: one reason is enough to stop paying for a candidate.
+* :meth:`QualificationService.disqualify_batch` — the free checks on a batch (QCMobile's
+  ``allowedToOperate``), recorded with the source's citation. Only the first rule to fire is
+  recorded: one reason is enough to stop paying for a candidate. The whole batch is evaluated
+  first, and a rule firing on nearly all of it is refused before anything is recorded
+  (``check_batch``). :meth:`~QualificationService.disqualify_by_predicates` is the one-candidate
+  form.
 * :meth:`QualificationService.record_judgment` — every judgment rule the ``classify_rollup`` node
   fired *and could cite*. An uncited verdict never reaches here (``admit_judgment`` drops it).
 * :meth:`QualificationService.suppressed_registry_ids` — what the batch selection excludes.
@@ -12,18 +15,21 @@ Two writers and one reader:
 A record no rule could judge is never disqualified; it is logged so a person can see it.
 """
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.manifests.schemas import ManifestResponse, RuleKind
+from app.qualification.exceptions import BatchWideDisqualificationError
+from app.qualification.records import CandidateRecords
 from app.qualification.repository import QualificationRepository
-from app.qualification.rules import apply_predicates
+from app.qualification.rules import apply_predicates, check_batch
 from app.qualification.schemas import (
     AdmittedJudgment,
     DisqualificationResponse,
+    PredicateResult,
     RecordSet,
     RuleOutcome,
 )
@@ -56,6 +62,51 @@ class QualificationService:
         that fired, or ``None`` when the candidate survives.
         """
         result = apply_predicates(manifest.body, records)
+        return await self._record_first_fired(candidate, run, manifest, result, source_urls)
+
+    async def disqualify_batch(
+        self,
+        run: SourcingRunResponse,
+        manifest: ManifestResponse,
+        batch: Sequence[tuple[CandidateResponse, CandidateRecords]],
+    ) -> int:
+        """Apply the free predicates to a whole batch; record each candidate's first fired rule.
+
+        Every candidate is evaluated **before** anything is recorded, so :func:`check_batch` can
+        refuse a rule that fires on (nearly) the whole batch while nothing is suppressed yet.
+        Returns how many candidates were disqualified.
+        """
+        results = [
+            (candidate, readable, apply_predicates(manifest.body, readable.records))
+            for candidate, readable in batch
+        ]
+        try:
+            check_batch([result for _, _, result in results])
+        except BatchWideDisqualificationError as exc:
+            logger.warning(
+                "qualification.service.batch_refused",
+                run_id=str(run.id),
+                rule_id=exc.rule_id,
+                fired=exc.fired,
+                judged=exc.judged,
+            )
+            raise
+        disqualified = 0
+        for candidate, readable, result in results:
+            fired = await self._record_first_fired(
+                candidate, run, manifest, result, readable.source_urls
+            )
+            disqualified += fired is not None
+        return disqualified
+
+    async def _record_first_fired(
+        self,
+        candidate: CandidateResponse,
+        run: SourcingRunResponse,
+        manifest: ManifestResponse,
+        result: PredicateResult,
+        source_urls: Mapping[str, str] | None,
+    ) -> RuleOutcome | None:
         unjudged = result.not_evaluable()
         if unjudged:
             logger.info(

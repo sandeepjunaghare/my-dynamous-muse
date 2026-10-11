@@ -3,9 +3,15 @@
 import pytest
 
 from app.manifests.schemas import RuleOperator, SourceKind
-from app.qualification.exceptions import RuleNotEvaluableError
-from app.qualification.rules import apply_predicates, evaluate, predicate_rules
-from app.qualification.schemas import OutcomeKind, RecordSet
+from app.qualification.exceptions import BatchWideDisqualificationError, RuleNotEvaluableError
+from app.qualification.rules import (
+    MIN_SAMPLE,
+    apply_predicates,
+    check_batch,
+    evaluate,
+    predicate_rules,
+)
+from app.qualification.schemas import OutcomeKind, PredicateResult, RecordSet
 from tests.qualification.builders import (
     DFW_COUNTIES,
     FREIGHT_V3_PREDICATES,
@@ -243,3 +249,51 @@ class TestApplyPredicates:
         result = apply_predicates(body, {"fmcsa": census_row(power_units="")})
         assert [o.rule_id for o in result.not_evaluable()] == ["asset_based_carrier"]
         assert result.first_fired() is None
+
+
+class TestCheckBatch:
+    """The circuit breaker (PR #18 review, M1): a rule that fires on nearly the whole batch it can
+    judge is presumed wrong, and refused before anything is recorded."""
+
+    BROKER = predicate("broker", "brokerAuthorityStatus", RuleOperator.not_equals, "A", source="qc")
+    TYPO = predicate("typo", "brokerAuthorityStatsu", RuleOperator.not_equals, "A", source="qc")
+
+    def _results(self, *records: RecordSet) -> list[PredicateResult]:
+        body = a_body_with(self.BROKER, self.TYPO, sources=(("qc", SourceKind.registry_api),))
+        return [apply_predicates(body, record) for record in records]
+
+    def test_a_field_absent_on_every_found_record_trips(self) -> None:
+        records = [{"qc": {"brokerAuthorityStatus": "A"}}] * MIN_SAMPLE
+        with pytest.raises(
+            BatchWideDisqualificationError, match="'typo' fired on 5 of the 5"
+        ) as exc:
+            check_batch(self._results(*records))
+        assert (exc.value.fired, exc.value.judged) == (MIN_SAMPLE, MIN_SAMPLE)
+
+    def test_a_real_value_firing_on_nearly_everything_trips_too(self) -> None:
+        """A value spelled in the wrong case (``'a'``) fires on every ``'A'`` — the same mistake."""
+        records = [{"qc": {"brokerAuthorityStatus": "I", "brokerAuthorityStatsu": "A"}}] * 9 + [
+            {"qc": {"brokerAuthorityStatus": "A", "brokerAuthorityStatsu": "A"}}
+        ]
+        with pytest.raises(BatchWideDisqualificationError, match="'broker' fired on 9 of the 10"):
+            check_batch(self._results(*records))
+
+    def test_under_the_share_passes(self) -> None:
+        records = [{"qc": {"brokerAuthorityStatus": "I", "brokerAuthorityStatsu": "A"}}] * 8 + [
+            {"qc": {"brokerAuthorityStatus": "A", "brokerAuthorityStatsu": "A"}}
+        ] * 2
+        check_batch(self._results(*records))
+
+    def test_below_the_sample_nothing_trips(self) -> None:
+        """One small batch must not jam the backlog by refusing forever."""
+        records: list[RecordSet] = [{"qc": {}}] * (MIN_SAMPLE - 1)
+        check_batch(self._results(*records))
+
+    def test_a_candidate_without_the_source_is_not_counted(self) -> None:
+        """QCMobile not knowing a carrier says nothing about a QCMobile rule — so twenty unknown
+        carriers neither dilute a trip nor make up the sample."""
+        unknown: RecordSet = {}
+        found: RecordSet = {"qc": {"brokerAuthorityStatus": "A"}}
+        with pytest.raises(BatchWideDisqualificationError, match="'typo' fired on 5 of the 5"):
+            check_batch(self._results(*([unknown] * 20), *([found] * MIN_SAMPLE)))
+        check_batch(self._results(*([unknown] * 20), *([found] * (MIN_SAMPLE - 1))))

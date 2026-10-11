@@ -22,19 +22,31 @@ The semantics, decided once so the dry-run and the pipeline cannot disagree:
   disqualifies**. An unjudgeable record stays in the pool and is counted, so a person sees it.
 * A rule whose operator and value do not fit raises :class:`RuleNotEvaluableError`: that is the
   manifest being wrong, not the record.
+* A rule that fires on (nearly) every candidate in a batch is presumed wrong too
+  (:func:`check_batch`): a field the source never stores is absent everywhere, and the negated
+  operators would otherwise disqualify, and permanently suppress, the whole batch.
 """
 
+from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 from typing import assert_never
 
 from app.manifests.schemas import DisqualifierRule, ManifestBody, RuleKind, RuleOperator
-from app.qualification.exceptions import RuleNotEvaluableError
+from app.qualification.exceptions import BatchWideDisqualificationError, RuleNotEvaluableError
 from app.qualification.schemas import OutcomeKind, PredicateResult, RecordSet, RuleOutcome
 
 NEGATED_OPERATORS = frozenset(
     {RuleOperator.not_equals, RuleOperator.not_in_set, RuleOperator.not_contains}
 )
 """The operators an absent field satisfies: "not X" holds of a value that is not there."""
+
+MIN_SAMPLE = 5
+"""Fewest judged candidates in a batch before :func:`check_batch` may trip."""
+
+TRIP_SHARE = 0.9
+"""Share of a batch's judged candidates one rule must fire on to trip :func:`check_batch`. A rule
+that is wrong fires on all of them; a real one that rejects 90% of a pushed-down pool is worth a
+person's look before it suppresses that many businesses for good."""
 
 TRUE_TEXT = frozenset({"Y", "YES", "TRUE", "T", "1"})
 FALSE_TEXT = frozenset({"N", "NO", "FALSE", "F", "0"})
@@ -163,6 +175,46 @@ def evaluate(rule: DisqualifierRule, records: RecordSet, *, source: str) -> Rule
         kind=OutcomeKind.fired if matched else OutcomeKind.passed,
         observed=text,
     )
+
+
+def check_batch(
+    results: Sequence[PredicateResult],
+    *,
+    min_sample: int = MIN_SAMPLE,
+    trip_share: float = TRIP_SHARE,
+) -> None:
+    """Raise if one rule fired on (nearly) every candidate in a batch that it could judge.
+
+    "Could judge" means the candidate has a record for the rule's source: a candidate QCMobile did
+    not know says nothing about a QCMobile rule. Each rule is counted standalone, not only where it
+    was the first to fire. Below ``min_sample`` judged candidates nothing trips, so one unlucky
+    small batch cannot jam the backlog.
+    """
+    judged: dict[str, int] = {}
+    fired: dict[str, int] = {}
+    seen: dict[str, list[str]] = {}
+    for result in results:
+        for outcome in result.outcomes:
+            if outcome.reason == "source_missing":
+                continue
+            judged[outcome.rule_id] = judged.get(outcome.rule_id, 0) + 1
+            if outcome.kind is OutcomeKind.fired:
+                fired[outcome.rule_id] = fired.get(outcome.rule_id, 0) + 1
+                seen.setdefault(outcome.rule_id, []).append(
+                    "absent" if outcome.observed is None else repr(outcome.observed)
+                )
+    for rule_id, count in judged.items():
+        hits = fired.get(rule_id, 0)
+        if count >= min_sample and hits >= trip_share * count:
+            examples = ", ".join(sorted(set(seen[rule_id]))[:3])
+            raise BatchWideDisqualificationError(
+                f"rule {rule_id!r} fired on {hits} of the {count} batch candidates it could judge "
+                f"(saw: {examples}) — check its field, value and `source` against a live record. "
+                "Nothing was recorded; the run's batch goes back to the backlog",
+                rule_id=rule_id,
+                fired=hits,
+                judged=count,
+            )
 
 
 def apply_predicates(body: ManifestBody, records: RecordSet) -> PredicateResult:

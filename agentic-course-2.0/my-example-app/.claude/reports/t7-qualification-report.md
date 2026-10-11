@@ -162,5 +162,34 @@ What was built:
 - **Freight v7.** Set `source: fmcsa_qcmobile` on `not_allowed_to_operate` and `broker_authority_not_active`,
   dry-run it, and activate it before the next live run; otherwise the run refuses. Dev also needs
   `alembic upgrade head` for `0008`.
-- **Residual risk.** A typo in the field of a negated rule on a non-discovery source (QCMobile) would fire on
-  every candidate. QCMobile publishes no field list to check against.
+- ~~**Residual risk.** A typo in the field of a negated rule on a non-discovery source (QCMobile) would fire on
+  every candidate.~~ Closed by the review fixes below.
+
+## PR #18 Phase 6 review fixes (M1, M2, L1)
+
+**Status:** COMPLETE. Owner approved option (a) for M1, with M2 and L1 in the same change.
+
+- **M1, the circuit breaker.** `rules.check_batch` checks each predicate rule. It trips when the rule fires on at
+  least `TRIP_SHARE` (90%) of the batch candidates that have a record for its source, with at least `MIN_SAMPLE` (5)
+  of them. It raises `BatchWideDisqualificationError` (422), with the rule, the counts and up to three observed
+  values. `QualificationService.disqualify_batch` evaluates the whole batch first, checks it, and only then
+  records. `search_registry` calls it in place of the per-candidate loop. The run fails, its batch goes back,
+  and nothing is suppressed.
+- **M2.** `_refuse_unevaluable_rules` refuses a predicate routed to a join source (the revocations), before the
+  pull.
+- **L1.** The same function runs `check_shape` on every predicate rule before the pull.
+
+**Choices worth a look**
+- **Threshold.** A share and not "every one": a value spelled in the wrong case (`'a'` against `'A'`) fires on
+  real values, and a few odd records shouldn't hide the mistake. A real rule that rejects 90% of a batch also
+  trips. That is loud and recoverable: the run fails, and nothing is lost.
+- **Minimum sample of 5.** Below that, nothing trips. A small batch whose first candidates happen to fire would
+  otherwise refuse on every run and jam the backlog.
+
+**Tests:** 1,087 passed, 2 skipped.
+- New: `TestCheckBatch` (5) in `test_rules.py`. In `test_qualification_wiring.py` (3): a misspelled QCMobile field
+  trips with nothing recorded or suppressed; a join-routed predicate and a malformed rule each refuse with no
+  request made.
+- **Mutation check:** 5 of 5 caught: the breaker not called; the join guard removed; the early shape check
+  removed; missing-source candidates counted; the minimum sample ignored. The missing-source mutant survived the
+  first version of its test, which passed either way, so the test was rewritten.

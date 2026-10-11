@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select
 
 from app.manifests.schemas import DisqualifierRule, ManifestBody, RuleKind, RuleOperator
-from app.qualification.exceptions import RuleNotEvaluableError
+from app.qualification.exceptions import BatchWideDisqualificationError, RuleNotEvaluableError
 from app.qualification.service import QualificationService
 from app.sourcing.models import SourcingRun
 from app.sourcing.pipeline import SourcingPipeline
@@ -56,14 +56,20 @@ async def _runs(factory: SessionFactory, vertical: str) -> list[SourcingRunRespo
         return [SourcingRunResponse.model_validate(row) for row in rows.all()]
 
 
-def _broker_rule(*, source: str | None = "fmcsa_qcmobile") -> DisqualifierRule:
+def _broker_rule(
+    *,
+    source: str | None = "fmcsa_qcmobile",
+    field: str = "brokerAuthorityStatus",
+    operator: RuleOperator = RuleOperator.not_equals,
+    value: str = "A",
+) -> DisqualifierRule:
     return DisqualifierRule(
         id="broker_authority_not_active",
         kind=RuleKind.predicate,
         description="no active broker authority",
-        field="brokerAuthorityStatus",
-        operator=RuleOperator.not_equals,
-        value="A",
+        field=field,
+        operator=operator,
+        value=value,
         source=source,
     )
 
@@ -200,3 +206,55 @@ class TestAMisroutedRule:
         assert run.status is RunStatus.failed
         assert await _candidates(session_factory, run) == []
         assert await _suppressed(session_factory, vertical) == frozenset()
+
+    async def test_a_predicate_on_a_join_source_refuses_before_the_pull(
+        self, session_factory: SessionFactory
+    ) -> None:
+        """Revocations repeat per carrier, so a predicate would judge one row and skip two (M2)."""
+        rule = _broker_rule(source="fmcsa_revocations", field="order1_type_desc", value="X")
+        vertical = await _manifest(session_factory, _body(rule))
+        mock = MockFmcsa()
+
+        with pytest.raises(RuleNotEvaluableError, match="a join source"):
+            await SourcingPipeline(session_factory, stages=[registry_stage(mock)]).run(
+                a_brief(vertical)
+            )
+
+        assert mock.requests == []
+
+    async def test_a_malformed_rule_refuses_before_the_pull(
+        self, session_factory: SessionFactory
+    ) -> None:
+        """Found before any free work is spent, not at the batch's first disqualification (L1)."""
+        rule = _broker_rule(operator=RuleOperator.not_in_set)
+        vertical = await _manifest(session_factory, _body(rule))
+        mock = MockFmcsa()
+
+        with pytest.raises(RuleNotEvaluableError, match="not_in_set cannot compare"):
+            await SourcingPipeline(session_factory, stages=[registry_stage(mock)]).run(
+                a_brief(vertical)
+            )
+
+        assert mock.requests == []
+
+
+class TestTheCircuitBreaker:
+    async def test_a_field_qcmobile_never_holds_fails_the_run_and_suppresses_nothing(
+        self, session_factory: SessionFactory
+    ) -> None:
+        """Misspelled, so absent from every found record: the negated rule would fire on the
+        whole batch and suppress it for good (M1). Nothing is recorded and the batch goes back."""
+        rule = _broker_rule(field="brokerAuthorityStatsu")
+        vertical = await _manifest(session_factory, _body(rule))
+
+        with pytest.raises(BatchWideDisqualificationError, match="fired on 5 of the 5"):
+            await SourcingPipeline(
+                session_factory, stages=[registry_stage(MockFmcsa(), batch_size=5)]
+            ).run(a_brief(vertical))
+
+        (run,) = await _runs(session_factory, vertical)
+        assert run.status is RunStatus.failed
+        assert await _suppressed(session_factory, vertical) == frozenset()
+        for candidate in await _candidates(session_factory, run):
+            async with session_factory() as session:
+                assert await QualificationService(session).list_for_candidate(candidate.id) == []

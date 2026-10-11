@@ -16,8 +16,11 @@ table this stage is built with.
    cited to that source.
 5. **Apply the free predicates** (T7, ``app/qualification/``) to each candidate's records: the first
    rule to fire is recorded as a cited ``disqualification``, and ``classify_rollup`` skips the
-   candidate. Before selection, registry ids the vertical already rejected are **suppressed**, so a
-   batch handed back by a failed run never re-spends a slot on them.
+   candidate. The whole batch is evaluated first; a rule that fires on nearly all of it is
+   presumed wrong and fails the run with nothing recorded (``check_batch``). Before selection,
+   registry ids the vertical already rejected are **suppressed**, so a batch handed back by a
+   failed run never re-spends a slot on them. Before the pull, a predicate rule that could never
+   be judged fairly (malformed, or reading a join source) refuses the run.
 
 The stage fetches; qualification decides. It calls ``QualificationService`` rather than the
 sourcing slice doing so, so ``app/sourcing/`` never imports ``app/qualification/``. A candidate is
@@ -42,6 +45,7 @@ from app.core.logging import get_logger
 from app.manifests.schemas import RuleKind
 from app.qualification.exceptions import RuleNotEvaluableError
 from app.qualification.records import records_from
+from app.qualification.rules import check_shape, predicate_rules
 from app.qualification.service import QualificationService
 from app.shared.provenance import ProvenancedValue
 from app.sourcing.exceptions import SourceAuthError, SourceUnavailableError
@@ -136,6 +140,7 @@ class SearchRegistryStage:
                 raise self._refuse(bound.degraded, when="no batch was taken")
             reasons.extend(bound.degraded)
 
+            _refuse_unevaluable_rules(context, tuple(join.name for join in bound.joins))
             rules = [cited.value for cited in context.manifest.body.disqualifier_rules]
             pull = await bound.discovery.pull(rules)
             _refuse_misrouted_rules(context, bound.discovery.name, pull.known_fields)
@@ -201,16 +206,11 @@ class SearchRegistryStage:
                 context.run_id, candidates, stage=PipelineStage.search_registry
             )
             run = await service.get_run(context.run_id)
-            for candidate in recorded:
-                readable = records_from(candidate.fields)
-                fired = await qualification.disqualify_by_predicates(
-                    candidate,
-                    run,
-                    context.manifest,
-                    readable.records,
-                    source_urls=readable.source_urls,
-                )
-                disqualified += fired is not None
+            disqualified = await qualification.disqualify_batch(
+                run,
+                context.manifest,
+                [(candidate, records_from(candidate.fields)) for candidate in recorded],
+            )
 
         counts = {
             "pool_seen": selection.seen,
@@ -234,6 +234,28 @@ class SearchRegistryStage:
             **counts,
         )
         return StageResult(counts=counts, degraded_reason="; ".join(reasons) or None)
+
+
+def _refuse_unevaluable_rules(context: StageContext, joins: tuple[str, ...]) -> None:
+    """Raise before the pull if a predicate rule could never be judged fairly here.
+
+    * Its operator and value do not fit (``check_shape``): better found now than after the batch's
+      free lookups are spent.
+    * It reads a **join** source (the revocations). A join repeats: a carrier may have several
+      rows, and only a one-row source is a record a predicate can read, so the verdict would turn
+      on the row count. Reading those rows is a judgment rule's job.
+    """
+    body = context.manifest.body
+    for rule in predicate_rules(body):
+        check_shape(rule)
+        source = body.source_for(rule)
+        if source in joins:
+            raise RuleNotEvaluableError(
+                f"rule {rule.id!r} is a predicate on {source!r}, a join source whose rows repeat "
+                "per business — make it a judgment rule, or read a one-row source. Refused before "
+                "the pull",
+                rule_id=rule.id,
+            )
 
 
 def _refuse_misrouted_rules(

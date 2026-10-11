@@ -213,6 +213,12 @@ recorded in item 3 and item 6.
    declared source (the census). The census pull reports its columns (`DiscoveryPull.known_fields`),
    and a predicate routed there on a field it never has **refuses the run before any batch** — an
    absent field would fire a negated rule on every candidate and suppress the whole backlog.
+   Lookup sources (QCMobile) declare no field list. There, a **circuit breaker** catches the same
+   mistake: the whole batch is evaluated before anything is recorded. If one rule fires on ≥90% of
+   the candidates that have a record for its source (with at least 5 of them), the run fails with
+   `BatchWideDisqualificationError` and its batch goes back to the pool. Nothing is suppressed.
+   Before the pull, a malformed predicate, or a predicate on a join source (the revocations repeat
+   per carrier), refuses the run (PR #18 review: M1, M2, L1).
 
 ## `lpe sourcing run`
 

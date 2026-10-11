@@ -1307,3 +1307,23 @@ now refuses that run before taking a batch.
 by a parity test that compares what the two do rather than counting them.
 **Improve:** when a semantics change widens what fires, look for the inputs that make it fire on *everything*.
 
+
+## PR #18 Phase 6 review fixes — M1, M2, L1 (owner approved 2026-10-11)
+
+- [x] **M1, the batch-wide circuit breaker.** `rules.check_batch(results)`: if one predicate rule fires on at least
+  `TRIP_SHARE` (90%) of the batch candidates that have a record for its source, with at least `MIN_SAMPLE` (5) of
+  them, raise `BatchWideDisqualificationError`. `QualificationService.disqualify_batch` evaluates the whole batch,
+  checks it, and only then records. The run fails and hands its batch back, so nothing is suppressed.
+- [x] **M2.** Refuse a predicate rule routed to a join source (revocations) before the pull.
+- [x] **L1.** `check_shape` every predicate rule before the pull, not inside the first disqualification.
+- [x] Tests: unit tests for `check_batch` (trips, below sample, under share, absent source does not count); wiring
+  tests (a misspelled QCMobile field trips and suppresses nothing; a join-routed predicate and a malformed rule
+  refuse with no request made).
+- [x] Docs: the review file's resolution, the sourcing README's T7 contract, the T7 report. Then validate, commit and push.
+
+**Review:** 1,087 passed, 2 skipped. ruff, format, mypy and pyright clean. Mutation check 5/5.
+**Worked:** evaluating the whole batch before recording anything made the breaker a pure function over outcomes,
+easy to unit-test.
+**Didn't:** the first missing-source test passed with or without the fix. The mutation check caught it, and the
+test was rewritten so unknown carriers must neither dilute a trip nor make up the sample.
+**Improve:** for a guard, test the direction the guard tightens, not only the direction it loosens.
