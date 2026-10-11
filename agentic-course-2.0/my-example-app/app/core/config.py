@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     # Cost. A circuit breaker against a runaway loop, not a budget target (D9).
     max_places_calls_per_run: int = 500
 
+    # Sourcing (T5). The run works a backlog in fixed batches (D12): the batch size, not the pool
+    # size, sets each run's paid bill. 150 is the starting point, to be tuned from the first runs.
+    sourcing_batch_size: int = Field(default=150, gt=0)
+    # A run still `running` this long after it started was killed without finishing; the next run
+    # of the vertical marks it failed, which also hands its batch back to the pool.
+    sourcing_stale_run_hours: int = Field(default=6, gt=0)
+    # FMCSA QCMobile webKey — free, through a Login.gov developer account. Unset, QCMobile is
+    # skipped and every run finishes `degraded`: candidates are recorded, without `allowToOperate`.
+    fmcsa_webkey: str | None = None
+    # Socrata app token for data.transportation.gov. Optional: without it SODA throttles per IP.
+    socrata_app_token: str | None = None
+
     # Integrations. Optional at T1 — T3 is what first needs a token.
     hubspot_private_app_token: str | None = None
     # The HubSpot owner a cadence task is assigned to when ``enrol`` names none. Unset leaves tasks

@@ -55,6 +55,9 @@ FIELD_OWNERS: Final[Mapping[str, PipelineStage]] = MappingProxyType(
         "website": PipelineStage.verify_business,
         # The Places check: the place ID only (D13).
         "business_check": PipelineStage.verify_business,
+        # Every source's raw record (T5). The registry stage writes the whole batch's records in one
+        # write per candidate, so a retry replaces them whole rather than merging stale ones in.
+        "source_records": PipelineStage.search_registry,
     }
 )
 """``CandidateFields`` field name → the one stage allowed to overwrite it."""

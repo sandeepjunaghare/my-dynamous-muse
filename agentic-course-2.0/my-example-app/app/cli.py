@@ -20,6 +20,7 @@ from app.cadence import cli as cadence_cli
 from app.core.exceptions import LocalProspectEngineError
 from app.core.logging import setup_logging
 from app.manifests import cli as manifests_cli
+from app.sourcing import cli as sourcing_cli
 
 
 def _stderr_logger(*logger_name: str) -> structlog.PrintLogger:
@@ -60,6 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
         commands.add_parser("manifest", help="review and activate vertical manifests")
     )
     cadence_cli.register(commands.add_parser("cadence", help="sync the cadence; list overdue"))
+    sourcing_cli.register(
+        commands.add_parser("sourcing", help="run the sourcing pipeline for a vertical")
+    )
     return parser
 
 
@@ -79,6 +83,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return manifests_cli.dispatch(args)
         if command == "cadence":
             return cadence_cli.dispatch(args)
+        if command == "sourcing":
+            return sourcing_cli.dispatch(args)
     except LocalProspectEngineError as exc:
         # A deliberate failure is a message, not a stack trace: every one of these is something a
         # person can act on (read the terms, fix the id, activate a draft first).

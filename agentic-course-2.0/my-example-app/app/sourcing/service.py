@@ -11,6 +11,7 @@ lives here — T5 builds the runner that calls these three methods in order.
 """
 
 from collections.abc import Mapping, Sequence
+from datetime import date, timedelta
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,10 +21,13 @@ from app.core.logging import get_logger
 from app.manifests.service import ManifestService
 from app.sourcing.exceptions import SourcingRunNotFoundError, SourcingRunNotRunningError
 from app.sourcing.models import SourcingRun
+from app.sourcing.pool import PoolRepository
 from app.sourcing.repository import SourcingRepository
 from app.sourcing.schemas import (
     CandidateFields,
     CandidateResponse,
+    PoolEntry,
+    PoolSelection,
     RunCostSummary,
     RunOutcome,
     RunStatus,
@@ -31,6 +35,7 @@ from app.sourcing.schemas import (
     SourcingBrief,
     SourcingRunResponse,
 )
+from app.sourcing.sources.base import PoolRecord
 from app.sourcing.stages import PipelineStage
 
 logger = get_logger(__name__)
@@ -126,8 +131,20 @@ class SourcingService:
         run = await self._require_running(run_id, action="finish_run")
         totals = RunTotals(counts=dict(counts), cost=RunCostSummary.from_run_cost(cost))
 
-        await self._repository.mark_finished(run, outcome, totals.counts, totals.cost, detail)
+        finished = await self._repository.mark_finished(
+            run, outcome, totals.counts, totals.cost, detail
+        )
+        if finished is None:
+            # Someone finished it between our read and our write. Theirs stands.
+            await self._session.rollback()
+            current = await self._require_run(run_id)
+            raise SourcingRunNotRunningError(
+                f"sourcing run {run_id} is {current.status}; finish_run needs a running run",
+                run_id=str(run_id),
+                status=current.status,
+            )
         await self._session.commit()
+        run = finished
 
         logger.info(
             "sourcing.service.run_finished",
@@ -137,6 +154,67 @@ class SourcingService:
             total_usd=str(totals.cost.total_usd()),
         )
         return SourcingRunResponse.model_validate(run)
+
+    async def reap_stale_runs(self, vertical: str, *, older_than: timedelta) -> list[UUID]:
+        """Fail this vertical's runs left ``running`` past ``older_than``, and return their ids.
+
+        Called at the start of every run: the cheapest place to notice that the last one was killed
+        before it could record its own failure.
+        """
+        reaped = await self._repository.reap_stale_runs(vertical, older_than)
+        await self._session.commit()
+        if reaped:
+            logger.warning(
+                "sourcing.service.runs_reaped",
+                vertical=vertical,
+                run_ids=[str(run_id) for run_id in reaped],
+            )
+        return reaped
+
+    async def refresh_pool_and_select(
+        self,
+        run_id: UUID,
+        records: Sequence[PoolRecord],
+        *,
+        size: int,
+        currency_cutoff: date,
+    ) -> PoolSelection:
+        """Refresh the vertical's backlog from this run's pull, then take this run's batch (D12).
+
+        One commit for both, so a refreshed pool with no batch marked — or a batch marked against a
+        refresh that never landed — cannot be left behind.
+        """
+        run = await self._require_running(run_id, action="refresh_pool_and_select")
+        pool = PoolRepository(self._session)
+        new = await pool.refresh(run.vertical, run.id, records)
+        available = await pool.count_available(run.vertical, run.id)
+        selected = await pool.select_batch(
+            run.vertical, run.id, size=size, currency_cutoff=currency_cutoff
+        )
+        await self._session.commit()
+
+        selection = PoolSelection(
+            seen=len(records),
+            new=new,
+            available=available,
+            selected=tuple(
+                PoolEntry(
+                    registry_id=entry.registry_id,
+                    fields=CandidateFields.model_validate(entry.fields),
+                )
+                for entry in selected
+            ),
+        )
+        logger.info(
+            "sourcing.service.batch_taken",
+            run_id=str(run_id),
+            vertical=run.vertical,
+            seen=selection.seen,
+            new=selection.new,
+            available=selection.available,
+            batched=len(selection.selected),
+        )
+        return selection
 
     async def _require_run(self, run_id: UUID) -> SourcingRun:
         """Return the run, or raise :class:`SourcingRunNotFoundError`."""

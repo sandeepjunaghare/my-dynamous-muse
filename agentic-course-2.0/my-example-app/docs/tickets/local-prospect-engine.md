@@ -149,6 +149,14 @@ E10 · **SPIKE-2 result** (below).
 **Files:** `app/tools/search_registry.py`, `app/sourcing/{service,pipeline,sources/fmcsa}.py`, `tests/`
 **Size:** ~1100–1500 lines · **Depends on:** T2, T4 · **Gated by:** ~~SPIKE-2~~ cleared 2026-10-10 (principal half; headcount does not gate)
 
+**Built 2026-10-10** (plan `.claude/plans/t5-pipeline-fmcsa.md`). What T7, T6 and the first live run need to know:
+- **The backlog is its own table**, `sourcing_pool` (migration `0006`), keyed `(vertical, registry_id)`; each run's batch becomes ordinary `candidate` rows. A failed or reaped run hands its batch back.
+- **T5 fetches, T7 decides.** QCMobile and revocations are stored as cited `CandidateFields.source_records`; nothing is dropped after the pool. **T7: read *Contract with T7* in `app/sourcing/README.md`** — where rule fields live, `str|int` values, the null semantics the pushdown uses, the suppression key.
+- **Census predicates are pushed down to SoQL** in T5. Freight v3's five census rules leave **4,464** rows live (2026-10-10; 4,449 by hand on 10-09).
+- **FMCSA moved to Motus on 2026-05-14.** Freight v3 declares the frozen legacy revocations file (`rwr4-5nkg`); T5 binds only Motus RevokeSuspend (`wb4f-neki`). **A freight v4 pointing revocations at `https://data.transportation.gov/d/wb4f-neki` is needed before the first live run.**
+- **No FMCSA webKey yet:** runs end `degraded`, without `allowToOperate`. Once one exists, capture a real `/carriers/{dot}` answer — the docs say `allowToOperate`, v3's rule says the same, and neither is verified live.
+- One QCMobile call per candidate (`/carriers/{dot}`), not three: no rule reads `/authority` or `/docket-numbers`.
+
 ---
 
 ### T6 — Enrichment stages: `verify_business` + `resolve_owner`
