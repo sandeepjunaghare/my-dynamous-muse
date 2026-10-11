@@ -24,6 +24,7 @@ from app.core.config import get_settings
 from app.core.database import Base
 from app.manifests import models as manifest_models
 from app.qualification import models as qualification_models
+from app.routing import models as routing_models
 from app.sourcing import models as sourcing_models
 
 # Importing a slice's models is what puts its tables on Base.metadata. The tuple keeps the import
@@ -36,6 +37,7 @@ _REGISTERED_MODELS = (
     sourcing_models.Candidate,
     cadence_models.CadenceState,
     qualification_models.Disqualification,
+    routing_models.RouteAssignment,
 )
 
 config = context.config

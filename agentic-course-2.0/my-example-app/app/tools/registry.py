@@ -45,6 +45,9 @@ class StageResult:
     """What a stage reports back: its counts, merged into ``sourcing_run.counts`` by the runner."""
 
     counts: Mapping[str, int]
+    degraded_reason: str | None = None
+    """Set when the stage finished but short of its goal: a source it could not use, lookups that
+    failed. The runner then finishes the run ``degraded`` with every stage's reason."""
 
 
 @runtime_checkable

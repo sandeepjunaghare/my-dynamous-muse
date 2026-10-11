@@ -138,7 +138,7 @@ declarative manifest, not code* and *Missing pieces* · PRD §6 portability tabl
 - **FMCSA adapter, census-file-first.** QCMobile is a *lookup* API keyed on USDOT/MC, not a search-by-geography API — so: pull the bulk Company Census File, filter to DFW counties + active broker authority, then QCMobile per record for MC number, authority status, fleet size, BOC-3 filings. (E10: this is the exact judgment whose absence produced a 74-row file of BOC-3 process agents instead of brokers.)
 - Brief → `sourcing_run` → candidates persisted with provenance on every field.
 - **The backlog and the batch (D12, 2026-10-09).** The census filter runs over the whole pool once (4,449 for freight v3) and persists it. Each run then selects a **fixed batch** (setting, default 150) **best first**, with a deterministic order: current MCS-150 filing (within 2 years) first, then a named `company_officer_1`, then the stable tie-breaker. Selected candidates are marked so a candidate is never batched twice, and the pool works down run over run. **Test:** two runs over one fixture pool select disjoint batches in the same order every time.
-- **Free checks before anything paid (D8):** QCMobile `allowToOperate` and the revocations join run on the batch in code, not by a model. They need a free FMCSA webKey. **`power_units` and other numeric census fields arrive as text**, so cast them at the adapter.
+- **Free checks before anything paid (D8):** QCMobile `allowedToOperate` and the revocations join run on the batch in code, not by a model. They need a free FMCSA webKey. **`power_units` and other numeric census fields arrive as text**, so cast them at the adapter.
 - **Portability test:** pointing the same stage at the fire manifest hits the fire source with **no code change** (stub source in tests).
 - **Determinism test:** same fixture input → identical candidate set and ordering across runs.
 - Recorded fixtures; no live network in tests.
@@ -148,6 +148,15 @@ stages, not one per source*, *Boundaries & contracts* → FMCSA · `.claude/refe
 E10 · **SPIKE-2 result** (below).
 **Files:** `app/tools/search_registry.py`, `app/sourcing/{service,pipeline,sources/fmcsa}.py`, `tests/`
 **Size:** ~1100–1500 lines · **Depends on:** T2, T4 · **Gated by:** ~~SPIKE-2~~ cleared 2026-10-10 (principal half; headcount does not gate)
+
+**Built 2026-10-10** (plan `.claude/plans/t5-pipeline-fmcsa.md`). What T7, T6 and the first live run need to know:
+- **The backlog is its own table**, `sourcing_pool` (migration `0006`), keyed `(vertical, registry_id)`; each run's batch becomes ordinary `candidate` rows. A failed or reaped run hands its batch back.
+- **T5 fetches, T7 decides.** QCMobile and revocations are stored as cited `CandidateFields.source_records`; nothing is dropped after the pool. **T7: read *Contract with T7* in `app/sourcing/README.md`** — where rule fields live, `str|int` values, the null semantics the pushdown uses, the suppression key.
+- **Census predicates are pushed down to SoQL** in T5. Freight v3's five census rules leave **4,464** rows live (2026-10-10; 4,449 by hand on 10-09).
+- **FMCSA moved to Motus on 2026-05-14.** Freight v3 declares the frozen legacy revocations file (`rwr4-5nkg`); T5 binds only Motus RevokeSuspend (`wb4f-neki`). Freight v4 onwards point revocations at `https://data.transportation.gov/d/wb4f-neki`.
+- **Without an FMCSA webKey** runs refuse before taking a batch (PR #21 review M1); `--allow-degraded` runs anyway, without `allowedToOperate`. **Settled live 2026-10-10:** QCMobile says `allowedToOperate`, not the docs' `allowToOperate`. Freight v4 (`9c2d4a48…`, Motus revocations) kept the wrong spelling; v5 (`6454f442…`) fixed it.
+- **Freight v6 (`0cc09930…`) is ACTIVE** (2026-10-10): v5 plus `broker_authority_not_active` (`brokerAuthorityStatus not_equals 'A'`). The first live batch (run `f033aebe`, 10 candidates, $0.00) had 4 of 10 census `carship`-B entities with QCMobile broker authority `I` and 1 with no authority on file. Like every post-pool predicate, it removes nothing until T7's evaluator exists. Dev Supabase is at `0007_routing`.
+- One QCMobile call per candidate (`/carriers/{dot}`), not three: no rule reads `/authority` or `/docket-numbers`.
 
 ---
 
@@ -177,7 +186,7 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
 - Disqualifier rule engine driven entirely by the manifest (no rule literals in the slice). Free, and runs before anything billable. **What the evaluator has to handle, from the freight v3 review:**
   - **All the operators,** including `not_contains` and `not_in_set` (PRs #10, #11).
   - **Casts:** census numerics such as `power_units` arrive as text.
-  - **A field's source:** `allowToOperate` lives in QCMobile, not the census, so a predicate needs to know which source its field comes from.
+  - **A field's source:** `allowedToOperate` lives in QCMobile, not the census, so a predicate needs to know which source its field comes from.
   - **Joins:** `authority_revoked` is a join against the revocations dataset, so give it a mechanical path rather than a model call.
 - Stage 4 of 5: `classify_rollup_vs_local`, **the second Agent SDK judgment node**, with a citation attached to the verdict. **One call per candidate decides every judgment rule in the manifest** (D12), e.g. rollup, `self_employed_shell` and `authority_revoked`'s reason, never one call per rule. It reads T6's Places response as evidence, in the same run, and discards it afterwards (D13). Only the verdict and its citation are stored. ~$0.08 a candidate, measured.
 - `disqualification` table: candidate + the rule that fired + when. **Re-source suppression:** a disqualified candidate is not re-sourced next run — tested across two runs. This is the thing a HubSpot-only model cannot do.
@@ -213,6 +222,11 @@ hand today") · PRD §6 step 5.
 **Files:** `app/routing/*`, `app/tools/cluster_routes.py`, `tests/routing/`
 **Size:** ~500–800 lines · **Depends on:** T4 · **Parallel with:** T5, T7
 
+*Decided 2026-10-10, planning T8.* **Eligibility is a verified address only.** T8 does not read T7's
+`disqualification`. Narrowing routes to qualified candidates, and whether to re-route afterwards, is **T9/T10's**.
+**Storage is routing's own `route_assignment` table** (migration `0007`): the cited Census point and the route.
+`CandidateFields` is unchanged, and `cluster_routes` still owns no candidate field.
+
 ---
 
 ### T9 — Promotion slice: the write-gate, HubSpot create, promotion ledger
@@ -222,6 +236,7 @@ hand today") · PRD §6 step 5.
 - Create Company + Contact at a **`pending review`** stage with the custom properties from T3 — review happens in HubSpot; there is no frontend and no second login.
 - `promotion` ledger: candidate → the HubSpot company/contact ids it became. Idempotent: re-running promotes nothing twice.
 - **Hands off to T11** for the cadence: promotion's job ends when the record exists and the first touch has been requested.
+- **Routes carry only qualified candidates** *(handed over from T8, 2026-10-10)*. T8 routes every candidate with a verified address and does not read T7's `disqualification`, so `route_assignment` holds disqualified doors too. Whatever promotion attaches a route to, or shows a founder, reads only qualified candidates' rows. Filtering `route_assignment` by qualification is not enough on its own, because the remaining routes are then lopsided; T10 decides whether to re-route instead.
 - **Adopted contacts (T13) already exist in HubSpot and carry no provenance.** The first field write to one of them cites `retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's create date — honest, not an exemption *(moved here from T13, 2026-10-10)*.
 
 **Per-ticket context:** `.claude/references/hubspot-integration.md` · architecture → *Review surface: HubSpot,
@@ -293,6 +308,7 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 - Friday report: the four numbers unchanged from the playbook — doors knocked · owner conversations · assessments booked · paid assessments sold — read from HubSpot, not from a spreadsheet.
 - **M3 renders `not configured`, never `0`** — the `$999 assessment` pipeline does not exist and we have decided not to create it (D10, GATE-A). An uninstrumented zero and a real zero are different facts.
 - Failure semantics: a degraded enrichment run still promotes what it can cite, and says what it dropped.
+- **Routes after qualification** *(handed over from T8, 2026-10-10)*. `cluster_routes` routes every verified address, disqualified or not. Before routes reach a founder, decide and build one: run `cluster_routes` after qualification over qualified candidates only, or re-run it once qualification is done. The stage replaces its rows, so a re-run is cheap. Geocodes that failed already finish the run `degraded` with a count; the Friday report should surface that, not hide it.
 - **Before the first real run (Spike 1 checkpoint, 2026-10-09):** read M5 on the T13-adopted prospects. If touches still are not getting done with the machine running, fix that before the run adds volume. This is a human check, not a code gate.
 
 **Per-ticket context:** PRD §6 steps 1–8 · M7 · architecture → *Scheduling: boring on purpose*, *Cost* ·

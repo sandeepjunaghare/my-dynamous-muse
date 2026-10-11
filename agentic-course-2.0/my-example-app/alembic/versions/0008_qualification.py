@@ -5,13 +5,13 @@ reads it by ``(vertical, registry_id)`` so a rejected business is never re-sourc
 ``manifest_dry_run`` records each ``lpe manifest dry-run``; ``activate`` refuses a manifest with none.
 
 Pre-numbered for Wave 5 (T5 ``0006``, T8 ``0007``, T7 ``0008``), each forked from ``0005``.
-**Re-chained at merge:** ``down_revision`` moves to T8's revision once T5 and T8 are on main.
+**Re-chained at merge** onto T8's ``0007_routing``, which T5's ``0006_sourcing_pool`` precedes.
 
 Hand-written to match ``app/qualification/models.py`` and ``app/manifests/models.py`` exactly, so
 ``alembic check`` stays clean.
 
 Revision ID: 0008_qualification
-Revises: 0005_cadence
+Revises: 0007_routing
 Create Date: 2026-10-10
 
 """
@@ -24,7 +24,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "0008_qualification"
-down_revision: str | None = "0005_cadence"
+down_revision: str | None = "0007_routing"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
