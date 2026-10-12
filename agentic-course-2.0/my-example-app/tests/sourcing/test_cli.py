@@ -17,10 +17,19 @@ from app.cli import main
 from app.core.config import get_settings
 from app.tools.registry import Stage
 from app.tools.search_registry import SearchRegistryStage
+from app.tools.verify_business import VerifyBusinessStage
 from tests.conftest import requires_db
 from tests.manifests.builders import a_vertical
 from tests.sourcing.builders import a_freight_body, an_active_manifest_with
-from tests.sourcing.conftest import TEST_WEBKEY, MockFmcsa, a_clock
+from tests.sourcing.conftest import (
+    TEST_WEBKEY,
+    MockFmcsa,
+    MockPlaces,
+    MockWeb,
+    a_clock,
+    census_rows,
+    routed,
+)
 
 pytestmark = requires_db
 
@@ -90,6 +99,28 @@ def committed_freight(cli_database: str) -> Iterator[str]:
         asyncio.run(remove())
 
 
+@pytest.fixture
+def mock_registry_and_places(monkeypatch: pytest.MonkeyPatch) -> tuple[MockFmcsa, MockPlaces]:
+    """The registry on the mock FMCSA, then ``verify_business`` on mock Places and web."""
+    fmcsa, places = MockFmcsa(), MockPlaces()
+    registry = SearchRegistryStage(
+        transport=fmcsa.transport(), clock=a_clock(), backoff_seconds=0.0, throttle=False
+    )
+    web = MockWeb()
+    for row in census_rows():
+        # Every fixture business's homepage is down: the website step runs, and finds nothing.
+        web.status(f"https://{row['email_address'].split('@')[1]}/", 404)
+    verify = VerifyBusinessStage(
+        transport=routed(places, web), clock=a_clock(), backoff_seconds=0.0, throttle=False
+    )
+
+    def stages() -> tuple[Stage, ...]:
+        return (registry, verify)
+
+    monkeypatch.setattr("app.sourcing.cli.registered_stages", stages)
+    return fmcsa, places
+
+
 class TestRun:
     def test_a_run_prints_its_id_status_and_counts(
         self,
@@ -146,6 +177,38 @@ class TestRun:
         assert "no active manifest" in message
         assert "Traceback" not in err
         assert mock_registry.requests == []
+
+
+class TestPlaces:
+    """A3: freight with no Places source declared refuses unless --allow-degraded (T6)."""
+
+    def test_no_places_source_fails_the_run_with_one_error_line(
+        self,
+        committed_freight: str,
+        mock_registry_and_places: tuple[MockFmcsa, MockPlaces],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _, places = mock_registry_and_places
+        assert main(["sourcing", "run", "--vertical", committed_freight, "--batch-size", "2"]) == 1
+        err = capsys.readouterr().err
+        (message,) = [line for line in err.splitlines() if line.startswith("error: ")]
+        assert "declares no Places source" in message
+        assert "--allow-degraded" in message
+        assert places.requests == []
+
+    def test_with_the_flag_it_exits_zero_and_warns(
+        self,
+        committed_freight: str,
+        mock_registry_and_places: tuple[MockFmcsa, MockPlaces],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _, places = mock_registry_and_places
+        argv = ["sourcing", "run", "--vertical", committed_freight, "--batch-size", "2"]
+        assert main([*argv, "--allow-degraded"]) == 0
+        captured = capsys.readouterr()
+        assert "degraded" in captured.out
+        assert "warning:" in captured.err and "declares no Places source" in captured.err
+        assert places.requests == []
 
 
 @pytest.mark.parametrize("bad", ["0", "-3", "many"])
