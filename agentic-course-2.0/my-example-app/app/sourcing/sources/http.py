@@ -1,17 +1,20 @@
-"""One GET with retries, shared by every source adapter.
+"""One request with retries, shared by every source adapter: ``get``, and ``post`` for a read.
 
 The same loop as the HubSpot gateway's (``app/promotion/client.py``), cut down to what a read-only
-public source needs: every call here is a GET, so a 5xx or a dropped connection is always safe to
-retry — there is no create to duplicate.
+source needs: every call here is a read, so a 5xx or a dropped connection is always safe to retry —
+there is no create to duplicate. ``post`` exists because the Places Text Search is a read sent as
+a POST; **it must never be used for a create**.
 
-**Query parameters are never logged.** QCMobile's webKey travels as one, so the log line carries
-the URL without its query string, and an exception message never carries the request URL at all.
+**Query parameters and headers are never logged.** QCMobile's webKey travels as a query parameter
+and the Places key as a header, so the log line carries the URL without its query string, and an
+exception message never carries the request URL at all.
 """
 
 import asyncio
 import random
 import time
 from collections.abc import Mapping
+from typing import Literal
 
 import httpx
 
@@ -63,17 +66,78 @@ async def get(
     Anything else — or a retryable failure that outlasts ``max_attempts`` — raises
     :class:`SourceRequestError` naming the source, never the URL (it may carry a key).
     """
+    return await _send(
+        client,
+        "GET",
+        url,
+        source=source,
+        params=params,
+        headers=headers,
+        json=None,
+        allow_status=allow_status,
+        max_attempts=max_attempts,
+        backoff_seconds=backoff_seconds,
+    )
+
+
+async def post(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    source: str,
+    json: Mapping[str, object],
+    headers: Mapping[str, str] | None = None,
+    allow_status: frozenset[int] = frozenset(),
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
+) -> httpx.Response:
+    """POST a JSON body to a **read** endpoint, on the same retry loop as :func:`get`.
+
+    Retrying is safe only because the request has no side effect: the Places Text Search is a
+    search, and only a successful request is billable. Never use this for a create — a retried
+    create after a dropped response is a duplicate.
+    """
+    return await _send(
+        client,
+        "POST",
+        url,
+        source=source,
+        params=None,
+        headers=headers,
+        json=json,
+        allow_status=allow_status,
+        max_attempts=max_attempts,
+        backoff_seconds=backoff_seconds,
+    )
+
+
+async def _send(
+    client: httpx.AsyncClient,
+    method: Literal["GET", "POST"],
+    url: str,
+    *,
+    source: str,
+    params: Mapping[str, str] | None,
+    headers: Mapping[str, str] | None,
+    json: Mapping[str, object] | None,
+    allow_status: frozenset[int],
+    max_attempts: int,
+    backoff_seconds: float,
+) -> httpx.Response:
+    """The retry loop. Logs the URL without its query and never the headers."""
+    logged_url = url.split("?", 1)[0]
     attempt = 0
     while True:
         attempt += 1
         started = time.perf_counter()
         try:
-            response = await client.get(url, params=params, headers=headers)
+            response = await client.request(method, url, params=params, headers=headers, json=json)
         except httpx.HTTPError as exc:
             logger.warning(
                 "sourcing.http.request_failed",
                 source=source,
-                url=url,
+                method=method,
+                url=logged_url,
                 attempt=attempt,
                 error=type(exc).__name__,
             )
@@ -91,7 +155,8 @@ async def get(
             logger.info(
                 "sourcing.http.request_succeeded",
                 source=source,
-                url=url,
+                method=method,
+                url=logged_url,
                 status_code=status,
                 duration_seconds=duration,
             )
@@ -102,7 +167,8 @@ async def get(
             logger.warning(
                 "sourcing.http.request_retrying",
                 source=source,
-                url=url,
+                method=method,
+                url=logged_url,
                 status_code=status,
                 attempt=attempt,
             )
@@ -112,7 +178,8 @@ async def get(
         logger.error(
             "sourcing.http.request_refused",
             source=source,
-            url=url,
+            method=method,
+            url=logged_url,
             status_code=status,
             attempt=attempt,
             duration_seconds=duration,
