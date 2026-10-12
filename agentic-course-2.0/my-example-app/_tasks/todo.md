@@ -1466,3 +1466,58 @@ calls a month) and freight v9 with a `places` source: dry-run, then `activate --
 
 **Finding (not T6's to change):** `classify_rollup` raises at its call cap, and its docstring says "degraded",
 but the runner finishes the run **failed**.
+
+---
+
+## T6 PR A implemented: `verify_business`, the reorder, the census owner and email (2026-10-12)
+
+**Scope** (plan *AMENDMENTS* item 2): tasks 1–11, 20, 21, their docs (part of 23) and full validation (24).
+OQ-1…OQ-5 all went with the recommendations. PR B (tasks 12–19, 22, and amendment 3) is not started.
+Branch `feat/t6-enrichment`, worktree `worktrees/t6`, test Postgres `lpe-test-pg-t6` on 5436. Not pushed.
+
+- [x] 1 `RunCost.charge`: the cap check and the record in one call (closes deferred #6)
+- [x] 2 `principal_or_none` / `has_entity_designator`, `PlaceCheck.checked_address`, value-compared
+      `has_verified_address`, `HeadcountBand`, `email` + `headcount_band`, `PlacesEvidence` moved to sourcing
+- [x] 3 stage reorder (D8): `… verify_business → classify_rollup → resolve_owner …`; owner rows for the new fields
+- [x] 4 settings: Places list price, owner-node breakers, `max_places_calls_per_run > 0` (the key was already on main)
+- [x] 5 the census adapter fills `owner` (via `principal_or_none`) and `email`; `has_principal` uses the same test
+- [x] 6 `http.post` on the shared retry loop (reads only; headers never logged)
+- [x] 7–8 `sources/google_places.py`: Pro-only client, bad-key detection, binding by declared source, the matcher
+- [x] 9 `website.py` + `shared_email_domains`: free-mail and shared domains refused, one homepage fetch
+- [x] 10 `StageContext.places`, one dict per run, shared by every stage
+- [x] 11 `verify_business` (stage 2), with the refusal, the breaker and the stored-row D13 assertion
+- [x] 20 `--allow-degraded` reaches `verify_business`
+- [x] 21 D13 structure guard (call site, Pro mask, no Places shape in a field or a column)
+- [x] 23 (PR A part) CLAUDE.md map, `app/sourcing/README.md`, `adding-a-vertical.md`, tickets (T6 built note, T9
+      hand-over), architecture (*Boundaries*: 24%, the checked address)
+- [x] 24 validation: ruff, format, mypy, pyright clean; pytest **1262 passed, 2 skipped** with the DB (offline
+      901 passed, 363 skipped); `alembic check` no drift, head still `0009`; zero suppressions. Mutation checks:
+      all 7 applicable caught (mask gains `websiteUri`; display name copied into the check; the `removed` filter
+      dropped; `search_registry` owns `owner`; `has_verified_address` ignores the address; a fresh dict per stage;
+      the breaker caught without stopping). The two owner-node mutations are PR B's.
+
+### Review
+
+- **Worked:** the plan's patterns were all in the codebase (T5's refusal, T8's MockTransport tests), so the stage
+  went in with no design surprises. Running the mutation list as one script that reverts with `git checkout` was
+  quick and left the tree clean. Committing per phase kept the commits atomic, including splitting `stages.py`
+  into the owner rows (with the schema) and the reorder.
+- **Didn't:** the sandbox's writable `.` is the main checkout, not this worktree, and heredocs fail inside it, so
+  every scripted edit needed the sandbox off. One `ruff format --check` failure was masked by a `| tail` in a
+  chained command and needed an amend of an unpushed commit.
+- **Improve:** a sourcing-wide `MockWeb` is now in `tests/sourcing/conftest.py`; PR B's end-to-end run should
+  reuse it rather than fork one. The plan's matcher text is ambiguous on a census street with no leading number
+  ("required only when it starts with digits" vs "a PO box can never match"); this PR follows the first and
+  matches on ZIP and name. Worth one line of decision.
+
+**Divergences:** the channel test lives in `tests/sourcing/test_places_channel.py` (it needs that suite's
+`session_factory`), not `tests/tools/`. `tests/sourcing/builders._source` became public `a_source`. The blank-key
+test sits with the Places adapter tests rather than in `tests/core/test_config.py` (core tests should not import a
+sourcing adapter). The end-to-end five-stage run in *Testing strategy* is PR B's: it needs both judgment nodes.
+
+**Human, Level 4 (not run here):** set `GOOGLE_PLACES_API_KEY` in `.env`; dry-run and activate freight v9
+(`e0d32bec`) with `--accept-terms fmcsa_company_census,fmcsa_qcmobile,fmcsa_revocations,places`; then
+`uv run lpe sourcing run --vertical freight --batch-size 10` and check `places_verified`, `website_found`, the
+`places_lookup` cost (≤ 10 calls), and that no stored candidate holds a Places display name or formatted address.
+**Until v9 is active, a freight run refuses at `verify_business`** (pass `--allow-degraded` to run without Places).
+
