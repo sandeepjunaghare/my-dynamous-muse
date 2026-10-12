@@ -109,6 +109,36 @@ class ReviewStatus(StrEnum):
     rejected = "rejected"
 
 
+class PromotionStatus(StrEnum):
+    """Where one business stands in the ``promotion`` ledger — a state machine, not a log.
+
+    ``pending_create → pending_review → enrolling → enrolled``, with terminal ``rejected``,
+    ``duplicate`` and ``withdrawn``. Each non-terminal state is a HubSpot round trip that can be
+    interrupted, so a later pass knows exactly which call to finish.
+    """
+
+    pending_create = "pending_create"
+    """Claimed; the company and/or contact create has not been confirmed yet."""
+
+    pending_review = "pending_review"
+    """Company and contact exist in HubSpot at ``lpe_review_status = pending_review``."""
+
+    enrolling = "enrolling"
+    """The founder accepted it; the hand-off to the cadence is in flight."""
+
+    enrolled = "enrolled"
+    """In the cadence — promotion's job is done."""
+
+    rejected = "rejected"
+    """The founder rejected it at review. Its HubSpot records are left as they are."""
+
+    duplicate = "duplicate"
+    """Already in HubSpot, or the same business as another ledger row: nothing was created."""
+
+    withdrawn = "withdrawn"
+    """The company was deleted or archived in HubSpot before a decision was read."""
+
+
 class HubSpotObject(BaseModel):
     """Any CRM record coming back from HubSpot.
 
