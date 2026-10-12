@@ -1087,3 +1087,22 @@ and association type `1` (one read-only check).
 4. **Human step after merge (OQ3 A):** add `uv run lpe promotion sync` to the 07:00 launchd job, before
    `lpe cadence sync`. Also creating `lpe_review_status` on the live portal is a one-way door; it happens only
    through `lpe` at the first real `promote`, never through the connector.
+
+### 2026-10-12: part 1 built ahead of T6 PR A (the T6-independent tasks)
+
+1. **Done in this pass**, on `feat/t9-promotion` off main `0b68ab4`, while T6 PR A is built in parallel: Task 1
+   (config), Tasks 2-5 (schemas incl. `RecordMeta` and `ReviewStatus`, `lpe_review_status` provisioning, client
+   meta merge + `create_contact(company_id=)`, exceptions), Task 6 (`names.py`), Task 9 (`Promotion` model,
+   `0010_promotion` off `0009`, `env.py`), Task 10 (repository) and Task 14 (OQ8-B routing exclusion), each with
+   its tests. Not rebased; not pushed.
+2. **Waiting for the rebase onto T6 PR A** (AMENDMENTS above, item 2): Tasks 7 (`eligibility.py`), 8
+   (`mapping.py`), 11-12 (`service.py`), 13 (CLI), the `FakeCrm` and the service/CLI tests of Task 15, and the
+   Task 16 docs (README *Promotion*/*Review*/*Names*/*Engine metadata*, `provenance.py` and
+   `UnprovenancedWriteError` docstrings, `hubspot-integration.md`, CLAUDE.md, tickets).
+3. **Small divergences**: `RefusalReason` lives in `exceptions.py` (its one home, beside the error that
+   carries it; `eligibility.py` will import it). `PromotionStatus` (the ledger's states) is a `StrEnum` in
+   `schemas.py`, pinned to the CHECK by a test. `PromotionRepository.claim` takes no `run_id`: it uses
+   `candidate.run_id`, which the composite FK requires to match anyway. `transition` takes the six settable
+   columns as typed keyword arguments instead of `**values`, and never clears a column. Task 1's settings sit
+   with the other `hubspot_*` settings (the plan's Task 1), not beside `google_places_api_key` — fewer shared
+   lines with T6. `names.py` does not log; the service will log `promotion.names.split_ambiguous`.

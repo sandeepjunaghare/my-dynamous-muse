@@ -1611,3 +1611,33 @@ condition disabled.
 carry percentages instead of guesses. Checking the portal settled that `pending review` must be new, not reused.
 **Watch.** OQ6 widens the gate's documented carve-out (engine metadata); it is an epic-level wording change, so it is
 the human's call. Under OQ5-A the `manual_hubspot_entry` criterion has nothing to act on yet, and the plan says so.
+
+# T9 part 1: T6-independent tasks (2026-10-12)
+
+**Plan:** `.claude/plans/t9-promotion.md` (all OQs decided to the recommendations) · **Branch:** `feat/t9-promotion`
+(worktrees/t9) · test DB `lpe-test-pg-t9` on **5437**. Scope: the tasks that do not read T6 PR A's `CandidateFields`
+changes. Tasks 7, 8, 11-13 and the task 16 docs that describe them wait for the rebase onto T6 PR A (AMENDMENTS 2).
+Baseline before starting: 1,127 passed, 2 skipped.
+
+- [x] Task 1: `hubspot_portal_id`, `hubspot_ui_domain` in config + `.env.example` (plus a guard: every
+      `.env.example` key is a `Settings` field)
+- [x] Tasks 2-5: `ReviewStatus`, `PropertyOption`, `RecordMeta`, associations on `ObjectWriteRequest`; `lpe_review_status`
+      provisioning; `create_contact(company_id=)` + meta merge; `PromotionRefusedError`, `RunNotPromotableError`,
+      `PromotionStateError`, `RefusalReason`
+- [x] Task 6: `names.py` (OQ4 split)
+- [x] Task 9: `Promotion` model + `0010_promotion` + `env.py`
+- [x] Task 10: `PromotionRepository` (claim, dedupe lookup, CAS transition)
+- [x] Task 14: `cluster_routes` excludes the run's disqualified candidates (OQ8-B)
+- [x] Tests for each; ruff, format, mypy, pyright, pytest (DB tier on 5437), `alembic check`
+- [x] Atomic commits; plan AMENDMENTS note
+- [ ] Rebase onto T6 PR A, then Tasks 7, 8, 11-13, the `FakeCrm` + service/CLI tests, Task 16 docs
+
+**Review:** 1,229 passed, 2 skipped (was 1,127): +102 tests. ruff, format, mypy, pyright clean; `alembic check` clean;
+one head (`0010_promotion`); downgrade to `0009` and back clean. Every ledger CHECK was neutralised in turn and each
+was caught by its test. **Worked:** writing the client, names and routing tests first; they failed for the right
+reason before the code existed. **Didn't:** the ledger's constraint tests came after the model and migration, so they
+were proven by the mutation pass instead; a first blunt mutation (renaming the unique key) broke `claim` everywhere
+and proved nothing. **Improve:** at rebase, re-run the routing tests: the new ones build candidates through
+`a_verified_candidate`, whose `place_checked` call T6 PR A changes (`place_checked(address)`); the builder is T6's
+to update, but the reorder may move `has_verified_address`. Textual conflicts are likeliest in `.env.example` /
+`config.py` (if T6 touches the integrations block), `_tasks/todo.md` and the plan.
