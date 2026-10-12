@@ -311,6 +311,11 @@ class TestPrincipal:
             "Acme Partners LLP",
             "Acme PLLC",
             "Acme Holdings LP",
+            # PR #31 review M1: dotted forms and the spelled-out word.
+            "Acme Partners L.P.",
+            "Acme L.L.P.",
+            "Acme Freight Limited",
+            "José Ramírez INC",
         ],
     )
     def test_a_company_name_in_the_person_field_is_refused(self, name: str) -> None:
@@ -320,9 +325,24 @@ class TestPrincipal:
 
     @pytest.mark.parametrize(
         "name",
-        ["Vincent Corpus", "Lincoln Ltdson", "Prince Llewellyn", "Alp Inceoglu", "LLOYD INCE"],
+        [
+            "Vincent Corpus",
+            "Lincoln Ltdson",
+            "Prince Llewellyn",
+            "Alp Inceoglu",
+            "LLOYD INCE",
+            # PR #31 review L3: an accented letter is a letter, not a word boundary.
+            "Lpé Martín",
+            "Ángel Incé",
+        ],
     )
     def test_a_designator_inside_a_word_is_not_one(self, name: str) -> None:
+        assert Principal(name=name).name == name
+
+    @pytest.mark.parametrize("name", ["Jason Co", "Mary Lc", "Peter Pc"])
+    def test_short_designators_that_are_also_surnames_are_left_out(self, name: str) -> None:
+        """CO, LC and PC are deliberately not designators here: "Co" is a surname, and refusing a
+        real owner costs more than letting the rare "ACME CO" through to a human at review."""
         assert Principal(name=name).name == name
 
     def test_a_sole_proprietor_named_for_themselves_is_accepted(self) -> None:

@@ -1409,3 +1409,13 @@ refused 480+ real sole-proprietor owners and still passed `I.N.R TRUCKING LLC`.
 **Didn't:** I guessed the test DB port at first; 5433 is Langfuse's Postgres, and the project's is `lpe-test-pg` on 5434.
 **Improve:** the CLAUDE.md test-DB recipe says 5433, which clashes with Langfuse here; worth saying 5434.
 
+
+## PR #31 review fixes (2026-10-11)
+
+- [x] M1: dotted LP/LLP/PLLC and `LIMITED`; CO/LC/PC excluded on purpose, with a test pinning that.
+- [x] M2: a refused census officer counts as absent, so the judgment node runs for it, caught per candidate (T6 ticket, README, `stages.py`).
+- [x] L3: Unicode-aware letter edges. L4: dated count moved out of the docstring.
+- [x] L1 and L2 carried into the T6 ticket.
+
+**Review:** 1,127 passed, 2 skipped; all checks clean. The regex run over all 14,347 TX broker officers refused 16, all
+companies. **Worked:** writing the failing cases first, then checking the whole real column rather than samples.

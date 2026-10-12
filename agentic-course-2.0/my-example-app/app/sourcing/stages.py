@@ -34,7 +34,7 @@ class PipelineStage(StrEnum):
 
     resolve_owner = "resolve_owner"
     """Stage 3 (T6): the owner or principal — the census officer first, a judgment node only where
-    the census names nobody."""
+    the census names nobody *citable* (an officer ``Principal`` refuses counts as absent)."""
 
     classify_rollup = "classify_rollup"
     """Stage 4 (T7): rollup or local. A judgment node."""

@@ -84,7 +84,8 @@ built directly through the ORM can store a raw, uncited value, and that one row 
 `resolve_owner` cites the census `company_officer_1` first (`bulk_file`) and calls the judgment node only
 where the census names nobody. A name carrying a legal-entity designator (LLC, INC, CORP…) is refused as
 E18, a company in the person field. Name equality with `legal_name` is not the test: sole proprietors are
-named for themselves.
+named for themselves. A census officer that `Principal` refuses counts as absent, so the judgment node runs
+for that candidate. `resolve_owner` catches the error per candidate rather than failing the run.
 
 **D13 moved address and phone to the registry** (2026-10-09). Google Places is a check, never a
 source: its terms forbid storing Places content, so the census copy is the one we keep and nothing

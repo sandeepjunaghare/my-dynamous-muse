@@ -118,11 +118,21 @@ class PlaceCheck(BaseModel):
         return value.strip()
 
 
+_NOT_AFTER_A_LETTER = r"(?<![^\W\d_])"
+_NOT_BEFORE_A_LETTER = r"(?![^\W\d_])"
+r"""Word edges by *letter*, Unicode-aware: ``[^\W\d_]`` is any letter, accented ones included."""
+
 _ENTITY_DESIGNATOR = re.compile(
-    r"(?<![A-Za-z])(L\.?L\.?C|INC|INCORPORATED|CORP|CORPORATION|LTD|LLP|PLLC|LP)\.?(?![A-Za-z])",
+    _NOT_AFTER_A_LETTER
+    + r"(L\.?L\.?C|L\.?L\.?P|L\.?P|P\.?L\.?L\.?C|INC|INCORPORATED|CORP|CORPORATION|LTD|LIMITED)\.?"
+    + _NOT_BEFORE_A_LETTER,
     re.IGNORECASE,
 )
-"""A legal-entity designator as a whole word. ``LLOYD INCE`` and ``Vincent Corpus`` are people."""
+"""A legal-entity designator as a whole word. ``LLOYD INCE`` and ``Vincent Corpus`` are people.
+
+Changing this list changes which *stored* owners load, because candidates are validated on read:
+widen it only with a check of what is already stored. CO, LC and PC are left out on purpose, since
+"Co" is a surname and refusing a real owner costs more than a rare ``ACME CO`` reaching review."""
 
 
 class Principal(BaseModel):
@@ -133,8 +143,8 @@ class Principal(BaseModel):
     storing a split behind a census citation.
 
     **E18 guard:** a name carrying a legal-entity designator is a company in the person field,
-    and is refused. Name equality with ``legal_name`` would be the wrong test: 480 TX broker census
-    rows (2026-10-11) are sole proprietors whose legal name *is* the owner's name.
+    and is refused. Name equality with ``legal_name`` would be the wrong test: a sole proprietor's
+    legal name *is* the owner's name (the counts are in ticket T6).
     """
 
     model_config = ConfigDict(frozen=True)
