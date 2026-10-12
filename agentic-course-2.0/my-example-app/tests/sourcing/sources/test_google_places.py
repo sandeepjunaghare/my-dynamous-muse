@@ -233,6 +233,10 @@ class TestSearchQuery:
         nameless = a_candidate().model_copy(update={"dba_name": None, "legal_name": None})
         assert search_query(nameless) is None
 
+    def test_uncheckable_without_a_street_number(self) -> None:
+        """A PO box can never match, so no call is paid for a certain miss."""
+        assert search_query(_at("PO BOX 1234")) is None
+
 
 class TestMatchPlace:
     """A4: street number, 5-digit ZIP and a shared distinguishing word. Deterministic, no model."""
@@ -279,10 +283,10 @@ class TestMatchPlace:
         )
         assert match_place(fields, [_result(name="The Omega LLC")]) is None
 
-    def test_a_census_street_with_no_number_matches_on_zip_and_name(self) -> None:
-        """The street number is required only when the census street starts with one."""
+    def test_a_census_street_with_no_number_never_matches(self) -> None:
+        """A PO box is no door: ZIP and name alone would verify a business nobody can visit."""
         result = _result(address="Arlington, TX 76011, USA")
-        assert match_place(_at("PO BOX 1234"), [result]) is result
+        assert match_place(_at("PO BOX 1234"), [result]) is None
 
     def test_an_empty_result_list(self) -> None:
         assert match_place(a_candidate(), []) is None

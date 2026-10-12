@@ -273,12 +273,15 @@ def search_query(fields: CandidateFields) -> str | None:
     """``"{dba or legal name}, {street}, {city}, {state} {zip}"``, or ``None`` when uncheckable.
 
     The DBA first, because that is what a storefront usually shows. Built from our own cited
-    registry data only.
+    registry data only. A street with no leading number (a PO box) is uncheckable: `match_place`
+    could never match it, so a call would pay for a certain miss.
     """
     name = fields.dba_name or fields.legal_name
     if name is None or fields.address is None:
         return None
     address = fields.address.value
+    if _LEADING_NUMBER.match(address.street) is None:
+        return None
     return f"{name.value}, {address.street}, {address.city}, {address.state} {address.postal_code}"
 
 
@@ -300,20 +303,20 @@ def _contains_number(text: str, number: str) -> bool:
 def match_place(fields: CandidateFields, results: Sequence[PlaceResult]) -> PlaceResult | None:
     """The first result that is this business, in Google's order, or ``None`` (A4). No model.
 
-    A result matches when its address holds the census street number (when the census street
-    starts with one) **and** the 5-digit ZIP, **and** its name shares a distinguishing word with the
-    legal or DBA name. A PO-box-only street has no number to hold, so it is matched on ZIP and name;
-    a shared office building is told apart by the name.
+    A result matches when its address holds the census street number **and** the 5-digit ZIP,
+    **and** its name shares a distinguishing word with the legal or DBA name. A census street with
+    no leading number (a PO box) never matches: ZIP and name alone would verify a business with no
+    door to knock on. A shared office building is told apart by the name.
     """
     if fields.address is None:
         return None
     address = fields.address.value
     zip_match = _ZIP5.match(address.postal_code)
-    if zip_match is None:
+    number_match = _LEADING_NUMBER.match(address.street)
+    if zip_match is None or number_match is None:
         return None
     zip5 = zip_match.group(1)
-    number_match = _LEADING_NUMBER.match(address.street)
-    number = number_match.group(1) if number_match else None
+    number = number_match.group(1)
 
     names = [cited.value for cited in (fields.legal_name, fields.dba_name) if cited is not None]
     ours = frozenset[str]().union(*(_name_tokens(name) for name in names))
@@ -324,7 +327,7 @@ def match_place(fields: CandidateFields, results: Sequence[PlaceResult]) -> Plac
         formatted = result.formatted_address or ""
         if not _contains_number(formatted, zip5):
             continue
-        if number is not None and not _contains_number(formatted, number):
+        if not _contains_number(formatted, number):
             continue
         if ours & _name_tokens(result.display_name or ""):
             return result

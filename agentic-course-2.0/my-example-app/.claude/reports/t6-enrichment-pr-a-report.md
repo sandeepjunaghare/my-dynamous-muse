@@ -61,8 +61,9 @@ the cap check with the record. A manifest with no declared Places source, or a r
 - **`tests/sourcing/builders._source` renamed `a_source`** (public), so other suites can declare a Places source
   without a private import.
 - **Matcher, census street with no leading number:** the plan says the number is "required only when the census
-  street starts with digits" and also that "a PO-box-only street can never match". These conflict. This PR follows
-  the first rule and matches such a street on ZIP and name. Flagged for a decision.
+  street starts with digits" and also that "a PO-box-only street can never match". These conflict. **Decided
+  2026-10-12: the stricter rule.** Such a street never matches, and `search_query` returns `None` for it, so it is
+  counted `places_not_checkable` and no call is paid for a certain miss.
 - **Extra log event `sourcing.places.match_closed`** for a permanently closed match (place ID only), alongside the
   planned `match_found` / `match_missing`.
 - **`http._send` logs the URL with any query string stripped**, not only the separate `params`. This is slightly

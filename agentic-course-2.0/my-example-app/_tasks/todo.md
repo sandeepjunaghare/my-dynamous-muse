@@ -1507,8 +1507,8 @@ Branch `feat/t6-enrichment`, worktree `worktrees/t6`, test Postgres `lpe-test-pg
   chained command and needed an amend of an unpushed commit.
 - **Improve:** a sourcing-wide `MockWeb` is now in `tests/sourcing/conftest.py`; PR B's end-to-end run should
   reuse it rather than fork one. The plan's matcher text is ambiguous on a census street with no leading number
-  ("required only when it starts with digits" vs "a PO box can never match"); this PR follows the first and
-  matches on ZIP and name. Worth one line of decision.
+  ("required only when it starts with digits" vs "a PO box can never match"). **Decided 2026-10-12: a PO box
+  never matches**, and `search_query` treats it as uncheckable, so no Places call is paid for it.
 
 **Divergences:** the channel test lives in `tests/sourcing/test_places_channel.py` (it needs that suite's
 `session_factory`), not `tests/tools/`. `tests/sourcing/builders._source` became public `a_source`. The blank-key
