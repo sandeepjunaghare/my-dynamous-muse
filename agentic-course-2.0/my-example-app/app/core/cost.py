@@ -22,7 +22,7 @@ class BillableKind(StrEnum):
     """A category of call that costs money."""
 
     places_lookup = "places_lookup"
-    """A Google Places request — address/phone verification and the review-name signal (T6)."""
+    """A Google Places check (T6), Pro fields only. The review-name signal was dropped by D13."""
 
     anthropic_tokens = "anthropic_tokens"
     """An Agent SDK call at a judgment node or in the manifest-authoring agent (T6, T12)."""
@@ -108,3 +108,25 @@ class RunCost:
                 cap=cap,
                 recorded=recorded,
             )
+
+    def charge(
+        self,
+        kind: BillableKind,
+        *,
+        cap: int,
+        count: int = 1,
+        usd: Decimal | None = None,
+    ) -> None:
+        """Check ``cap``, then record the call: one step, so nothing can spend without counting.
+
+        Called **immediately before** the paid request. A request that then fails has still been
+        counted against the breaker, which is the conservative side for a circuit breaker: it
+        bounds attempts, not successes. At the cap it raises :class:`CostLimitExceededError` and
+        records nothing.
+
+        Not used for ``anthropic_tokens``: a judgment node's cap is on *calls*, while what it
+        records is turns and dollars once the call returns (T7 deviation 3), so the two halves
+        cannot be one step there.
+        """
+        self.check_cap(kind, cap)
+        self.record(kind, count, usd)

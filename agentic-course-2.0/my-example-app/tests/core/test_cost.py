@@ -101,6 +101,33 @@ class TestCap:
         assert error.code == "cost_limit_exceeded"
 
 
+class TestCharge:
+    """``charge`` couples the cap check with the record (deferred #6): spend is never uncounted."""
+
+    def test_records_when_under_the_cap(self) -> None:
+        cost = RunCost()
+        cost.charge(BillableKind.places_lookup, cap=2, usd=Decimal("0.032"))
+
+        assert cost.total_calls(BillableKind.places_lookup) == 1
+        assert cost.total_usd(BillableKind.places_lookup) == Decimal("0.032")
+
+    def test_at_the_cap_it_raises_and_records_nothing(self) -> None:
+        cost = RunCost()
+        cost.charge(BillableKind.places_lookup, cap=1, usd=Decimal("0.032"))
+
+        with pytest.raises(CostLimitExceededError):
+            cost.charge(BillableKind.places_lookup, cap=1, usd=Decimal("0.032"))
+
+        assert cost.total_calls(BillableKind.places_lookup) == 1
+        assert cost.total_usd(BillableKind.places_lookup) == Decimal("0.032")
+
+    def test_a_zero_cap_refuses_the_first_call(self) -> None:
+        cost = RunCost()
+        with pytest.raises(CostLimitExceededError):
+            cost.charge(BillableKind.places_lookup, cap=0)
+        assert cost.total_calls() == 0
+
+
 class TestFormatUsd:
     @pytest.mark.parametrize(
         ("usd", "text"),
