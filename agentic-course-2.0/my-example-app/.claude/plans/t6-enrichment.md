@@ -24,6 +24,12 @@ Every `uv` and git write command needs the sandbox disabled (memory: `uv-command
 
 ## OPEN QUESTIONS — decide before `/piv-implement`
 
+> **DECIDED 2026-10-12: all five go with the recommendation.** OQ-1 (b) `classify_rollup`'s existing call
+> reports the homepage it fetched · OQ-2 (a) count misses only, no marker · OQ-3 (a) `HeadcountBand`, answered
+> by the rollup call and owned by `classify_rollup` · OQ-4 (a) no filing source in T6, Texas Comptroller spike
+> before T10 · OQ-5 (a) the paid judgment steps skip candidates Places did not verify. Further decisions are in
+> *AMENDMENTS* (the PR split, the rollup cap, the key already on main).
+
 These are the user's calls. They are not derivable from the docs or the code. Each has a recommendation, and
 the tasks that change with the answer are tagged in *STEP-BY-STEP TASKS* (`[OQ-n]`). The plan is written
 **to the recommendations**, so "go with the recommendations" is a complete answer.
@@ -1300,3 +1306,20 @@ codebase (T5's refusal, T7's node, T8's MockTransport tests). The risks:
 ## AMENDMENTS
 
 <Append-only. Empty at creation.>
+
+### 2026-10-12: decisions after plan review
+
+1. **All OQs resolved to the recommendation** (see the note under *OPEN QUESTIONS*). The tasks as written stand.
+2. **Two PRs, at the split point in NOTES.** PR A: tasks 1–11, 20, 21 (the reorder in task 3 included), and
+   their docs. PR B: tasks 12–19, 22. PR A merges before PR B starts its review; T9 rebases onto PR A, which
+   carries `place_checked(address)`, `email`, `headcount_band` and the reorder.
+3. **`classify_rollup`'s per-run cap ends the stage degraded, not the run failed** (A6's finding, decided to
+   match the docstring and D7). In PR B, with the other T7 node edits: the stage catches the cap, stops calling,
+   leaves the remaining candidates unjudged, and returns a degraded reason. The same rule as the owner node and
+   the Places cap. TEST: cap 1 with 2 eligible → 1 call, the run `degraded`, not `failed`.
+4. **`google_places_api_key` is already on main** (`0b68ab4`, `SecretStr | None = None`, in `.env.example`).
+   Task 4 adds only the other settings (`places_text_search_usd`, the owner-node settings, `Field(gt=0)` on
+   `max_places_calls_per_run`) and the tests; it must not declare the key a second time. Rebase onto main first.
+5. **Freight v9 DRAFT exists on dev** (`e0d32bec-fe5d-4d1a-a341-7f99917bcad7`, adds `places`, `kind: web_lookup`,
+   `base_url: https://places.googleapis.com/v1/places:searchText`). `declared_places_source` must match it.
+   Level 4 step 2 is now only the dry-run and activation.
