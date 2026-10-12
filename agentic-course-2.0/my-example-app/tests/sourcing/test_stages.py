@@ -32,12 +32,14 @@ class TestFieldOwners:
     def test_verification_owns_the_check_and_the_website(self, field: str) -> None:
         assert owns(PipelineStage.verify_business, field)
 
-    def test_the_stages_are_the_architecture_docs_five_in_order(self) -> None:
+    def test_the_stages_run_in_the_d8_order(self) -> None:
+        """D8 (revised 2026-10-09) and the architecture's in-batch list: free, then Places, then one
+        judgment call, then the owner, so the owner node never pays for a removed candidate."""
         assert [stage.value for stage in PipelineStage] == [
             "search_registry",
             "verify_business",
-            "resolve_owner",
             "classify_rollup",
+            "resolve_owner",
             "cluster_routes",
         ]
 

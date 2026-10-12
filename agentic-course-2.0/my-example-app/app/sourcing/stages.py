@@ -9,6 +9,11 @@ stages, so a retried stage could silently swap a better citation for a worse one
 Places content is never stored, so verification is a separate field (``business_check``) rather
 than a better copy of the address. ``CandidateFields.has_verified_address`` is the rule.
 
+**The in-batch order is free, then Places, then one judgment call, then the owner** (D8, revised
+2026-10-09; the architecture's in-batch list). ``classify_rollup`` runs before ``resolve_owner``, so
+the owner node never pays for a candidate the judgment rules remove, and ``verify_business`` stays
+second so the Places evidence reaches the judgment call within the run.
+
 Ownership is pipeline structure, not vertical data. The stages are the same five for every vertical
 (architecture → *Five generic stages, not one per source*), so this table lives here in code and not
 in a manifest. It is a table rather than branching logic, so a field's owner is read rather than
@@ -32,13 +37,13 @@ class PipelineStage(StrEnum):
     """Stage 2 (T6): a Google Places check of the registry record (D13: a check, never a source),
     and the website from a free fetch of the census email domain."""
 
+    classify_rollup = "classify_rollup"
+    """Stage 3 (T7): rollup or local. A judgment node."""
+
     resolve_owner = "resolve_owner"
-    """Stage 3 (T6): the owner or principal. The census officer is filled by the registry stage; a
+    """Stage 4 (T6): the owner or principal. The census officer is filled by the registry stage; a
     judgment node runs only where the census names nobody *citable* (an officer ``Principal``
     refuses counts as absent)."""
-
-    classify_rollup = "classify_rollup"
-    """Stage 4 (T7): rollup or local. A judgment node."""
 
     cluster_routes = "cluster_routes"
     """Stage 5 (T8): DFW route clustering. Reads fields and owns none."""
