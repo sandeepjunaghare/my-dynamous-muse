@@ -4,8 +4,14 @@ Deterministic geometry, no model: the same candidates give the same routes on ev
 come from the US Census Geocoder, never from Google Places (D13). The stage owns no candidate field;
 it writes only ``route_assignment``. The work is ``app/routing/``; this module is how the runner
 finds it.
+
+**Routes carry only survivors** (T9, OQ8-B). Qualification runs before this stage — the free
+predicates in stage 1, the judgment node in stage 4 — so by now every disqualification of the run is
+recorded. This module reads them and hands them to routing as ``exclude``, which keeps ``routing/``
+from importing ``qualification/``.
 """
 
+from app.qualification.service import QualificationService
 from app.routing.service import RoutingService
 from app.sourcing.stages import PipelineStage
 from app.tools.registry import StageContext, StageResult
@@ -19,13 +25,18 @@ class _ClusterRoutes:
         return PipelineStage.cluster_routes
 
     async def run(self, context: StageContext) -> StageResult:
-        """Cluster the run's candidates and report the routing counts.
+        """Cluster the run's non-disqualified candidates and report the routing counts.
 
         A geocode that failed (unreachable, unreadable) leaves a door off the routes, so the stage
         finishes degraded. Every one failing raises in the service instead. Unmatched and ambiguous
         addresses are answers, not failures: counted, never degraded.
         """
-        result = await RoutingService(context.session).cluster_run(context.run_id)
+        disqualified = await QualificationService(context.session).disqualified_candidate_ids(
+            context.run_id
+        )
+        result = await RoutingService(context.session).cluster_run(
+            context.run_id, exclude=disqualified
+        )
         failed = result.counts["routing_geocode_failed"]
         reason = None
         if failed:

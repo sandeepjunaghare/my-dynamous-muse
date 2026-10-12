@@ -14,10 +14,13 @@ from app.routing.schemas import RouteCluster
 from app.routing.service import RoutingService
 from app.sourcing.exceptions import SourcingRunNotFoundError
 from app.sourcing.schemas import CandidateFields, PostalAddress
+from app.sourcing.service import SourcingService
 from tests.conftest import requires_db
 from tests.routing.builders import (
+    LAKE_HIGHLANDS,
     a_running_run,
     a_verified_candidate,
+    around,
     record,
     street_for,
     two_neighbourhoods,
@@ -66,6 +69,7 @@ class TestClusterRun:
         assert [c.label for c in result.clusters] == ["A · 76011", "B · 75238"]
         assert [len(c.members) for c in result.clusters] == [10, 10]
         assert result.counts == {
+            "routing_disqualified": 0,
             "routing_eligible": 20,
             "routing_unverified_address": 0,
             "routing_geocode_unmatched": 0,
@@ -204,6 +208,93 @@ class TestClusterRun:
     ) -> None:
         with pytest.raises(SourcingRunNotFoundError):
             await RoutingService(db_session, geocoder=census.geocoder()).cluster_run(uuid4())
+
+
+class TestExcludedCandidates:
+    """OQ8-B: routes are built from the survivors — a disqualified door is on no route."""
+
+    async def test_an_excluded_candidate_is_never_geocoded_and_is_counted(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        run_id = await a_running_run(db_session)
+        await record(db_session, run_id, _week(census))
+        excluded = [
+            c
+            for c in await SourcingService(db_session).list_candidates(run_id)
+            if c.registry_id in {"oly000", "lkh000"}
+        ]
+
+        service = RoutingService(db_session, geocoder=census.geocoder(), max_doors=12)
+        result = await service.cluster_run(run_id, exclude=frozenset(c.id for c in excluded))
+
+        assert result.counts["routing_disqualified"] == 2
+        assert result.counts["routing_eligible"] == 18
+        assert result.counts["routing_clustered"] == 18
+        assert len(census.requests) == 18
+        assert not {"oly000 Commerce St", "lkh000 Commerce St"} & set(census.streets_requested())
+        routed = {row.candidate_id for row in await service.list_assignments(run_id)}
+        assert len(routed) == 18
+        assert routed.isdisjoint(c.id for c in excluded)
+
+    async def test_routes_balance_over_the_survivors(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        """Four disqualified doors would make 24, two routes of 12; without them it is 10 + 10."""
+        run_id = await a_running_run(db_session)
+        doomed: list[CandidateFields] = []
+        for point in around(LAKE_HIGHLANDS, "dq", 4, "75238"):
+            street = street_for(point.registry_id)
+            census.on(
+                street, json_answer(200, a_match(point.point.latitude, point.point.longitude))
+            )
+            doomed.append(a_verified_candidate(point.registry_id, street, point.postal_code))
+        await record(db_session, run_id, [*_week(census), *doomed])
+        excluded = frozenset(
+            c.id
+            for c in await SourcingService(db_session).list_candidates(run_id)
+            if c.registry_id.startswith("dq")
+        )
+
+        result = await RoutingService(
+            db_session, geocoder=census.geocoder(), max_doors=12
+        ).cluster_run(run_id, exclude=excluded)
+
+        assert [len(c.members) for c in result.clusters] == [10, 10]
+        assert result.counts["routing_disqualified"] == 4
+
+    async def test_unverified_addresses_are_counted_over_the_survivors_only(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        """An excluded candidate is counted once, as disqualified — never also as unverified."""
+        run_id = await a_running_run(db_session)
+        bare = [CandidateFields(registry_id=sourced(f"bare{i}")) for i in range(3)]
+        await record(db_session, run_id, [*_week(census), *bare])
+        excluded = frozenset(
+            c.id
+            for c in await SourcingService(db_session).list_candidates(run_id)
+            if c.registry_id in {"bare0", "oly001"}
+        )
+
+        result = await RoutingService(
+            db_session, geocoder=census.geocoder(), max_doors=12
+        ).cluster_run(run_id, exclude=excluded)
+
+        assert result.counts["routing_disqualified"] == 2
+        assert result.counts["routing_unverified_address"] == 2
+        assert result.counts["routing_eligible"] == 19
+
+    async def test_an_id_from_outside_the_run_counts_for_nothing(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        run_id = await a_running_run(db_session)
+        await record(db_session, run_id, _week(census))
+
+        result = await RoutingService(
+            db_session, geocoder=census.geocoder(), max_doors=12
+        ).cluster_run(run_id, exclude=frozenset({uuid4()}))
+
+        assert result.counts["routing_disqualified"] == 0
+        assert result.counts["routing_clustered"] == 20
 
 
 class TestEveryGeocodeFailing:
