@@ -12,7 +12,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     fmcsa_webkey: str | None = None
     # Socrata app token for data.transportation.gov. Optional: without it SODA throttles per IP.
     socrata_app_token: str | None = None
+    # Google Places (New) API key — `verify_business`'s check, never a source (D13). Declared
+    # ahead of T6 so a key placed in `.env` is not refused by `extra="forbid"`. A `SecretStr`, so
+    # it never prints in a repr or a log. T6 treats a blank value as unset.
+    google_places_api_key: SecretStr | None = None
     # Routing (T8). The most doors one route may hold: the cadence plans ~10-12 doors an outing and
     # 20 names in two routes a week (E3, E4). A cap per route, so the number of routes follows from
     # how many candidates there are, never the other way round.

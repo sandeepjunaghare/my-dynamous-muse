@@ -1419,3 +1419,15 @@ refused 480+ real sole-proprietor owners and still passed `I.N.R TRUCKING LLC`.
 
 **Review:** 1,127 passed, 2 skipped; all checks clean. The regex run over all 14,347 TX broker officers refused 16, all
 companies. **Worked:** writing the failing cases first, then checking the whole real column rather than samples.
+
+## Freight v9 DRAFT, adds Places (2026-10-12)
+
+- [x] Created freight **v9 DRAFT** `e0d32bec-fe5d-4d1a-a341-7f99917bcad7` on dev: v8's body (`11601d3b…`) plus source
+  `places` (`web_lookup`, `https://places.googleapis.com/v1/places:searchText`, cited to the Places docs,
+  `manual_research`), `terms` cleared. Created through `ManifestService.create_draft` by a one-off scratchpad script.
+- [ ] Human: `lpe manifest dry-run e0d32bec-… --source-file fmcsa_company_census=<census.csv>`, then
+  `lpe manifest activate e0d32bec-… --accept-terms fmcsa_company_census,fmcsa_qcmobile,fmcsa_revocations,places`
+  (Places accepted on the D13 basis).
+- **Blocker found:** `Settings` is `extra="forbid"` and main has no `google_places_api_key` field (T6 adds it), so
+  with `GOOGLE_PLACES_API_KEY` in `.env`, every `lpe` command on main fails at startup. Comment the line out until T6
+  merges, or land T6's config field first.
