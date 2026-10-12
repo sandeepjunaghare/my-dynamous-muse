@@ -1431,3 +1431,38 @@ companies. **Worked:** writing the failing cases first, then checking the whole 
 - **Blocker found:** `Settings` is `extra="forbid"` and main has no `google_places_api_key` field (T6 adds it), so
   with `GOOGLE_PLACES_API_KEY` in `.env`, every `lpe` command on main fails at startup. Comment the line out until T6
   merges, or land T6's config field first.
+
+---
+
+# T6 — planned: enrichment stages `verify_business` + `resolve_owner` (2026-10-12)
+
+**Plan:** `.claude/plans/t6-enrichment.md`. **Branch / worktree:** `feat/t6-enrichment` (off `752a994`) · test
+Postgres `lpe-test-pg-t6` on **5436** (T9 is on 5437) · **no migration** (JSONB; head stays `0009`).
+**Status:** planned, waiting for the human to answer OQ-1…OQ-5 before `/piv-implement`.
+
+**Measured while planning (live census, read-only, 2026-10-11, freight v8 predicates, 4,462 DFW rows):**
+- `company_officer_1` citable (passes `Principal`) for **3,008 (67.4%)**. Refused: 5. `company_officer_2` rescues 2.
+- Email present for 2,976, but **only 1,080 (24%) on a business domain**. The rest is free-mail (gmail 1,344…),
+  and ~45 are shared process-agent or franchisor domains. The docs' "website from email domain (67%)" is ~3× high.
+- **Freight v8 (ACTIVE) declares no Places source**, so a freight v9 declaring Places must be activated first.
+
+**Open questions for the human** (recommendation in bold; the plan is written to the recommendations):
+- [ ] OQ-1 website beyond the email domain: **`classify_rollup`'s existing call reports the fetched homepage**
+      (vs. email only; Brave API, whose terms forbid storing results; SDK WebSearch, which breaks D1)
+- [ ] OQ-2 record "checked, not found": **no, count only** (never a marker inside `business_check`, which would
+      pass T9's gate)
+- [ ] OQ-3 headcount band: **`HeadcountBand(low, high|None)`, answered by `classify_rollup`'s call, owned there**
+- [ ] OQ-4 SOS/filing source: **none in T6**; a Texas Comptroller API spike before T10 (free and keyed, limits unverified)
+- [ ] OQ-5 **skip both paid judgment steps for candidates Places did not verify** (T9 cannot promote them)
+
+**Derived, flag if wrong:**
+- A1 reorder: `classify_rollup` before `resolve_owner`, per D8 (2026-10-09).
+- A2 the census adapter fills `owner` and `email`; `has_principal` uses `principal_or_none` (L1).
+- A3 no Places source, or no key, refuses the run unless `--allow-degraded`.
+- A8 `PlaceCheck.checked_address`.
+
+**Human, before the first run:** a Google Places API (New) key (`GOOGLE_PLACES_API_KEY`, Pro tier, 5,000 free
+calls a month) and freight v9 with a `places` source: dry-run, then `activate --accept-terms …,places`.
+
+**Finding (not T6's to change):** `classify_rollup` raises at its call cap, and its docstring says "degraded",
+but the runner finishes the run **failed**.
