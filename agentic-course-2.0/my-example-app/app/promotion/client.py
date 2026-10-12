@@ -54,6 +54,7 @@ from app.promotion.schemas import (
     ObjectWriteRequest,
     PropertyDefinition,
     PropertyGroupDefinition,
+    RecordMeta,
     SearchRequest,
     SearchResponse,
     TaskCreate,
@@ -72,6 +73,9 @@ API_VERSION = "2026-09"
 # Default HUBSPOT_DEFINED association type ids.
 _TASK_TO_CONTACT = 204
 _TASK_TO_COMPANY = 192
+# Contact → company, primary. Written inline on the contact create, so the association exists the
+# moment the contact does — what interrupted-create recovery walks (T9).
+_CONTACT_TO_COMPANY_PRIMARY = 1
 
 # Search is capped at 5 requests/second per account and its responses carry no headers to react to.
 _SEARCH_MIN_INTERVAL_SECONDS = 0.2
@@ -489,9 +493,28 @@ class HubSpotClient:
         object_type: ObjectType,
         object_id: str | None,
         properties: Mapping[str, ProvenancedProperty | None],
+        *,
+        meta: RecordMeta | None = None,
+        associations: list[Association] | None = None,
     ) -> HubSpotObject:
-        """Gate, render, then write. A create is never retried; an update is idempotent by value."""
-        body = ObjectWriteRequest(properties=to_property_payload(properties))
+        """Gate, render, merge the engine metadata, then write.
+
+        The prospect fields pass the write-gate **first**; only then is ``meta`` (the closed OQ6
+        carve-out) rendered and merged. A key claimed by both halves is a programming error and is
+        refused before any request — neither half silently wins. A create is never retried; an
+        update is idempotent by value.
+        """
+        rendered = to_property_payload(properties)
+        if meta is not None:
+            meta_properties = meta.to_properties(object_type)
+            collisions = sorted(rendered.keys() & meta_properties.keys())
+            if collisions:
+                raise ValueError(
+                    f"property claimed by both a prospect field and engine metadata: "
+                    f"{', '.join(collisions)}"
+                )
+            rendered = {**rendered, **meta_properties}
+        body = ObjectWriteRequest(properties=rendered, associations=associations)
         if object_id is None:
             response = await self._request(
                 "POST",
@@ -499,38 +522,73 @@ class HubSpotClient:
                 json_body=body.model_dump(by_alias=True, exclude_none=True),
                 retry_on_server_error=False,
             )
-        else:
-            response = await self._request(
-                "PATCH",
-                f"/crm/objects/{API_VERSION}/{object_type.value}/{object_id}",
-                json_body=body.model_dump(by_alias=True, exclude_none=True),
-                retry_on_server_error=True,
+            created = HubSpotObject.model_validate(response.json())
+            logger.info(
+                "promotion.hubspot.object_created",
+                object_type=object_type.value,
+                object_id=created.id,
             )
+            return created
+        response = await self._request(
+            "PATCH",
+            f"/crm/objects/{API_VERSION}/{object_type.value}/{object_id}",
+            json_body=body.model_dump(by_alias=True, exclude_none=True),
+            retry_on_server_error=True,
+        )
         return HubSpotObject.model_validate(response.json())
 
     async def create_company(
-        self, properties: Mapping[str, ProvenancedProperty | None]
+        self,
+        properties: Mapping[str, ProvenancedProperty | None],
+        *,
+        meta: RecordMeta | None = None,
     ) -> HubSpotObject:
         """Create a company from provenanced fields. Dedupe first — see ``dedupe.py``."""
-        return await self._write_object(ObjectType.companies, None, properties)
+        return await self._write_object(ObjectType.companies, None, properties, meta=meta)
 
     async def update_company(
-        self, object_id: str, properties: Mapping[str, ProvenancedProperty | None]
+        self,
+        object_id: str,
+        properties: Mapping[str, ProvenancedProperty | None],
+        *,
+        meta: RecordMeta | None = None,
     ) -> HubSpotObject:
         """Update a company from provenanced fields."""
-        return await self._write_object(ObjectType.companies, object_id, properties)
+        return await self._write_object(ObjectType.companies, object_id, properties, meta=meta)
 
     async def create_contact(
-        self, properties: Mapping[str, ProvenancedProperty | None]
+        self,
+        properties: Mapping[str, ProvenancedProperty | None],
+        *,
+        meta: RecordMeta | None = None,
+        company_id: str | None = None,
     ) -> HubSpotObject:
-        """Create a contact from provenanced fields. Dedupe first — see ``dedupe.py``."""
-        return await self._write_object(ObjectType.contacts, None, properties)
+        """Create a contact from provenanced fields. Dedupe first — see ``dedupe.py``.
+
+        With ``company_id``, the contact is associated to that company as its **primary** company in
+        the same request, so there is never a moment when the contact exists unattached.
+        """
+        associations = None
+        if company_id is not None:
+            associations = [
+                Association(
+                    to=AssociationTarget(id=company_id),
+                    types=[AssociationType(association_type_id=_CONTACT_TO_COMPANY_PRIMARY)],
+                )
+            ]
+        return await self._write_object(
+            ObjectType.contacts, None, properties, meta=meta, associations=associations
+        )
 
     async def update_contact(
-        self, object_id: str, properties: Mapping[str, ProvenancedProperty | None]
+        self,
+        object_id: str,
+        properties: Mapping[str, ProvenancedProperty | None],
+        *,
+        meta: RecordMeta | None = None,
     ) -> HubSpotObject:
         """Update a contact from provenanced fields."""
-        return await self._write_object(ObjectType.contacts, object_id, properties)
+        return await self._write_object(ObjectType.contacts, object_id, properties, meta=meta)
 
     async def create_task(
         self,

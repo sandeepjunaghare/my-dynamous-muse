@@ -28,9 +28,12 @@ from app.promotion.exceptions import (
     HubSpotRateLimitError,
     HubSpotResponseError,
     HubSpotTransportError,
+    UnprovenancedWriteError,
 )
 from app.promotion.schemas import (
     ObjectType,
+    RecordMeta,
+    ReviewStatus,
     SearchFilter,
     SearchFilterGroup,
     SearchRequest,
@@ -49,6 +52,7 @@ from tests.promotion.conftest import (
 )
 
 COMPANIES = ("POST", "/crm/objects/2026-09/companies")
+CONTACTS = ("POST", "/crm/objects/2026-09/contacts")
 PROPERTY_GET = ("GET", "/crm/properties/")
 TASKS = ("POST", "/tasks")
 
@@ -461,3 +465,173 @@ class TestLifecycle:
 
         await aclose_hubspot_client()
         assert is_initialised() is False
+
+
+META = RecordMeta(
+    vertical="freight",
+    review_status=ReviewStatus.pending_review,
+    route_cluster="A · 75238",
+    owner_id="81234567",
+)
+
+
+class TestRecordMeta:
+    """OQ6: the closed carve-out for engine metadata — facts about our process, not the prospect."""
+
+    def test_it_holds_exactly_four_fields(self) -> None:
+        """Widening the carve-out must be a visible diff, never a side door for a prospect field."""
+        assert set(RecordMeta.model_fields) == {
+            "vertical",
+            "review_status",
+            "route_cluster",
+            "owner_id",
+        }
+
+    def test_a_company_gets_all_four_properties(self) -> None:
+        assert META.to_properties(ObjectType.companies) == {
+            "lpe_vertical": "freight",
+            "lpe_review_status": "pending_review",
+            "lpe_route_cluster": "A · 75238",
+            "hubspot_owner_id": "81234567",
+        }
+
+    def test_a_contact_gets_no_review_status_and_no_route(self) -> None:
+        """Route and review status exist on COMPANY only; on a contact they would be a 400."""
+        assert META.to_properties(ObjectType.contacts) == {
+            "lpe_vertical": "freight",
+            "hubspot_owner_id": "81234567",
+        }
+
+    def test_absent_values_are_omitted_not_sent_blank(self) -> None:
+        """A blank sent to HubSpot clears the property; absence leaves it alone."""
+        assert RecordMeta(vertical="freight").to_properties(ObjectType.companies) == {
+            "lpe_vertical": "freight"
+        }
+
+    def test_an_unknown_field_is_refused(self) -> None:
+        with pytest.raises(ValidationError):
+            RecordMeta.model_validate({"vertical": "freight", "phone": "2145550100"})
+
+    def test_it_is_frozen(self) -> None:
+        with pytest.raises(ValidationError):
+            META.vertical = "fire"
+
+
+class TestObjectWrites:
+    async def test_meta_is_merged_after_the_gate(self) -> None:
+        portal = MockPortal([(*COMPANIES, json_responder(201, load_fixture("company_created")))])
+        client = make_client(portal)
+
+        await client.create_company(DOMAIN, meta=META)
+
+        assert portal.bodies("POST", "/companies")[0]["properties"] == {
+            "domain": "bluebonnetlogistics.com",
+            "lpe_vertical": "freight",
+            "lpe_review_status": "pending_review",
+            "lpe_route_cluster": "A · 75238",
+            "hubspot_owner_id": "81234567",
+        }
+        await client.aclose()
+
+    async def test_a_company_create_sends_no_associations_key(self) -> None:
+        """`None`, not `[]`: a plain company create's body is byte-identical to T3's."""
+        portal = MockPortal([(*COMPANIES, json_responder(201, load_fixture("company_created")))])
+        client = make_client(portal)
+
+        await client.create_company(DOMAIN, meta=META)
+
+        assert "associations" not in portal.bodies("POST", "/companies")[0]
+        await client.aclose()
+
+    async def test_a_contact_is_created_with_a_primary_association_to_its_company(self) -> None:
+        """Written in the same request, so the association walk finds it at once (recovery)."""
+        portal = MockPortal([(*CONTACTS, json_responder(201, {"id": "400112233"}))])
+        client = make_client(portal)
+
+        created = await client.create_contact(
+            {"lastname": cited("MUSGRAVES")}, meta=META, company_id="7009876543"
+        )
+
+        assert created.id == "400112233"
+        body = portal.bodies("POST", "/contacts")[0]
+        assert body["associations"] == [
+            {
+                "to": {"id": "7009876543"},
+                "types": [{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 1}],
+            }
+        ]
+        assert body["properties"] == {
+            "lastname": "MUSGRAVES",
+            "lpe_vertical": "freight",
+            "hubspot_owner_id": "81234567",
+        }
+        await client.aclose()
+
+    async def test_a_contact_without_a_company_sends_no_associations_key(self) -> None:
+        portal = MockPortal([(*CONTACTS, json_responder(201, {"id": "400112233"}))])
+        client = make_client(portal)
+
+        await client.create_contact({"lastname": cited("MUSGRAVES")})
+
+        assert "associations" not in portal.bodies("POST", "/contacts")[0]
+        await client.aclose()
+
+    async def test_a_gate_refusal_with_meta_sends_nothing(self) -> None:
+        """Meta cannot carry an uncitable prospect field past the gate; nothing reaches the wire."""
+        portal = MockPortal()
+        client = make_client(portal)
+
+        with pytest.raises(UnprovenancedWriteError) as raised:
+            await client.create_contact({"lastname": None}, meta=META, company_id="7009876543")
+
+        assert raised.value.fields == ("lastname",)
+        assert portal.requests == []
+        await client.aclose()
+
+    async def test_a_key_claimed_by_both_halves_is_refused_before_any_request(self) -> None:
+        """A programming error: one property, two owners. Neither silently wins."""
+        portal = MockPortal()
+        client = make_client(portal)
+
+        with pytest.raises(ValueError, match="lpe_vertical"):
+            await client.create_company({"lpe_vertical": cited("freight")}, meta=META)
+
+        assert portal.requests == []
+        await client.aclose()
+
+    async def test_an_update_merges_meta_too(self) -> None:
+        portal = MockPortal(
+            [
+                (
+                    "PATCH",
+                    "/companies/7009876543",
+                    json_responder(200, load_fixture("company_created")),
+                )
+            ]
+        )
+        client = make_client(portal)
+
+        await client.update_company("7009876543", DOMAIN, meta=RecordMeta(vertical="freight"))
+
+        assert portal.bodies("PATCH")[0] == {
+            "properties": {"domain": "bluebonnetlogistics.com", "lpe_vertical": "freight"}
+        }
+        await client.aclose()
+
+    async def test_a_create_logs_the_new_object(self) -> None:
+        portal = MockPortal([(*COMPANIES, json_responder(201, load_fixture("company_created")))])
+        client = make_client(portal)
+
+        with capture_logs() as captured:
+            await client.create_company(DOMAIN)
+
+        created = [e for e in captured if e["event"] == "promotion.hubspot.object_created"]
+        assert created == [
+            {
+                "event": "promotion.hubspot.object_created",
+                "log_level": "info",
+                "object_type": "companies",
+                "object_id": "7009876543",
+            }
+        ]
+        await client.aclose()

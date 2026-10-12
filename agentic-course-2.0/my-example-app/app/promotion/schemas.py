@@ -96,6 +96,19 @@ class TaskStatus(StrEnum):
     deferred = "DEFERRED"
 
 
+class ReviewStatus(StrEnum):
+    """Where a promoted company stands in the founder's review (OQ2-A: ``lpe_review_status``).
+
+    The values are the HubSpot option values, exactly. **The founder moves it**, by single or bulk
+    edit in the company list view; the engine writes only :attr:`pending_review`, once, at create,
+    and reads the decision back with ``lpe promotion sync`` (OQ3-A).
+    """
+
+    pending_review = "pending_review"
+    accepted = "accepted"
+    rejected = "rejected"
+
+
 class HubSpotObject(BaseModel):
     """Any CRM record coming back from HubSpot.
 
@@ -133,11 +146,24 @@ class PropertyGroupDefinition(BaseModel):
     display_order: int = Field(default=-1, serialization_alias="displayOrder")
 
 
+class PropertyOption(BaseModel):
+    """One option of an enumeration property we create."""
+
+    model_config = _REQUEST_CONFIG
+
+    label: str
+    value: str
+    display_order: int = Field(serialization_alias="displayOrder")
+
+
 class PropertyDefinition(BaseModel):
     """A property we create.
 
     ``group_name`` serializes to ``groupName`` and carries the group's **name**, not its id — a
     distinction HubSpot's error message for getting it wrong does not make clear.
+
+    ``options`` is for an enumeration only. ``None`` is dropped by ``exclude_none``, so a string
+    property's body is unchanged by the field existing.
     """
 
     model_config = _REQUEST_CONFIG
@@ -148,6 +174,7 @@ class PropertyDefinition(BaseModel):
     field_type: str = Field(serialization_alias="fieldType")
     group_name: str = Field(serialization_alias="groupName")
     description: str | None = None
+    options: list[PropertyOption] | None = None
 
 
 class SearchFilter(BaseModel):
@@ -209,14 +236,6 @@ class HubSpotErrorBody(BaseModel):
     correlation_id: str | None = Field(default=None, validation_alias="correlationId")
 
 
-class ObjectWriteRequest(BaseModel):
-    """The body of a company or contact create/update: a flat map of rendered property values."""
-
-    model_config = _REQUEST_CONFIG
-
-    properties: dict[str, str]
-
-
 class AssociationTarget(BaseModel):
     """The record an association points at."""
 
@@ -243,6 +262,63 @@ class Association(BaseModel):
 
     to: AssociationTarget
     types: list[AssociationType]
+
+
+class ObjectWriteRequest(BaseModel):
+    """The body of a company or contact create/update: a flat map of rendered property values.
+
+    ``associations`` is ``None``, not ``[]``, when there are none, so ``exclude_none`` leaves a
+    plain create's body exactly as it was before contacts gained an inline company association.
+    """
+
+    model_config = _REQUEST_CONFIG
+
+    properties: dict[str, str]
+    associations: list[Association] | None = None
+
+
+class RecordMeta(BaseModel):
+    """**The OQ6 carve-out:** engine metadata, written ungated beside the gated prospect fields.
+
+    The write-gate exists so that no claim about a prospect reaches HubSpot without a citation.
+    These four are not claims about the prospect; they are facts about our process, and there is no
+    honest URL to cite for any of them:
+
+    * ``lpe_vertical`` — which manifest the record was sourced under;
+    * ``lpe_review_status`` — workflow state the founder moves (OQ2);
+    * ``lpe_route_cluster`` — our routing's own label, such as ``A · 75238``;
+    * ``hubspot_owner_id`` — who works the record.
+
+    Citing them anyway would attach a citation that does not support the value, which is the small
+    lie the primitive exists to prevent. **The set is closed**: a typed model of exactly four
+    fields, not a ``dict[str, str]``, so it cannot become a side door for a prospect field, and
+    widening it is a visible diff that a test pins. The client renders the prospect fields through
+    the gate first and merges these after; a key claimed by both halves is refused. Same reasoning
+    as :class:`TaskCreate` being ungated.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    vertical: str
+    review_status: ReviewStatus | None = None
+    route_cluster: str | None = None
+    owner_id: str | None = None
+
+    def to_properties(self, object_type: ObjectType) -> dict[str, str]:
+        """Render to HubSpot property names for one object type; absent values are omitted.
+
+        Review status and route exist on COMPANY only. Sending either on a contact would be a 400,
+        so they are never rendered there.
+        """
+        properties = {"lpe_vertical": self.vertical}
+        if object_type is ObjectType.companies:
+            if self.review_status is not None:
+                properties["lpe_review_status"] = self.review_status.value
+            if self.route_cluster is not None:
+                properties["lpe_route_cluster"] = self.route_cluster
+        if self.owner_id is not None:
+            properties["hubspot_owner_id"] = self.owner_id
+        return properties
 
 
 class TaskCreateRequest(BaseModel):
