@@ -40,8 +40,9 @@ class Settings(BaseSettings):
     # Observability
     log_level: str = "INFO"
 
-    # Cost. A circuit breaker against a runaway loop, not a budget target (D9).
-    max_places_calls_per_run: int = 500
+    # Cost. A circuit breaker against a runaway loop, not a budget target (D9). Its consumer is
+    # T6's `verify_business`: reaching it stops the Places checks and finishes the stage degraded.
+    max_places_calls_per_run: int = Field(default=500, gt=0)
 
     # Sourcing (T5). The run works a backlog in fixed batches (D12): the batch size, not the pool
     # size, sets each run's paid bill. 150 is the starting point, to be tuned from the first runs.
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
     # ahead of T6 so a key placed in `.env` is not refused by `extra="forbid"`. A `SecretStr`, so
     # it never prints in a repr or a log. T6 treats a blank value as unset.
     google_places_api_key: SecretStr | None = None
+    # Text Search Pro list price per call ($32 per 1,000), for cost logging only (A5). The first
+    # 5,000 calls a month are free, which one run cannot see, so a run's total is an upper bound.
+    places_text_search_usd: Decimal = Field(default=Decimal("0.032"), ge=0)
     # Routing (T8). The most doors one route may hold: the cadence plans ~10-12 doors an outing and
     # 20 names in two routes a week (E3, E4). A cap per route, so the number of routes follows from
     # how many candidates there are, never the other way round.
@@ -89,6 +93,14 @@ class Settings(BaseSettings):
     rollup_classifier_max_turns: int = Field(default=8, gt=0)
     rollup_classifier_max_budget_usd: Decimal = Field(default=Decimal("0.50"), gt=0)
     max_judgment_calls_per_run: int = Field(default=500, gt=0)
+
+    # The resolve_owner judgment node (T6): runs only where the census names no citable officer.
+    # It mirrors the classify_rollup node: per-call and per-run caps are circuit breakers against a
+    # runaway loop, not budget targets (D7). Reaching the per-run cap finishes the stage degraded.
+    owner_resolver_model: str = "claude-opus-5-5"
+    owner_resolver_max_turns: int = Field(default=10, gt=0)
+    owner_resolver_max_budget_usd: Decimal = Field(default=Decimal("0.50"), gt=0)
+    max_owner_calls_per_run: int = Field(default=500, gt=0)
 
 
 @lru_cache
