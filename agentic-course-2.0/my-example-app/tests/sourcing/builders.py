@@ -160,7 +160,7 @@ def freight_v3_rules() -> tuple[DisqualifierRule, ...]:
     )  # fmt: skip
 
 
-def _source(name: str, kind: SourceKind, base_url: str) -> ProvenancedValue[ManifestSource]:
+def a_source(name: str, kind: SourceKind, base_url: str) -> ProvenancedValue[ManifestSource]:
     return cited(
         ManifestSource(name=name, kind=kind, description=f"the {name} source", base_url=base_url)
     )
@@ -172,10 +172,10 @@ def a_freight_body(*, revocations_url: str = MOTUS_REVOCATIONS_URL) -> ManifestB
     return base.model_copy(
         update={
             "sources": (
-                _source("fmcsa_company_census", SourceKind.bulk_file, CENSUS_SOURCE_URL),
-                _source("fmcsa_qcmobile", SourceKind.registry_api, QCMOBILE_SOURCE_URL),
-                _source("fmcsa_authority_history", SourceKind.bulk_file, AUTHORITY_HISTORY_URL),
-                _source("fmcsa_revocations", SourceKind.bulk_file, revocations_url),
+                a_source("fmcsa_company_census", SourceKind.bulk_file, CENSUS_SOURCE_URL),
+                a_source("fmcsa_qcmobile", SourceKind.registry_api, QCMOBILE_SOURCE_URL),
+                a_source("fmcsa_authority_history", SourceKind.bulk_file, AUTHORITY_HISTORY_URL),
+                a_source("fmcsa_revocations", SourceKind.bulk_file, revocations_url),
             ),
             "disqualifier_rules": tuple(cited(rule) for rule in freight_v3_rules()),
         }
@@ -188,8 +188,8 @@ def a_fire_body() -> ManifestBody:
     return base.model_copy(
         update={
             "sources": (
-                _source("tx_fire_marshal", SourceKind.registry_api, TX_FIRE_MARSHAL_URL),
-                _source("places", SourceKind.web_lookup, PLACES_SOURCE_URL),
+                a_source("tx_fire_marshal", SourceKind.registry_api, TX_FIRE_MARSHAL_URL),
+                a_source("places", SourceKind.web_lookup, PLACES_SOURCE_URL),
             ),
         }
     )
