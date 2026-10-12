@@ -30,11 +30,12 @@ class PipelineStage(StrEnum):
 
     verify_business = "verify_business"
     """Stage 2 (T6): a Google Places check of the registry record (D13: a check, never a source),
-    and the website from a web search."""
+    and the website from a free fetch of the census email domain."""
 
     resolve_owner = "resolve_owner"
-    """Stage 3 (T6): the owner or principal — the census officer first, a judgment node only where
-    the census names nobody *citable* (an officer ``Principal`` refuses counts as absent)."""
+    """Stage 3 (T6): the owner or principal. The census officer is filled by the registry stage; a
+    judgment node runs only where the census names nobody *citable* (an officer ``Principal``
+    refuses counts as absent)."""
 
     classify_rollup = "classify_rollup"
     """Stage 4 (T7): rollup or local. A judgment node."""
@@ -52,12 +53,17 @@ FIELD_OWNERS: Final[Mapping[str, PipelineStage]] = MappingProxyType(
         "dba_name": PipelineStage.search_registry,
         "address": PipelineStage.search_registry,
         "phone": PipelineStage.search_registry,
-        # The registry's email domain fills the website until a web search replaces it.
+        # The registry's stated contact email (T6): an input to the website check.
+        "email": PipelineStage.search_registry,
+        # The homepage, fetched from the email domain by the verification stage.
         "website": PipelineStage.verify_business,
         # The Places check: the place ID only (D13).
         "business_check": PipelineStage.verify_business,
-        # The owner (T6): census first, the judgment node only where the census names nobody.
+        # The owner (T6): the census officer is filled by the registry stage (it may only fill);
+        # the judgment node only where that is absent, and a retry of it re-decides its own answer.
         "owner": PipelineStage.resolve_owner,
+        # The headcount band (T6, OQ-3): answered by the judgment node's one call, cited.
+        "headcount_band": PipelineStage.classify_rollup,
         # Every source's raw record (T5). The registry stage writes the whole batch's records in one
         # write per candidate, so a retry replaces them whole rather than merging stale ones in.
         "source_records": PipelineStage.search_registry,

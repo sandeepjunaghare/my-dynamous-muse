@@ -69,13 +69,12 @@ def a_verified_candidate(
     registry_id: str, street: str, postal_code: str = "75238"
 ) -> CandidateFields:
     """A candidate routing may cluster: a census address and a business check that found it."""
+    address = PostalAddress(street=street, city="Dallas", state="TX", postal_code=postal_code)
     return CandidateFields(
         registry_id=sourced(registry_id),
         legal_name=sourced(f"Acme Logistics {registry_id} LLC"),
-        address=sourced(
-            PostalAddress(street=street, city="Dallas", state="TX", postal_code=postal_code)
-        ),
-        business_check=place_checked(f"ChIJ-{registry_id}"),
+        address=sourced(address),
+        business_check=place_checked(f"ChIJ-{registry_id}", address=address),
     )
 
 

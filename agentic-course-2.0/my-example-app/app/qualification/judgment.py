@@ -42,13 +42,12 @@ from app.qualification.schemas import (
     Citation,
     JudgmentAnswer,
     OmittedAnswer,
-    PlacesEvidence,
 )
 from app.qualification.scoring import score
 from app.shared.agent_reads import ReadTracker
 from app.shared.page_reads import PageRead, normalize_url
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
-from app.sourcing.schemas import CandidateFields, PriorityScore, is_google_maps
+from app.sourcing.schemas import CandidateFields, PlacesEvidence, PriorityScore, is_google_maps
 
 logger = get_logger(__name__)
 

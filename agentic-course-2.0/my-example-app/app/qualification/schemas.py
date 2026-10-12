@@ -74,20 +74,6 @@ class PredicateResult:
         return tuple(o for o in self.outcomes if o.kind is OutcomeKind.not_evaluable)
 
 
-class PlacesEvidence(BaseModel):
-    """What T6's Places check saw, handed to the judgment node within the run (D13).
-
-    In memory only: the Maps Platform Terms bar storing it. It is context for the model and is
-    never a citation. ``None`` until T6 builds the channel that carries it here.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    display_name: str | None = None
-    business_status: str | None = None
-    types: tuple[str, ...] = ()
-
-
 # --- The judgment node's structured output (untrusted) -------------------------------------------
 #
 # Lax on purpose, like `app/manifests/proposal.py`: an out-of-range score or an unknown rule id

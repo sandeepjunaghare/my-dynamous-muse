@@ -54,9 +54,22 @@ def looked_up[T](value: T) -> ProvenancedValue[T]:
     return sourced(value, SEARCH_RESULT_URL, RetrievalMethod.web_lookup)
 
 
-def place_checked(place_id: str = "ChIJ-acme-logistics") -> ProvenancedValue[PlaceCheck]:
-    """The one thing ``verify_business`` may keep from Google Places: the place ID (D13)."""
-    return sourced(PlaceCheck(place_id=place_id), PLACES_URL, RetrievalMethod.web_lookup)
+ARLINGTON = PostalAddress(
+    street="2100 Olympic Dr", city="Arlington", state="TX", postal_code="76011"
+)
+"""The census address :func:`a_candidate` carries, and the one :func:`place_checked` checks."""
+
+
+def place_checked(
+    place_id: str = "ChIJ-acme-logistics", *, address: PostalAddress = ARLINGTON
+) -> ProvenancedValue[PlaceCheck]:
+    """What ``verify_business`` keeps from Google Places: the place ID, plus the census address
+    it checked (D13; PR #13 L2). Defaults to :func:`a_candidate`'s address."""
+    return sourced(
+        PlaceCheck(place_id=place_id, checked_address=address),
+        PLACES_URL,
+        RetrievalMethod.web_lookup,
+    )
 
 
 def a_brief(vertical: str | None = None) -> SourcingBrief:
@@ -74,14 +87,7 @@ def a_candidate(registry_id: str = "1234567", *, with_phone: bool = True) -> Can
         registry_id=sourced(registry_id),
         legal_name=sourced(f"Acme Logistics {registry_id} LLC"),
         dba_name=sourced("Acme Freight"),
-        address=sourced(
-            PostalAddress(
-                street="2100 Olympic Dr",
-                city="Arlington",
-                state="TX",
-                postal_code="76011",
-            )
-        ),
+        address=sourced(ARLINGTON),
         phone=sourced("+1-817-555-0100", QCMOBILE_URL, RetrievalMethod.registry_api)
         if with_phone
         else None,

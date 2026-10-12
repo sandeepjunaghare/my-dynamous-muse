@@ -41,6 +41,17 @@ class TestFieldOwners:
             "cluster_routes",
         ]
 
+    def test_the_registry_owns_the_email_it_states(self) -> None:
+        assert owns(PipelineStage.search_registry, "email")
+
+    def test_the_judgment_node_owns_the_headcount_band(self) -> None:
+        """OQ-3: its one call answers it, cited to a page it fetched."""
+        assert owns(PipelineStage.classify_rollup, "headcount_band")
+
+    def test_the_registry_may_only_fill_the_owner(self) -> None:
+        """A2: the census officer is a fill, so a retried node answer is never overwritten."""
+        assert not owns(PipelineStage.search_registry, "owner")
+
 
 class TestTheWritingStageIsRequired:
     @pytest.mark.parametrize(
