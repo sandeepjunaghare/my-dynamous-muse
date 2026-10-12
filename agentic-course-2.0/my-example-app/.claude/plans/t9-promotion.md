@@ -17,6 +17,14 @@ Pay special attention to naming of existing utils, types and models. `HubSpotCli
 
 ## ⚠ OPEN QUESTIONS — the human decides before `/piv-implement` starts
 
+> **DECIDED 2026-10-12: all eight go with the recommendation.** OQ1 D (not disqualified and not a cited dead
+> score; unscored allowed) · OQ2 A (new COMPANY enum `lpe_review_status`: pending_review / accepted / rejected,
+> a one-way door, accepted) · OQ3 A (the founder sets it in HubSpot; `lpe promotion sync` reads it back and
+> enrols via `CadenceService.enrol`) · OQ4 A (first word → `firstname`, the rest → `lastname`, casing kept,
+> ambiguous splits flagged and counted) · OQ5 A (skip, flag `duplicate` with the matched id) · OQ6 A (closed
+> `RecordMeta` exemption for `lpe_vertical`, `lpe_review_status`, `lpe_route_cluster`, `hubspot_owner_id`) ·
+> OQ7 CLI only, no `routes.py` · OQ8 B (`cluster_routes` excludes the run's disqualified candidates).
+
 These are genuinely the user's calls (product behaviour, one-way doors in the portal, or a reinterpretation
 of an epic-level rule). **None is silently answered below.** The tasks are written against the
 **recommended** option of each; the `Depends on` line says which tasks change if a different option is
@@ -1066,3 +1074,16 @@ and association type `1` (one read-only check).
 ## AMENDMENTS
 
 <!-- Append-only. Newest at the bottom. Leave empty until the plan has been approved/executed. -->
+
+### 2026-10-12: decisions after plan review
+
+1. **All OQs resolved to the recommendation** (see the note under *OPEN QUESTIONS*). The tasks as written stand.
+2. **Merge order: T6 PR A, then T9.** T6 ships in two PRs; PR A carries the stage reorder (`classify_rollup`
+   before `resolve_owner`), `place_checked(address)`, and the new `email` and `headcount_band` fields (added to
+   `unprovenanced_fields()`). Rebase onto it before implementing the eligibility and mapping tasks, and re-point
+   `0010_promotion`'s `down_revision` at whatever head main has then (T6 plans no migration).
+3. **Main moved to `0b68ab4`**: `app/core/config.py` gained `google_places_api_key`. Task 1 adds its settings
+   beside it; rebase first.
+4. **Human step after merge (OQ3 A):** add `uv run lpe promotion sync` to the 07:00 launchd job, before
+   `lpe cadence sync`. Also creating `lpe_review_status` on the live portal is a one-way door; it happens only
+   through `lpe` at the first real `promote`, never through the connector.
