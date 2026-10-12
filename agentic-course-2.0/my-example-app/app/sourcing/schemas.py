@@ -13,6 +13,7 @@ refuses a Google Maps citation, so copying Places content into a candidate fails
 than reaching HubSpot.
 """
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -115,6 +116,61 @@ class PlaceCheck(BaseModel):
         if not value.strip():
             raise ValueError("place_id must not be blank")
         return value.strip()
+
+
+_NOT_AFTER_A_LETTER = r"(?<![^\W\d_])"
+_NOT_BEFORE_A_LETTER = r"(?![^\W\d_])"
+r"""Word edges by *letter*, Unicode-aware: ``[^\W\d_]`` is any letter, accented ones included."""
+
+_ENTITY_DESIGNATOR = re.compile(
+    _NOT_AFTER_A_LETTER
+    + r"(L\.?L\.?C|L\.?L\.?P|L\.?P|P\.?L\.?L\.?C|INC|INCORPORATED|CORP|CORPORATION|LTD|LIMITED)\.?"
+    + _NOT_BEFORE_A_LETTER,
+    re.IGNORECASE,
+)
+"""A legal-entity designator as a whole word. ``LLOYD INCE`` and ``Vincent Corpus`` are people.
+
+Changing this list changes which *stored* owners load, because candidates are validated on read:
+widen it only with a check of what is already stored. CO, LC and PC are left out on purpose, since
+"Co" is a surname and refusing a real owner costs more than a rare ``ACME CO`` reaching review."""
+
+
+class Principal(BaseModel):
+    """The owner or principal of a business: the person a HubSpot Contact is created for (T9).
+
+    ``name`` is kept as the source stated it. The census gives one string (``company_officer_1``),
+    and splitting it into first and last is a guess, so T9 does it at write time rather than
+    storing a split behind a census citation.
+
+    **E18 guard:** a name carrying a legal-entity designator is a company in the person field,
+    and is refused. Name equality with ``legal_name`` would be the wrong test: a sole proprietor's
+    legal name *is* the owner's name (the counts are in ticket T6).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(min_length=1)
+    title: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _a_person_not_a_company(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        if _ENTITY_DESIGNATOR.search(stripped):
+            raise ValueError(
+                f"{stripped!r} carries a legal-entity designator; a company name is not a person "
+                "(E18). Leave the owner absent rather than cite a company as one"
+            )
+        return stripped
+
+    @field_validator("title")
+    @classmethod
+    def _blank_title_is_absent(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class ScoreBand(StrEnum):
@@ -237,9 +293,9 @@ class CandidateFields(BaseModel):
     exists *because* a registry named it, so its id is the one field that cannot be absent. Every
     other field may be ``None`` — storable, and not promotable (see the module docstring).
 
-    Enrichment fields (owner, headcount band, years in business) are T6's to add here. Because the
-    column is JSONB, adding a field is a schema change with no migration, and rows written before it
-    existed load with it absent — which is honestly what they are.
+    Enrichment fields T6 has yet to add (headcount band, years in business) belong here too.
+    Because the column is JSONB, adding a field is a schema change with no migration, and rows
+    written before it existed load with it absent — which is honestly what they are.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -255,6 +311,12 @@ class CandidateFields(BaseModel):
     business_check: ProvenancedValue[PlaceCheck] | None = None
     """The Google Places check of this record (T6): the place ID, cited to Places. Absent means
     never checked, or checked and not found."""
+
+    owner: ProvenancedValue[Principal] | None = None
+    """The owner or principal (T6, ``resolve_owner``). The census ``company_officer_1`` first, cited
+    ``bulk_file``; the judgment node only where that is absent, cited ``llm_inference`` to the page
+    it read. Absent means nobody could be cited, and T9 does not promote such a candidate: the
+    cadence is keyed on a contact."""
 
     source_records: tuple[ProvenancedValue[SourceRecord], ...] = ()
     """Every source's raw record for this candidate, each with its own citation (T5).

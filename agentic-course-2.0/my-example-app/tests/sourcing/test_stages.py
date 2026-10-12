@@ -60,3 +60,10 @@ class TestTheWritingStageIsRequired:
 class TestPriorityOwner:
     def test_the_judgment_node_owns_the_priority_score(self) -> None:
         assert owns(PipelineStage.classify_rollup, "priority")
+
+
+class TestOwnerOwner:
+    def test_resolve_owner_owns_the_owner(self) -> None:
+        """It reads the census officer first and calls the model only where that is absent, so a
+        retry of the stage is the stage re-deciding its own fact."""
+        assert owns(PipelineStage.resolve_owner, "owner")

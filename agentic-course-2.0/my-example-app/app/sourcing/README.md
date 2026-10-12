@@ -51,10 +51,11 @@ absent, not inferred*. So a candidate with a missing phone is **storable but not
 ```python
 candidate.fields.phone  # None
 is_promotable(candidate.fields.phone)  # False — HubSpot may not receive it
-candidate.fields.unprovenanced_fields()  # ("phone", "website", "business_check")
+candidate.fields.unprovenanced_fields()  # ("phone", "website", "business_check", "owner", "priority")
 ```
 
-T9 decides which fields promotion requires. This slice only reports which fields are missing.
+T9 enforces which fields promotion requires (decided 2026-10-11: `registry_id`, `legal_name`, `address`,
+`phone`, `business_check`, `owner`). This slice only reports which fields are missing.
 
 `registry_id` is stored twice, as the key column and as the cited `fields.registry_id`.
 `ck_candidate_registry_id_is_cited` stops the two from ever disagreeing, and refuses a row whose
@@ -76,8 +77,15 @@ built directly through the ORM can store a raw, uncited value, and that one row 
 |---|---|
 | `registry_id` · `legal_name` · `dba_name` · `address` · `phone` · `source_records` | `search_registry` |
 | `website` · `business_check` | `verify_business` |
+| `owner` | `resolve_owner` |
+| `priority` | `classify_rollup` |
 
-`resolve_owner`, `classify_rollup` and `cluster_routes` own none yet. T6's owner fields add their rows.
+`cluster_routes` owns none. **`owner` is a `Principal(name, title)`**, the name as the source stated it:
+`resolve_owner` cites the census `company_officer_1` first (`bulk_file`) and calls the judgment node only
+where the census names nobody. A name carrying a legal-entity designator (LLC, INC, CORP…) is refused as
+E18, a company in the person field. Name equality with `legal_name` is not the test: sole proprietors are
+named for themselves. A census officer that `Principal` refuses counts as absent, so the judgment node runs
+for that candidate. `resolve_owner` catches the error per candidate rather than failing the run.
 
 **D13 moved address and phone to the registry** (2026-10-09). Google Places is a check, never a
 source: its terms forbid storing Places content, so the census copy is the one we keep and nothing
@@ -241,8 +249,7 @@ editable.
 
 ## Deliberately absent
 
-- **Enrichment fields** (owner, headcount band, years in business) belong to T6 and need no
-  migration.
+- **Enrichment fields** T6 has yet to add (headcount band, years in business) need no migration.
 - **`disqualification` and an index on `registry_id` alone.** These are T7's, which adds the index
   together with the cross-run query that uses it.
 - **Routes.** `POST /runs` is T10's. The one CLI is `lpe sourcing run` (below).

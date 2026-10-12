@@ -1371,3 +1371,51 @@ replaced were read from a migrated database rather than guessed: Postgres named 
 **Note:** `alembic upgrade head` on the dev and prod Supabase projects will refuse if any existing row already pairs
 a run with another run's candidate. None should exist; if one does, the upgrade names it.
 
+
+
+## Seam PR before T6 ∥ T9: the owner field and the promotion contract (planned 2026-10-11)
+
+T6 fills the owner; T9 writes it to a HubSpot Contact. Agreeing the field first stops T9 planning against a guess,
+as the `app/tools/registry.py` seam did for Wave 5. Decided 2026-10-11: name + title; promotion requires identity +
+verified + owner; headcount band deferred to T6 (T6 merges first, T9 rebases onto it).
+
+**Guard revised against live data.** "Owner name ≠ legal/dba name" was checked on FMCSA census TX brokers (14,347
+with an officer): 480 have officer = legal name (sole proprietors, e.g. `JAMES OEHLKE`), 43 have officer = dba (the
+person's own name), and only 17 are the E18 failure (`KZ TRANS INC`). Name equality would refuse real owners, so
+the guard refuses a **legal-entity designator** in the name instead.
+
+- [x] Branch `feat/owner-field-seam` off a fast-forwarded main.
+- [x] `app/sourcing/schemas.py`: frozen `Principal(name: str, title: str | None = None)`. `name` stripped and
+  non-blank, kept as the source stated it (no first/last split; that is T9's write-time concern). A validator
+  refuses a name containing a whole-word entity designator (LLC, L.L.C., INC, INCORPORATED, CORP, CORPORATION,
+  LTD, LLP, PLLC, LP), with a message naming E18.
+- [x] `CandidateFields.owner: ProvenancedValue[Principal] | None`, its docstring saying who fills it and how
+  (census `company_officer_1` first, `bulk_file`; the judgment node only where that is absent). The existing D13
+  guard already covers it (no Google Maps citation).
+- [x] `app/sourcing/stages.py`: `FIELD_OWNERS["owner"] = resolve_owner`; update the stage docstring.
+- [x] Tests (test-first): `test_stages.py` resolve_owner owns `owner` (the coverage test fails until the row
+  exists); `test_schemas.py` round trip, blank refused, each designator refused, sole-proprietor name equal to
+  legal name accepted, D13 citation refused, `unprovenanced_fields` lists `owner`.
+- [x] Docs: T9 ticket states the required-for-promotion set (registry_id, legal_name, address, phone,
+  business_check, owner) and why (cadence is keyed on a contact; no owner → stays in pool, counted); T6 ticket
+  states it writes `owner` and owns headcount band's shape; sourcing README field table; drop "owner" from the
+  `CandidateFields` "T6's to add" docstring line.
+- [x] Validate (`/piv-validate`); no migration (JSONB). Commit, PR.
+
+**Review:** 1,118 passed, 2 skipped (DB tier on); ruff, format, mypy, pyright clean; `alembic check` clean on the
+test DB (no migration: JSONB). One DB-tier test hard-coded the unprovenanced tuple and gained `owner`.
+**Worked:** checking the approved guard against live census data before writing it. Name equality would have
+refused 480+ real sole-proprietor owners and still passed `I.N.R TRUCKING LLC`.
+**Didn't:** I guessed the test DB port at first; 5433 is Langfuse's Postgres, and the project's is `lpe-test-pg` on 5434.
+**Improve:** the CLAUDE.md test-DB recipe says 5433, which clashes with Langfuse here; worth saying 5434.
+
+
+## PR #31 review fixes (2026-10-11)
+
+- [x] M1: dotted LP/LLP/PLLC and `LIMITED`; CO/LC/PC excluded on purpose, with a test pinning that.
+- [x] M2: a refused census officer counts as absent, so the judgment node runs for it, caught per candidate (T6 ticket, README, `stages.py`).
+- [x] L3: Unicode-aware letter edges. L4: dated count moved out of the docstring.
+- [x] L1 and L2 carried into the T6 ticket.
+
+**Review:** 1,127 passed, 2 skipped; all checks clean. The regex run over all 14,347 TX broker officers refused 16, all
+companies. **Worked:** writing the failing cases first, then checking the whole real column rather than samples.
