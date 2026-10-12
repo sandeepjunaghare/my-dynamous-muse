@@ -1581,3 +1581,33 @@ behaviour it relied on was run on the PR head and held.
 
 **Review:** 1,309 passed, 2 skipped (DB tier on 5436); all checks clean. The star-import cases fail with the new
 condition disabled.
+
+---
+
+# T9 — Promotion slice: planned (2026-10-12)
+
+**Plan:** `.claude/plans/t9-promotion.md` · **Branch / worktree:** `feat/t9-promotion` (worktrees/t9), off `main` @ `752a994`
+· migration `0010_promotion` → `0009_candidate_run_scoped_fks` (re-point and renumber after T6 merges, per
+`conventions.md` § merge). **Awaiting human answers to the plan's eight Open Questions before `/piv-implement`.**
+
+**Found while planning (read-only, 2026-10-11):**
+- No `pending review` stage exists in the portal. `hs_lead_status` is already used by the founders (10 contacts:
+  `NEW`, `CONNECTED`), so reusing it would collide. Recommended: a new `lpe_review_status` enum on COMPANY (one-way door).
+- Census `company_officer_1` (3,000 TX brokers): always given-name first; 73.5% split confidently, 26.5% ambiguous
+  (middle name vs compound surname vs a glued title), 1 single word. ALL CAPS in 99%.
+- `find_task_by_key` avoids search for recovery (index lag); companies have no association to walk, so company
+  recovery searches by `lpe_source_url` behind a 10-minute age guard. Contacts recover through the association walk.
+
+- [ ] Human answers OQ1–OQ8 (qualified rule · where pending review lives · what "accept" is · name split · dedupe hit ·
+      engine-metadata carve-out · CLI vs route · routes with disqualified doors)
+- [ ] `/piv-implement` the plan, then `/piv-validate` on the database tier (port 5434), report, PR, review
+- [ ] Human-gated: provision `lpe_review_status`, live `promote --dry-run`, first real promote, accept/reject in HubSpot,
+      `sync`, add `lpe promotion sync` to the 07:00 launchd job, `alembic upgrade head` on dev
+- [ ] Follow-ups: map T6's headcount band; a T7 "judged" marker would let promotion exclude never-judged candidates
+
+## Review (planning)
+
+**Worked.** Measuring the officer-name shapes on live census data before designing the split: the plan's options now
+carry percentages instead of guesses. Checking the portal settled that `pending review` must be new, not reused.
+**Watch.** OQ6 widens the gate's documented carve-out (engine metadata); it is an epic-level wording change, so it is
+the human's call. Under OQ5-A the `manual_hubspot_entry` criterion has nothing to act on yet, and the plan says so.
