@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # unassigned — out of everyone's "My tasks", which is how E15's tasks went unworked — so the
     # cadence warns about it on every enrol and sync. Blank counts as unset.
     hubspot_default_owner_id: str | None = None
+    # The portal and UI host a record's URL is built from, so `lpe promotion` prints a link a
+    # founder can open instead of a bare id. Blank counts as unset: the CLI then prints the id.
+    hubspot_portal_id: str | None = None
+    hubspot_ui_domain: str = "app-na2.hubspot.com"
 
     # Manifest-authoring agent (T12). The key is optional: when unset, the Agent SDK falls back to
     # whatever credential its bundled CLI already resolves. Declared so that a key placed in `.env`

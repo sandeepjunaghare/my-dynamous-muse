@@ -24,7 +24,11 @@ _MANAGED_VARS = (
     "OWNER_RESOLVER_MAX_TURNS",
     "OWNER_RESOLVER_MAX_BUDGET_USD",
     "MAX_OWNER_CALLS_PER_RUN",
+    "HUBSPOT_PORTAL_ID",
+    "HUBSPOT_UI_DOMAIN",
 )
+
+ROOT = Path(__file__).resolve().parents[2]
 
 VALID_URL = "postgresql+asyncpg://u:p@db.abc.supabase.co:5432/postgres"
 
@@ -98,6 +102,18 @@ class TestDefaults:
         assert settings.log_level == "INFO"
         assert settings.max_places_calls_per_run == 500
         assert settings.hubspot_private_app_token is None
+        assert settings.hubspot_portal_id is None
+        assert settings.hubspot_ui_domain == "app-na2.hubspot.com"
+
+    def test_every_env_example_key_is_a_setting(self) -> None:
+        """`extra="forbid"`: a key `.env.example` ships but `Settings` lacks fails every startup."""
+        lines = (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        keys = {
+            line.split("=", 1)[0].strip().lower()
+            for line in lines
+            if "=" in line and not line.lstrip().startswith("#")
+        }
+        assert keys - set(Settings.model_fields) == set()
 
     def test_no_setting_carries_a_local_path(self, env: pytest.MonkeyPatch) -> None:
         """Strict 12-factor: local Mac to VPS must be env vars only, never a path in code."""
