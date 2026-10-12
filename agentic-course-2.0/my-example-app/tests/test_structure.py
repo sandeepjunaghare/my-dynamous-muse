@@ -259,3 +259,92 @@ class TestStructure:
                     offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
 
         assert not offenders, f"vertical is data, not code: {sorted(set(offenders))}"
+
+
+PLACES_MODULE = "app/sourcing/sources/google_places.py"
+PLACES_PRO_FIELDS = frozenset(
+    {
+        "places.id",
+        "places.displayName",
+        "places.formattedAddress",
+        "places.businessStatus",
+        "places.types",
+    }
+)
+"""The Text Search Pro triggers (``places.id`` alone is Essentials). Anything else is Enterprise:
+billed at the higher rate for the whole request, and content D13 forbids storing anyway."""
+
+
+def _imports_from(tree: ast.AST, module: str) -> bool:
+    return any(
+        (isinstance(node, ast.ImportFrom) and node.module == module)
+        or (isinstance(node, ast.Import) and any(alias.name == module for alias in node.names))
+        for node in ast.walk(tree)
+    )
+
+
+class TestPlacesIsACheckNeverASource:
+    """D13 at the structure level (T6 ticket: "a structure guard should reject one").
+
+    With the stored-row assertion in ``tests/tools/test_verify_business.py`` and the
+    ``CandidateFields`` validator, this covers "no Places field other than the place ID is ever
+    written to a candidate" at three layers.
+    """
+
+    def test_one_module_calls_places_and_one_stage_uses_it(self) -> None:
+        """Only the adapter constructs a result or names the endpoint, and only verify_business
+        imports the adapter among the stages: a second call site is a second way to store it."""
+        callers: set[str] = set()
+        stage_importers: set[str] = set()
+        for path in _app_sources():
+            relative = str(path.relative_to(ROOT))
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                constructs = (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "PlaceResult"
+                )
+                names_url = isinstance(node, ast.Name) and node.id == "PLACES_SEARCH_URL"
+                literal = (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and "places:searchText" in node.value
+                )
+                if constructs or names_url or literal:
+                    callers.add(relative)
+            if relative.startswith("app/tools/") and _imports_from(
+                tree, "app.sourcing.sources.google_places"
+            ):
+                stage_importers.add(relative)
+
+        assert callers == {PLACES_MODULE}
+        assert stage_importers == {"app/tools/verify_business.py"}
+
+    def test_the_field_mask_is_pro_tier_only(self) -> None:
+        from app.sourcing.sources.google_places import PLACES_FIELD_MASK
+
+        assert set(PLACES_FIELD_MASK) <= PLACES_PRO_FIELDS
+
+    def test_places_content_has_no_home_in_a_candidate_or_a_table(self) -> None:
+        """Neither in-memory Places shape is a candidate field type, and no column is named for
+        Places content."""
+        from app.cadence import models as cadence_models
+        from app.core.database import Base
+        from app.manifests import models as manifest_models
+        from app.qualification import models as qualification_models
+        from app.routing import models as routing_models
+        from app.sourcing import models as sourcing_models
+        from app.sourcing.schemas import CandidateFields
+
+        assert all(
+            (cadence_models, manifest_models, qualification_models, routing_models, sourcing_models)
+        )
+        for name, field in CandidateFields.model_fields.items():
+            annotation = str(field.annotation)
+            assert "PlacesEvidence" not in annotation, name
+            assert "PlaceResult" not in annotation, name
+
+        content_columns = {"display_name", "formatted_address", "business_status"}
+        for table in Base.metadata.tables.values():
+            assert not content_columns & set(table.columns.keys()), table.name
