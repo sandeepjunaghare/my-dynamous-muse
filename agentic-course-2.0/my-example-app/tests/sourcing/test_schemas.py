@@ -17,6 +17,7 @@ from app.sourcing.schemas import (
     CandidateFields,
     PlaceCheck,
     PostalAddress,
+    Principal,
     PriorityScore,
     RunCostSummary,
     RunOutcome,
@@ -119,6 +120,7 @@ class TestCandidateFields:
             "phone",
             "website",
             "business_check",
+            "owner",
             "priority",
         )
 
@@ -131,6 +133,7 @@ class TestCandidateFields:
             phone=sourced("1"),
             website=sourced("https://example.com"),
             business_check=place_checked(),
+            owner=sourced(Principal(name="Jane Doe")),
             priority=sourced(
                 PriorityScore(intensity=4, automatable=4),
                 "https://example.com/about",
@@ -271,6 +274,86 @@ class TestBusinessCheck:
             registry_id=sourced("1234567"), website=looked_up("https://x.test")
         )
         assert fields.website is not None
+
+
+class TestPrincipal:
+    """The owner T6 fills and T9 writes to a HubSpot Contact."""
+
+    def test_the_name_is_kept_as_the_source_stated_it(self) -> None:
+        principal = Principal(name="  JOSEPH JOHN BELOVICH JR ")
+        assert principal.name == "JOSEPH JOHN BELOVICH JR"
+        assert principal.title is None
+
+    def test_a_title_is_optional_and_stripped(self) -> None:
+        assert Principal(name="Jane Doe", title=" President ").title == "President"
+
+    @pytest.mark.parametrize("name", ["", "   "])
+    def test_a_blank_name_is_refused(self, name: str) -> None:
+        with pytest.raises(ValidationError):
+            Principal(name=name)
+
+    def test_a_blank_title_is_absent_rather_than_empty(self) -> None:
+        assert Principal(name="Jane Doe", title="  ").title is None
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # Real census company_officer_1 values (FMCSA, TX brokers, 2026-10-11).
+            "KZ TRANS INC",
+            "WHITE WOLF LOGISTICS LLC",
+            "I.N.R TRUCKING LLC",
+            "Acme Freight L.L.C.",
+            "Acme Freight, Inc.",
+            "ACME CORP",
+            "Acme Corporation",
+            "Acme Incorporated",
+            "Acme Ltd",
+            "Acme Partners LLP",
+            "Acme PLLC",
+            "Acme Holdings LP",
+        ],
+    )
+    def test_a_company_name_in_the_person_field_is_refused(self, name: str) -> None:
+        """E18: a company name sitting where a person belongs is a field nobody can cite as one."""
+        with pytest.raises(ValidationError, match="E18"):
+            Principal(name=name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["Vincent Corpus", "Lincoln Ltdson", "Prince Llewellyn", "Alp Inceoglu", "LLOYD INCE"],
+    )
+    def test_a_designator_inside_a_word_is_not_one(self, name: str) -> None:
+        assert Principal(name=name).name == name
+
+    def test_a_sole_proprietor_named_for_themselves_is_accepted(self) -> None:
+        """480 TX broker census rows have officer = legal name: sole proprietors, really the owner.
+        Name equality would refuse every one, which is why the guard is a designator instead."""
+        fields = CandidateFields(
+            registry_id=sourced("1234567"),
+            legal_name=sourced("JAMES OEHLKE"),
+            owner=sourced(Principal(name="JAMES OEHLKE")),
+        )
+        assert fields.owner is not None
+
+    def test_the_principal_is_frozen_so_it_can_be_cited(self) -> None:
+        assert Principal.model_config.get("frozen") is True
+        assert sourced(Principal(name="Jane Doe")).value.name == "Jane Doe"
+
+    def test_an_owner_cited_to_google_maps_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="D13"):
+            CandidateFields(
+                registry_id=sourced("1234567"),
+                owner=sourced(Principal(name="Jane Doe"), PLACES_URL, RetrievalMethod.web_lookup),
+            )
+
+    def test_an_owner_survives_the_json_trip(self) -> None:
+        owner = sourced(
+            Principal(name="Jane Doe", title="Owner"),
+            "https://www.acmefreight.test/about",
+            RetrievalMethod.llm_inference,
+        )
+        fields = CandidateFields(registry_id=sourced("1234567"), owner=owner)
+        assert CandidateFields.model_validate(fields.to_stored()).owner == owner
 
 
 class TestRunStatus:

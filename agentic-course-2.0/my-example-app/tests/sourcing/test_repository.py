@@ -182,6 +182,7 @@ class TestProvenanceRoundTrip:
             "phone",
             "website",
             "business_check",
+            "owner",
             "priority",
         )
 

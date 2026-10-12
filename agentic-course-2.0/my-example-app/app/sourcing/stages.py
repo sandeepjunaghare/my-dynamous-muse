@@ -33,7 +33,8 @@ class PipelineStage(StrEnum):
     and the website from a web search."""
 
     resolve_owner = "resolve_owner"
-    """Stage 3 (T6): the owner or principal. A judgment node."""
+    """Stage 3 (T6): the owner or principal — the census officer first, a judgment node only where
+    the census names nobody."""
 
     classify_rollup = "classify_rollup"
     """Stage 4 (T7): rollup or local. A judgment node."""
@@ -55,6 +56,8 @@ FIELD_OWNERS: Final[Mapping[str, PipelineStage]] = MappingProxyType(
         "website": PipelineStage.verify_business,
         # The Places check: the place ID only (D13).
         "business_check": PipelineStage.verify_business,
+        # The owner (T6): census first, the judgment node only where the census names nobody.
+        "owner": PipelineStage.resolve_owner,
         # Every source's raw record (T5). The registry stage writes the whole batch's records in one
         # write per candidate, so a retry replaces them whole rather than merging stale ones in.
         "source_records": PipelineStage.search_registry,
