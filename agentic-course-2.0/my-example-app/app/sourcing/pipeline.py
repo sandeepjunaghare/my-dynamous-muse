@@ -7,10 +7,14 @@ reap stale runs ─▶ start_run ─▶ stage 1 … stage n ─▶ finish COMPLE
                           rollback ─▶ finish FAILED on a fresh session ─▶ re-raise
 ```
 
-The stages are whatever ``registered_stages()`` finds, in ``PipelineStage`` order — today only
-``search_registry``; T6, T7 and T8 add theirs by adding a file. Ordinary async Python: same input,
-same output, and every step testable against fixtures. The Agent SDK is called inside two stages
-(``resolve_owner``, ``classify_rollup``) and never decides what runs next.
+The stages are whatever ``registered_stages()`` finds, in ``PipelineStage`` order; each stage adds
+itself by adding a file. Ordinary async Python: same input, same output, and every step testable
+against fixtures. The Agent SDK is called inside two stages (``classify_rollup``, ``resolve_owner``)
+and never decides what runs next.
+
+**One Places channel per run.** The runner creates one ``places`` dict before the first stage and
+hands the same one to every stage's context, so ``verify_business`` can pass what Places saw to
+``classify_rollup`` in memory (D13: use and discard). It goes out of scope with the run.
 
 **Why a session factory, not a session.** A stage that fails mid-write leaves its transaction
 aborted, and finishing the run on that session before a rollback raises ``PendingRollbackError``
@@ -34,7 +38,7 @@ from app.core.cost import RunCost
 from app.core.database import get_sessionmaker
 from app.core.logging import get_logger
 from app.manifests.service import ManifestService
-from app.sourcing.schemas import RunOutcome, SourcingBrief, SourcingRunResponse
+from app.sourcing.schemas import PlacesEvidence, RunOutcome, SourcingBrief, SourcingRunResponse
 from app.sourcing.service import SourcingService
 from app.tools.registry import Stage, StageContext, registered_stages
 
@@ -77,6 +81,7 @@ class SourcingPipeline:
 
             structlog.contextvars.bind_contextvars(run_id=str(run.id))
             cost = RunCost()
+            places: dict[str, PlacesEvidence] = {}
             counts: dict[str, int] = {}
             reasons: list[str] = []
             try:
@@ -87,7 +92,13 @@ class SourcingPipeline:
                 )
                 for stage in stages:
                     result = await stage.run(
-                        StageContext(run_id=run.id, manifest=manifest, session=session, cost=cost)
+                        StageContext(
+                            run_id=run.id,
+                            manifest=manifest,
+                            session=session,
+                            cost=cost,
+                            places=places,
+                        )
                     )
                     clashing = sorted(set(counts) & set(result.counts))
                     if clashing:
