@@ -51,7 +51,8 @@ absent, not inferred*. So a candidate with a missing phone is **storable but not
 ```python
 candidate.fields.phone  # None
 is_promotable(candidate.fields.phone)  # False — HubSpot may not receive it
-candidate.fields.unprovenanced_fields()  # ("phone", "website", "business_check", "owner", "priority")
+candidate.fields.unprovenanced_fields()
+# ("phone", "email", "website", "business_check", "owner", "headcount_band", "priority")
 ```
 
 T9 enforces which fields promotion requires (decided 2026-10-11: `registry_id`, `legal_name`, `address`,
@@ -75,29 +76,38 @@ built directly through the ORM can store a raw, uncited value, and that one row 
 
 | Field | Owner |
 |---|---|
-| `registry_id` · `legal_name` · `dba_name` · `address` · `phone` · `source_records` | `search_registry` |
+| `registry_id` · `legal_name` · `dba_name` · `address` · `phone` · `email` · `source_records` | `search_registry` |
 | `website` · `business_check` | `verify_business` |
-| `owner` | `resolve_owner` |
-| `priority` | `classify_rollup` |
+| `priority` · `headcount_band` | `classify_rollup` |
+| `owner` | `resolve_owner` (the census adapter *fills* it from `search_registry`) |
 
-`cluster_routes` owns none. **`owner` is a `Principal(name, title)`**, the name as the source stated it:
-`resolve_owner` cites the census `company_officer_1` first (`bulk_file`) and calls the judgment node only
-where the census names nobody. A name carrying a legal-entity designator (LLC, INC, CORP…) is refused as
+`email` is the census's stated contact address, lowercased, kept only when it is one address.
+`headcount_band` is a `HeadcountBand(low, high)` range as a page stated it (`50+` is `high=None`),
+answered by `classify_rollup`'s call and cited, or absent (M8); bucketing it is T9's mapping.
+
+`cluster_routes` owns none. **`owner` is a `Principal(name, title)`**, the name as the source stated it.
+The **census adapter** maps `company_officer_1` to `owner` (`bulk_file`) when `principal_or_none` accepts
+it, and `search_registry` writes it as a *fill* — it does not own the field (A2: no generic stage names an
+FMCSA column). `resolve_owner` (PR B) then finds it filled and calls its judgment node only where the
+census names nobody citable. A name carrying a legal-entity designator (LLC, INC, CORP…) is refused as
 E18, a company in the person field. Name equality with `legal_name` is not the test: sole proprietors are
-named for themselves. A census officer that `Principal` refuses counts as absent, so the judgment node runs
-for that candidate. `resolve_owner` catches the error per candidate rather than failing the run.
+named for themselves. A refused officer counts as absent, is logged without the name, and never fails a
+pull; `has_principal` (the backlog's ordering key) uses the same `principal_or_none`.
 
 **D13 moved address and phone to the registry** (2026-10-09). Google Places is a check, never a
 source: its terms forbid storing Places content, so the census copy is the one we keep and nothing
-replaces it. The website starts as the census email domain and a web search replaces it.
+replaces it. The website comes from `verify_business`'s free fetch of the census email's domain.
 
 ## Verified is a field, not a source
 
-**Owning a field is not verifying it.** A Places check stores only the place ID, in `business_check`
-(cited to Places, `retrieved_at` = when it ran). `CandidateFields.has_verified_address()` is the rule
-T8 clusters on: an address **and** a check that found the business. The address itself stays the
-census copy. "Verified" means Places found the business from the census name and address, not that
-a second address matched (D13, option A).
+**Owning a field is not verifying it.** A Places check stores only the place ID **and the census
+address it checked** (`PlaceCheck(place_id, checked_address)`), in `business_check`, cited to the place
+URL (`retrieved_at` = when it ran). The checked address is our registry data, not Places content.
+`CandidateFields.has_verified_address()` is the rule T8 clusters on: an address **and** a check *of that
+address* — the values are compared, never `retrieved_at`, which every registry refresh bumps (PR #13 L2),
+so a business that moved is unverified until it is checked again. The address itself stays the census
+copy. "Verified" means Places found the business from the census name and address, not that a second
+address matched (D13, option A). A permanently closed listing stores no check.
 
 **The D13 guard.** `CandidateFields` refuses any other field cited to Google Maps:
 `places.googleapis.com`, `maps.googleapis.com`, `maps.google.com`, `maps.app.goo.gl`, and the `/maps`
@@ -108,7 +118,7 @@ adapters, not a proof: a Maps host not on it would pass. Google *search* results
 
 - The **owning** stage overwrites its own field. A retried stage re-decides its own fact.
 - **Any other** stage only *fills* a field that is empty. It never replaces a stored citation, so a
-  retried registry stage cannot put its email-domain guess back over a searched website.
+  retried registry stage cannot put a census officer back over an owner `resolve_owner` decided.
 - A field the incoming write does not carry **keeps its citation**. Absent fields are dumped as absent
   keys (`CandidateFields.to_stored()`: no `None`, no empty `source_records`), never as JSON `null`
   or `[]`, and that is what makes the merge safe.
@@ -120,6 +130,32 @@ adapters, not a proof: a Maps host not on it would pass. Google *search* results
 - The same registry id in two runs gives two rows: each run keeps its own record of what it saw.
 - `populate_existing=True` refreshes an object the session already holds. Without it, the second
   upsert returns the stale first object. A test proves this by failing when the option is removed.
+
+## Enrichment (T6): `verify_business`
+
+Stage 2 (`app/tools/verify_business.py`), for every candidate no free rule removed, in `registry_id` order:
+
+- **Website, free, first** (`website.py`). The census email's domain, unless it is free-mail (gmail,
+  yahoo, … by name) or shared by three or more pool businesses (process agents, franchisors; one grouped
+  query, no domain in code). `https://{domain}/` is fetched once, at most three redirects; only a 2xx
+  HTML page on that host or its `www.` counts, and the origin is kept, cited `web_lookup` to the page
+  read. Any failure is `None` with a logged reason, never an error. Measured 2026-10-11: only 24% of DFW
+  brokers carry a business-domain email (not the 67% once assumed).
+- **Places, paid** (`sources/google_places.py`). One Text Search per candidate, **Pro fields only**
+  (`id`, `displayName`, `formattedAddress`, `businessStatus`, `types`), the key in a header. The match
+  is deterministic: the census street number (when the street starts with one), the 5-digit ZIP, and a
+  shared name word of 3+ letters (designators and `the/and/of` removed), first in Google's order.
+- **The channel.** What Places saw for a stored check goes on `StageContext.places`, one dict per run
+  created by the runner, for `classify_rollup` within the run (D13: use and discard). Never stored or
+  logged. A miss is counted (`places_not_found`) and nothing is recorded (OQ-2).
+- **The refusal** (A3). Places runs only for a manifest that **declares** it (`base_url` the API or its
+  docs page) — terms are accepted per source at `activate`. No declared source, no key, or a key refused
+  mid-batch fails the run (its batch goes back to the pool) unless `--allow-degraded`.
+- **The breaker.** Each call is charged first (`RunCost.charge`) against `MAX_PLACES_CALLS_PER_RUN` (500),
+  at list price (`PLACES_TEXT_SEARCH_USD`, an upper bound: the monthly free tier is invisible to a run).
+  Reaching it stops Places and finishes the stage `degraded`; the website step goes on. A retry pays
+  nothing for a candidate already verified; a failed call or a refused write is counted and the batch
+  goes on.
 
 ## The run: a deterministic pipeline (T5)
 
@@ -171,7 +207,7 @@ by vertical or by source name (`sources/base.py`). Three roles:
 | join | any | `RevocationsSource` | Motus RevokeSuspend `wb4f-neki` (SODA) |
 
 - A declared source no adapter matches is **unbound** and skipped: Places (never a discovery source,
-  D13), FMCSA authority history, and the **legacy revocations file** (`rwr4-5nkg`/`sa6p-acbp`, frozen
+  D13; `verify_business` binds it separately and stores none of its answer), FMCSA authority history, and the **legacy revocations file** (`rwr4-5nkg`/`sa6p-acbp`, frozen
   since Motus went live on 2026-05-14 — freight v3 declares it, so v3 needs a v4).
 - A recognised source that cannot run here (no webKey, or a key refused mid-batch) **fails the run**,
   unless `--allow-degraded` is given (PR #21 review, M1). A candidate batched without its QCMobile
@@ -235,10 +271,10 @@ uv run lpe sourcing run --vertical freight [--batch-size N] [--geography dfw] [-
 ```
 
 Runs every registered stage under the vertical's **ACTIVE** manifest, then prints the run id, status,
-counts and cost. A source that cannot run (no `FMCSA_WEBKEY`) is `error:` and exit 1, with no batch
-taken, unless `--allow-degraded`; then `degraded` exits 0 with a `warning:` line. No active manifest
-is `error:` and exit 1.
-Free sources only today: the census, QCMobile and Motus.
+counts and cost. A source that cannot run (no `FMCSA_WEBKEY`; no declared Places source or no
+`GOOGLE_PLACES_API_KEY`) is `error:` and exit 1 unless `--allow-degraded`; then `degraded` exits 0 with
+a `warning:` line. No active manifest is `error:` and exit 1.
+Sources today: the census, QCMobile and Motus (free), Places (paid, the check), and the homepage fetch.
 
 ## Adding a field
 
@@ -249,7 +285,9 @@ editable.
 
 ## Deliberately absent
 
-- **Enrichment fields** T6 has yet to add (headcount band, years in business) need no migration.
+- **Years in business** and any later enrichment field need no migration (JSONB).
+- **Any Places content beyond the place ID** (D13): no name, address, phone, website or types from
+  Places is stored, and `tests/test_structure.py` guards the call site and the field mask.
 - **`disqualification` and an index on `registry_id` alone.** These are T7's, which adds the index
   together with the cross-run query that uses it.
 - **Routes.** `POST /runs` is T10's. The one CLI is `lpe sourcing run` (below).
