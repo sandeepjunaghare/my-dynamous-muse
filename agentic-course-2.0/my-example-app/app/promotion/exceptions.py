@@ -6,9 +6,14 @@ Everything here derives from :class:`LocalProspectEngineError`, so the centraliz
 The hierarchy exists to make the one distinction a caller actually acts on: a failure retrying
 could fix (rate limiting), one it never could (a missing scope), and one where retrying is
 positively dangerous (a create that may already have succeeded upstream).
+
+The promotion errors at the bottom are **not** HubSpot failures — nothing has reached the portal
+when one is raised — so they derive from :class:`LocalProspectEngineError` directly.
 """
 
+from enum import StrEnum
 from typing import ClassVar
+from uuid import UUID
 
 from app.core.exceptions import LocalProspectEngineError
 
@@ -121,3 +126,71 @@ class UnprovenancedWriteError(HubSpotError):
     def __init__(self, message: str, *, fields: tuple[str, ...]) -> None:
         super().__init__(message)
         self.fields = fields
+
+
+class RefusalReason(StrEnum):
+    """Why a candidate was not promoted, in the order eligibility checks them (T9, OQ1-D).
+
+    ``no_principal`` is ``missing_fields`` where the owner is the **only** gap — counted on its own
+    because "no owner found" is the yield question T6 answers, and a company is never promoted
+    without its contact. Kept here, beside the error that carries it, so it has one home.
+    """
+
+    disqualified = "disqualified"
+    dead_score = "dead_score"
+    no_principal = "no_principal"
+    missing_fields = "missing_fields"
+
+
+class PromotionRefusedError(LocalProspectEngineError):
+    """A candidate that may not be promoted: suppressed, a cited-dead score, or missing a field.
+
+    Raised before anything is written, so it costs no HubSpot request and leaves no ledger row.
+    ``fields`` names **every** missing required field in declaration order, not the first — the
+    same "collect every offender, raise once" rule as the write-gate.
+    """
+
+    default_code: ClassVar[str] = "promotion_refused"
+    status_code: ClassVar[int] = 422
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        candidate_id: str,
+        fields: tuple[str, ...],
+        reason: RefusalReason,
+    ) -> None:
+        super().__init__(message)
+        self.candidate_id = candidate_id
+        self.fields = fields
+        self.reason = reason
+
+
+class RunNotPromotableError(LocalProspectEngineError):
+    """The run is still ``running``, or ``failed``.
+
+    A failed run's batch goes back to the pool and is re-batched as **new** candidate rows, so
+    promoting from it would promote the same business twice under two candidate ids. Only
+    ``completed`` and ``degraded`` runs are promoted.
+    """
+
+    default_code: ClassVar[str] = "run_not_promotable"
+    status_code: ClassVar[int] = 409
+
+
+class PromotionStateError(LocalProspectEngineError):
+    """A ledger transition refused because the row was no longer in the expected state.
+
+    Another invocation moved it first — a lost compare-and-set. Theirs stands. ``status`` is the
+    state the row was found in, not ours; it is named ``status``, never ``status_code``, which is
+    the ClassVar the central handlers read.
+    """
+
+    default_code: ClassVar[str] = "promotion_state_conflict"
+    status_code: ClassVar[int] = 409
+
+    def __init__(self, message: str, *, promotion_id: UUID, status: str | None) -> None:
+        super().__init__(message)
+        self.promotion_id = promotion_id
+        self.status = status
