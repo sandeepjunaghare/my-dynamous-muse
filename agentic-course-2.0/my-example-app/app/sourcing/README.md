@@ -143,8 +143,15 @@ Stage 2 (`app/tools/verify_business.py`), for every candidate no free rule remov
   brokers carry a business-domain email (not the 67% once assumed).
 - **Places, paid** (`sources/google_places.py`). One Text Search per candidate, **Pro fields only**
   (`id`, `displayName`, `formattedAddress`, `businessStatus`, `types`), the key in a header. The match
-  is deterministic: the census street number (when the street starts with one), the 5-digit ZIP, and a
-  shared name word of 3+ letters (designators and `the/and/of` removed), first in Google's order.
+  is deterministic: the address **starts with** the census street number and holds the 5-digit ZIP, and the
+  name carries the legal or DBA name's distinguishing words (3+ letters, designators and `the/and/of`
+  removed): all of them for a name of one or two, at least two of a longer one, so a shared trade word cannot
+  verify a neighbour in the same building (PR #32 H3). The first live match in Google's order wins, ahead of a
+  closed listing. A candidate the matcher could not match (no street number, so a PO box; no 5-digit ZIP; no
+  distinguishing name word) is `places_not_checkable` and never paid for.
+- **The homepage fetch is fenced** (`website.py`): an IP-address email domain is refused, every redirect hop
+  is checked (`https`, the domain or its `www.`) before it is requested, only status and headers are read,
+  and the whole check is bounded at 10 s. It never raises.
 - **The channel.** What Places saw for a stored check goes on `StageContext.places`, one dict per run
   created by the runner, for `classify_rollup` within the run (D13: use and discard). Never stored or
   logged. A miss is counted (`places_not_found`) and nothing is recorded (OQ-2).

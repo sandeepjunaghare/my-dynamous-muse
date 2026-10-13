@@ -1521,3 +1521,28 @@ sourcing adapter). The end-to-end five-stage run in *Testing strategy* is PR B's
 `places_lookup` cost (≤ 10 calls), and that no stored candidate holds a Places display name or formatted address.
 **Until v9 is active, a freight run refuses at `verify_business`** (pass `--allow-degraded` to run without Places).
 
+## PR #32 review fixes (2026-10-12)
+
+Scope (owner): all findings, H1–H3, M1–M3, L1–L3. H3 approach (owner): (a) stricter name overlap, no pool data.
+
+- [x] H1: the homepage check catches `httpx.InvalidURL` and `ValueError` (`bad_url`); every parse is inside the guard.
+- [x] H2: IP-address email domains refused; each hop fenced (`https`, own host) before it is requested; status and
+  headers only via `stream`; the whole check bounded by `asyncio.timeout(10)`. Not fenced, and documented: a domain
+  whose own DNS points at a private address.
+- [x] H3: the street number must start `formattedAddress`; the name needs all distinguishing words of a 1–2 word
+  name, two of a longer one (`_MIN_SHARED_WORDS`). No trade words in code.
+- [x] M1: one `_checkable` precondition shared by `search_query` and `match_place`.
+- [x] M2: a live match beats a closed one listed ahead of it.
+- [x] M3: `PlaceCheck`'s fields pinned; the adapter importer scan widened to all of `app/`.
+- [x] L1: CLI help names the paid Places step. L2: `VerifyBusinessStage.preflight` refuses from the manifest before
+  the census pull; the CLI calls it, and the stage's own refusal stays as the backstop (T10 should call it too).
+  L3: the breaker docstring says a retry across runs pays again.
+
+**Review:** 1,282 passed, 2 skipped (DB tier on 5436); 921 without the DB; ruff, format, mypy, pyright, `alembic
+check` clean. Each new test failed first; both widened guards were mutation-checked.
+**Worked:** reproducing H3 before fixing it. The fix then broke one existing test, which had been passing *because*
+of the bug ("Alpha Freight" verified against "Acme Freight" on the word FREIGHT).
+**Didn't:** two of the planned `bad_url` reasons were wrong. httpx parses `https://x:abc/` and `//[bad` leniently, so
+those cases end as `other_host` or a transport error. Still `None`, never raised, which is the property that matters.
+**Improve:** the `Stage` protocol has no preflight, so the CLI special-cases `VerifyBusinessStage`. T10 is the point
+to decide whether every stage gets a `preflight(manifest)` hook.
