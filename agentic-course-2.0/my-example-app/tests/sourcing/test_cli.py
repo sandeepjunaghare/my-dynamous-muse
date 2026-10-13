@@ -188,13 +188,16 @@ class TestPlaces:
         mock_registry_and_places: tuple[MockFmcsa, MockPlaces],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        _, places = mock_registry_and_places
+        registry, places = mock_registry_and_places
         assert main(["sourcing", "run", "--vertical", committed_freight, "--batch-size", "2"]) == 1
         err = capsys.readouterr().err
         (message,) = [line for line in err.splitlines() if line.startswith("error: ")]
         assert "declares no Places source" in message
         assert "--allow-degraded" in message
+        assert "no batch was taken" in message
         assert places.requests == []
+        # PR #32 L2: refused from the manifest alone, before the census pull and QCMobile.
+        assert registry.requests == []
 
     def test_with_the_flag_it_exits_zero_and_warns(
         self,

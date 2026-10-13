@@ -18,8 +18,10 @@ evidence unless someone said so). A refused key mid-batch is the same choice.
 
 **The breaker.** Every call is charged first (``RunCost.charge``) against
 ``max_places_calls_per_run``. Reaching it stops Places for the rest of the batch and finishes the
-stage **degraded**; the free website step still runs for everyone. A retry pays nothing for a
-candidate already verified. One failed call or one refused write is counted and the batch goes on.
+stage **degraded**; the free website step still runs for everyone. Within a run, a candidate
+already verified is not paid for again. Across runs it is: candidates are run-scoped, so a failed
+run's batch goes back to the pool and the next run's rows start with no check (PR #32 L3). One
+failed call or one refused write is counted and the batch goes on.
 """
 
 from collections.abc import Callable
@@ -30,10 +32,11 @@ from decimal import Decimal
 import httpx
 from pydantic import ValidationError
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.cost import BillableKind, RunCost
 from app.core.exceptions import CostLimitExceededError
 from app.core.logging import get_logger
+from app.manifests.schemas import ManifestBody
 from app.qualification.service import QualificationService
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
 from app.sourcing.exceptions import SourceAuthError, SourceRequestError, SourceUnavailableError
@@ -57,6 +60,15 @@ logger = get_logger(__name__)
 
 NO_PLACES_SOURCE = "the manifest declares no Places source"
 _WHEN_MID_BATCH = "this run's batch goes back to the backlog"
+_WHEN_BEFORE_BATCH = "no batch was taken"
+
+
+def _places_unavailable(body: ManifestBody, settings: Settings) -> str | None:
+    """Why Places cannot run for this manifest here, or ``None``: one test for both refusals."""
+    if declared_places_source(body) is None:
+        return NO_PLACES_SOURCE
+    return places_unavailable(settings)
+
 
 _HTTP_TIMEOUT = httpx.Timeout(10.0)
 
@@ -134,6 +146,17 @@ class VerifyBusinessStage:
             reasons=reasons,
         )
 
+    def preflight(self, body: ManifestBody) -> None:
+        """Refuse from the manifest and settings alone, before any batch is taken (PR #32 L2).
+
+        Without it, a manifest with no Places source pulls the census, takes a batch and runs
+        QCMobile over it, only to fail here and hand the batch back. The stage's own refusal in
+        :meth:`run` stays as the backstop for a caller that skips this (T10 should call it too).
+        """
+        unavailable = _places_unavailable(body, get_settings())
+        if unavailable is not None and not self._allow_degraded:
+            raise self._refuse((unavailable,), when=_WHEN_BEFORE_BATCH)
+
     async def run(self, context: StageContext) -> StageResult:
         """Check each survivor's website and Places listing (see the module doc)."""
         settings = get_settings()
@@ -141,7 +164,7 @@ class VerifyBusinessStage:
         reasons: list[str] = []
 
         source = declared_places_source(context.manifest.body)
-        unavailable = NO_PLACES_SOURCE if source is None else places_unavailable(settings)
+        unavailable = _places_unavailable(context.manifest.body, settings)
         if unavailable is not None:
             if not self._allow_degraded:
                 raise self._refuse((unavailable,), when=_WHEN_MID_BATCH)
