@@ -1,5 +1,6 @@
 """The website check: the email domain, a free homepage fetch, the pool's shared domains (T6)."""
 
+import asyncio
 from collections.abc import MutableMapping, Sequence
 
 import httpx
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
+from app.sourcing import website
 from app.sourcing.service import SourcingService
 from app.sourcing.website import HomepageChecker, email_domain
 from tests.conftest import requires_db
@@ -28,6 +30,11 @@ class TestEmailDomain:
 
     @pytest.mark.parametrize("email", ["n/a", "@acme.com", "a@", "a@b@acme.com", "a@localhost"])
     def test_a_malformed_address_is_no_domain(self, email: str) -> None:
+        assert email_domain(email) is None
+
+    @pytest.mark.parametrize("email", ["a@169.254.169.254", "a@10.0.0.1", "a@127.0.0.1"])
+    def test_an_ip_address_is_no_domain(self, email: str) -> None:
+        """PR #32 H2: a registrant-filed email must not aim the fetch at a metadata or LAN host."""
         assert email_domain(email) is None
 
 
@@ -66,10 +73,65 @@ class TestHomepageChecker:
         """A parked-domain service or a franchisor's site is not the business's own."""
         web = MockWeb()
         web.redirect("https://acme.test/", "https://acme-logistics.test/")
-        web.html("https://acme-logistics.test/")
         with capture_logs() as logs:
             assert await _check(web) is None
         assert _reasons(logs) == ["other_host"]
+
+    async def test_an_off_host_hop_is_never_requested(self) -> None:
+        """PR #32 H2: the host is checked before each hop, so a redirect cannot aim the fetch."""
+        web = MockWeb()
+        web.redirect("https://acme.test/", "https://169.254.169.254/latest/meta-data/")
+        with capture_logs() as logs:
+            assert await _check(web) is None
+        assert [str(request.url) for request in web.requests] == ["https://acme.test/"]
+        assert _reasons(logs) == ["other_host"]
+
+    async def test_a_redirect_to_plain_http_is_not_followed(self) -> None:
+        web = MockWeb()
+        web.redirect("https://acme.test/", "http://acme.test/")
+        with capture_logs() as logs:
+            assert await _check(web) is None
+        assert len(web.requests) == 1
+        assert _reasons(logs) == ["not_https"]
+
+    @pytest.mark.parametrize("location", ["https://acme.test:abc/", "//[bad"])
+    async def test_a_malformed_redirect_is_none_and_never_raises(self, location: str) -> None:
+        """PR #32 H1: one site's bad `Location` must not fail a paid batch."""
+        web = MockWeb()
+        web.redirect("https://acme.test/", location)
+        with capture_logs() as logs:
+            assert await _check(web) is None
+        assert len(_reasons(logs)) == 1
+
+    async def test_a_domain_that_does_not_parse_is_none_and_never_raises(self) -> None:
+        with capture_logs() as logs:
+            assert await _check(MockWeb(), domain="acme[.test") is None
+        assert len(_reasons(logs)) == 1
+
+    async def test_an_invalid_url_from_httpx_is_none_and_never_raises(self) -> None:
+        """PR #32 H1: `httpx.InvalidURL` is no `HTTPError`, so it needs catching on its own."""
+        web = MockWeb()
+
+        def invalid(_request: httpx.Request) -> httpx.Response:
+            raise httpx.InvalidURL("Invalid port: 'abc'")
+
+        web.pages["https://acme.test/"] = invalid
+        with capture_logs() as logs:
+            assert await _check(web) is None
+        assert _reasons(logs) == ["bad_url"]
+
+    async def test_a_slow_page_is_bounded_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PR #32 H2: the per-read timeout does not bound a page that drips; the total does."""
+        monkeypatch.setattr(website, "_TOTAL_SECONDS", 0.05)
+
+        async def drips(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(1)
+            return httpx.Response(200, request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(drips)) as client:
+            with capture_logs() as logs:
+                assert await HomepageChecker(client, clock=a_clock()).check("acme.test") is None
+        assert _reasons(logs) == ["timeout"]
 
     async def test_a_redirect_loop_gives_up(self) -> None:
         web = MockWeb()
