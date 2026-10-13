@@ -1641,3 +1641,30 @@ and proved nothing. **Improve:** at rebase, re-run the routing tests: the new on
 `a_verified_candidate`, whose `place_checked` call T6 PR A changes (`place_checked(address)`); the builder is T6's
 to update, but the reorder may move `has_verified_address`. Textual conflicts are likeliest in `.env.example` /
 `config.py` (if T6 touches the integrations block), `_tasks/todo.md` and the plan.
+
+---
+
+# T9 part 2: the T6-dependent tasks (2026-10-13)
+
+**Plan:** `.claude/plans/t9-promotion.md` · **Branch:** `feat/t9-promotion` (worktrees/t9), rebased onto main
+`3682736` · test DB `lpe-test-pg-t9` on **5437** · dev Supabase already at `0010_promotion`. Confirmed by the
+human 2026-10-13: unscored candidates stay promotable (OQ1-D). Baseline: 1,411 passed, 2 skipped.
+
+- [x] Task 7: `eligibility.py` (required set, OQ1-D; `manifest_has_signals` dropped as the plan says under D)
+- [x] Task 8: `mapping.py` (company/contact writes, `record_url`); no 8b (OQ5-A)
+- [x] Task 11: `PromotionService.promote_run` (claim, ledger + portal dedupe, creates, recovery)
+- [x] Task 12: `PromotionService.sync_reviews` (accept → `CadenceService.enrol`, reject, withdrawn)
+- [x] Task 13: `lpe promotion promote | sync`, registered in `app/cli.py`
+- [x] Task 15: `FakeCrm`, `test_eligibility`, `test_mapping`, `test_promote`, `test_review_sync`, `test_cli`
+- [x] Task 16: docs (promotion README, provenance/exception docstrings, hubspot-integration, CLAUDE.md, tickets)
+- [x] Validate: ruff, format, mypy, pyright, full pytest on 5437, `alembic check`; mutation checks (a)-(g)
+- [x] Report `.claude/reports/t9-promotion-report.md`; commit; nothing written to the live portal
+
+**Review:** 1,503 passed, 2 skipped (was 1,411): +92 tests. ruff, format, mypy, pyright clean; `alembic check`
+clean. 9 of 9 mutations caught. **Worked:** a dry run that is the real pass minus the writes, asserted directly
+(`dry.counts == real.counts`), on both promote and sync; running the real `CadenceService.enrol` against the same
+fake as promotion, so the hand-off is tested end to end. **Didn't:** one mutation (enrol a rejected company) was
+unreachable as first written — the `rejected` branch runs first — and passed for the wrong reason until rewritten;
+a test matched "the first company create" by path suffix and caught a property create instead. **Improve:** the
+sandbox blocks writes to a worktree outside the session directory, so every edit there needs the editor tools or an
+unsandboxed command; start such sessions in the worktree. Nothing was written to the live portal.

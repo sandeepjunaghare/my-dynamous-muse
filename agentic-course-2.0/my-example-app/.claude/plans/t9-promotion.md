@@ -1106,3 +1106,16 @@ and association type `1` (one read-only check).
    columns as typed keyword arguments instead of `**values`, and never clears a column. Task 1's settings sit
    with the other `hubspot_*` settings (the plan's Task 1), not beside `google_places_api_key` — fewer shared
    lines with T6. `names.py` does not log; the service will log `promotion.names.split_ambiguous`.
+
+### 2026-10-13: part 2 built, after the rebase onto T6 PR A
+
+1. **Rebased** onto main `3682736` (T6 PR A merged as `aab0696`); `0010_promotion` keeps its number (T6 added no
+   migration) and was applied to dev the same day. The human re-confirmed OQ1-D: unscored candidates promotable.
+2. **Done in this pass:** Tasks 7, 8, 11, 12, 13, the `FakeCrm` and service/CLI tests of Task 15, and Task 16. See
+   `.claude/reports/t9-promotion-report.md` for the deviations; the ones that change a task's shape:
+   `check_promotable` has no `manifest_has_signals` (dropped under D, as Task 7 says), so promotion never reads
+   the manifest; real passes run `ensure_properties` first (amendment 4's "at the first real promote"); recovery
+   of a row with no company id re-runs both dedupes before creating; the review sync copies ledger rows into
+   snapshots, because `enrol`'s rollback expires loaded objects; counts gain `recovery_pending` for dry runs.
+3. **T6 handover answered from the plan:** `email` is not written (Out of scope: no contact email); the headcount
+   band is not mapped (Out of scope: follow-up). Recorded in ticket T9.
