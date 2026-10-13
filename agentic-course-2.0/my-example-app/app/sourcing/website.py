@@ -13,16 +13,17 @@ It makes one attempt, not ``http.get``'s retry loop: retrying 150 dead domains w
 an optional field.
 
 **The registrant chooses the domain, so the fetch is fenced** (PR #32 H2). An IP address is no
-domain. Every hop is checked *before* it is requested: ``https`` only, and only the domain or its
-``www.``, so a redirect cannot aim the engine at a metadata endpoint or a LAN host. Only the status
-and headers are read, never the body, and the whole check is bounded by :data:`_TOTAL_SECONDS`,
-because httpx's timeout is per read and a page that drips bytes would outlast it. Not fenced: a
-domain whose own DNS points at a private address; its first hop is requested, and what comes back
-is read for the status and headers only.
+domain, short forms included: a domain must end in a TLD that starts with a letter. Every hop is
+checked *before* it is requested: ``https`` only, port 443 only, and only the domain or its
+``www.``, so a redirect cannot aim the engine at a metadata endpoint, a LAN host or another service
+on the same host. Only the status and headers are read, never the body, and the whole check is
+bounded by :data:`_TOTAL_SECONDS`, because httpx's timeout is per read and a page that drips bytes
+would outlast it. Not fenced: a domain whose own DNS points at a private address. Its hops, at
+most :data:`MAX_REDIRECTS` + 1 and all on port 443, are requested, and what comes back is read for
+the status and headers only.
 """
 
 import asyncio
-import ipaddress
 from collections.abc import Callable
 from datetime import datetime
 
@@ -53,6 +54,9 @@ MAX_REDIRECTS = 3
 _TIMEOUT = httpx.Timeout(5.0)
 _TOTAL_SECONDS = 10.0
 """The whole check, every hop included: ``_TIMEOUT`` bounds each read, not a page that drips."""
+_ALLOWED_PORTS = frozenset({None, 443})
+"""The site's own port, said or implied. Another port on the right host is a service, not a homepage
+(PR #32 round-2 L1)."""
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _SUCCESS_MIN, _SUCCESS_MAX = 200, 300
 
@@ -65,17 +69,17 @@ def email_domain(email: str) -> str | None:
         return None
     if any(char.isspace() or char in "/?#:" for char in domain):
         return None
-    if domain in FREE_MAIL_DOMAINS or _is_ip_address(domain):
+    if domain in FREE_MAIL_DOMAINS or not _has_alphabetic_tld(domain):
         return None
     return domain
 
 
-def _is_ip_address(domain: str) -> bool:
-    try:
-        ipaddress.ip_address(domain)
-    except ValueError:
-        return False
-    return True
+def _has_alphabetic_tld(domain: str) -> bool:
+    """No top-level domain starts with a digit, so this refuses every IP address, including the
+    short forms (``127.1``, ``0x7f.1``) that ``ipaddress`` does not parse but the resolver does
+    (PR #32 round-2 M1). ``xn--`` IDN TLDs start with a letter and pass."""
+    tld = domain.rsplit(".", 1)[-1]
+    return tld[:1].isalpha()
 
 
 class HomepageChecker:
@@ -105,12 +109,16 @@ class HomepageChecker:
 
     async def _follow(self, domain: str) -> ProvenancedValue[str] | None:
         """Up to :data:`MAX_REDIRECTS` hops, each fenced before it is requested (H2)."""
-        allowed_hosts = {domain, f"www.{domain}"}
         url = httpx.URL(f"https://{domain}/")
+        if b"%" in url.raw_host:
+            # httpx percent-encodes a host it cannot parse (`acme[.test`); no hostname holds `%`.
+            return self._unreachable(domain, "bad_url")
+        # `raw_host`, not `host`: httpx decodes an `xn--` host for `.host` (round-2 L2).
+        allowed_hosts = {url.raw_host, b"www." + url.raw_host}
         for _hop in range(MAX_REDIRECTS + 1):
             if url.scheme != "https":
                 return self._unreachable(domain, "not_https")
-            if url.host not in allowed_hosts:
+            if url.raw_host not in allowed_hosts or url.port not in _ALLOWED_PORTS:
                 return self._unreachable(domain, "other_host")
             async with self._client.stream(
                 "GET", url, timeout=_TIMEOUT, follow_redirects=False
@@ -131,7 +139,7 @@ class HomepageChecker:
         if not content_type.startswith("text/html"):
             return self._unreachable(domain, "not_html")
 
-        origin = f"{url.scheme}://{url.host}"
+        origin = f"{url.scheme}://{url.raw_host.decode('ascii')}"
         logger.info("sourcing.website.homepage_found", domain=domain, origin=origin)
         return ProvenancedValue(
             value=origin,

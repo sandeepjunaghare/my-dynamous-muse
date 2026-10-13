@@ -1546,3 +1546,25 @@ of the bug ("Alpha Freight" verified against "Acme Freight" on the word FREIGHT)
 those cases end as `other_host` or a transport error. Still `None`, never raised, which is the property that matters.
 **Improve:** the `Stage` protocol has no preflight, so the CLI special-cases `VerifyBusinessStage`. T10 is the point
 to decide whether every stage gets a `preflight(manifest)` hook.
+
+## PR #32 round-2 review fixes (2026-10-12)
+
+Scope (owner): M1–M3 and L1–L3; L4 deferred to the Level 4 live run (it needs live data).
+
+- [x] M1: `email_domain` refuses a domain whose TLD does not start with a letter, so short-form IPs (`127.1`,
+  `0x7f.1`, `169.254.43518`) are refused too; `ipaddress` dropped.
+- [x] M2: `_imports_from` resolves `from pkg import google_places`, aliases and relative imports against the
+  file's package. Its own spelling tests; the old matcher misses all four new spellings (mutation-checked).
+- [x] M3: docs say two or more distinguishing words are needed to tell a neighbour apart; the one-word limit
+  (`AJ LOGISTICS LLC`) is pinned by a test.
+- [x] L1: a hop off port 443 is `other_host`. L2: hosts compared as `raw_host`, so `xn--` domains work, and the
+  origin is kept in its ASCII form. L3: the query uses the DBA only if it has a distinguishing word.
+- [ ] L4 (deferred): does requiring the address to start with the street number miss listings where Google puts
+  a building name first? Count `places_not_found` against the raw results during the Level 4 run.
+
+**Review:** 1,304 passed, 2 skipped (paid live eval; DB tier on 5436); ruff, format, mypy, pyright, `alembic check`
+clean. Each new test failed first.
+**Didn't:** comparing raw hosts let `acme[.test` through the fence, because httpx percent-encodes it the same way
+on both sides. Fixed by refusing a `%` in the host as `bad_url` before any request.
+**Improve:** a fence that compares two values httpx built can't catch anything httpx normalises. Check the
+input's own shape first.

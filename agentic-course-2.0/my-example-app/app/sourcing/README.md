@@ -145,13 +145,17 @@ Stage 2 (`app/tools/verify_business.py`), for every candidate no free rule remov
   (`id`, `displayName`, `formattedAddress`, `businessStatus`, `types`), the key in a header. The match
   is deterministic: the address **starts with** the census street number and holds the 5-digit ZIP, and the
   name carries the legal or DBA name's distinguishing words (3+ letters, designators and `the/and/of`
-  removed): all of them for a name of one or two, at least two of a longer one, so a shared trade word cannot
-  verify a neighbour in the same building (PR #32 H3). The first live match in Google's order wins, ahead of a
-  closed listing. A candidate the matcher could not match (no street number, so a PO box; no 5-digit ZIP; no
-  distinguishing name word) is `places_not_checkable` and never paid for.
-- **The homepage fetch is fenced** (`website.py`): an IP-address email domain is refused, every redirect hop
-  is checked (`https`, the domain or its `www.`) before it is requested, only status and headers are read,
-  and the whole check is bounded at 10 s. It never raises.
+  removed): all of them for a name of one or two, at least two of a longer one. So a neighbour in the same
+  building that shares only a trade word is refused **when the census name has two or more distinguishing
+  words** (PR #32 H3). Known limit: a name that reduces to one word (`AJ LOGISTICS LLC` → `LOGISTICS`)
+  matches any neighbour carrying it, as does a longer name sharing two trade words with one. The query
+  uses the DBA unless it has no distinguishing word, then the legal name. The first live match in Google's
+  order wins, ahead of a closed listing. A candidate the matcher could not match (no street number, so a PO
+  box; no 5-digit ZIP; no distinguishing name word) is `places_not_checkable` and never paid for.
+- **The homepage fetch is fenced** (`website.py`): an email domain whose TLD does not start with a letter is
+  refused (every IP address, short forms like `127.1` included); every redirect hop is checked (`https`,
+  port 443, the domain or its `www.`, compared as the raw `xn--` host) before it is requested; only status and
+  headers are read; and the whole check is bounded at 10 s. It never raises.
 - **The channel.** What Places saw for a stored check goes on `StageContext.places`, one dict per run
   created by the runner, for `classify_rollup` within the run (D13: use and discard). Never stored or
   logged. A miss is counted (`places_not_found`) and nothing is recorded (OQ-2).

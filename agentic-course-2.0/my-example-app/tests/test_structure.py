@@ -275,12 +275,60 @@ PLACES_PRO_FIELDS = frozenset(
 billed at the higher rate for the whole request, and content D13 forbids storing anyway."""
 
 
-def _imports_from(tree: ast.AST, module: str) -> bool:
-    return any(
-        (isinstance(node, ast.ImportFrom) and node.module == module)
-        or (isinstance(node, ast.Import) and any(alias.name == module for alias in node.names))
-        for node in ast.walk(tree)
+def _imports_from(tree: ast.AST, module: str, *, package: str) -> bool:
+    """Whether ``tree``, a module in ``package``, imports ``module`` in any spelling: ``import m``,
+    ``from m import x``, ``from parent import m``, or any of those relative (PR #32 round-2 M2)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == module for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            parts = package.split(".")
+            base = parts[: len(parts) - node.level + 1] if node.level else []
+            source = ".".join([*base, *([node.module] if node.module else [])])
+            if source == module or any(f"{source}.{alias.name}" == module for alias in node.names):
+                return True
+    return False
+
+
+def _package_of(path: Path) -> str:
+    """The dotted package a source file's relative imports resolve against."""
+    return ".".join(path.relative_to(ROOT).parent.parts)
+
+
+class TestImportsFrom:
+    """The import matcher the D13 guard rests on, checked spelling by spelling: a matcher that
+    misses one spelling lets a second importer through with the guard still green."""
+
+    PLACES = "app.sourcing.sources.google_places"
+
+    @pytest.mark.parametrize(
+        ("source", "package"),
+        [
+            ("import app.sourcing.sources.google_places", "app.tools"),
+            ("from app.sourcing.sources.google_places import PlaceResult", "app.tools"),
+            ("from app.sourcing.sources import google_places", "app.tools"),
+            ("from app.sourcing.sources import http, google_places as gp", "app.tools"),
+            ("from .google_places import PlaceResult", "app.sourcing.sources"),
+            ("from . import google_places", "app.sourcing.sources"),
+            ("from .sources import google_places", "app.sourcing"),
+            ("from ..sources.google_places import PlaceResult", "app.sourcing.channel"),
+        ],
     )
+    def test_every_spelling_of_the_import_is_seen(self, source: str, package: str) -> None:
+        assert _imports_from(ast.parse(source), self.PLACES, package=package)
+
+    @pytest.mark.parametrize(
+        ("source", "package"),
+        [
+            ("from app.sourcing.sources import http", "app.tools"),
+            ("from app.sourcing.sources.google_places_extra import x", "app.tools"),
+            ("from . import google_places", "app.tools"),
+            ("import app.sourcing.sources", "app.tools"),
+        ],
+    )
+    def test_a_neighbouring_import_is_not_the_adapter(self, source: str, package: str) -> None:
+        assert not _imports_from(ast.parse(source), self.PLACES, package=package)
 
 
 class TestPlacesIsACheckNeverASource:
@@ -314,7 +362,7 @@ class TestPlacesIsACheckNeverASource:
                 )
                 if constructs or names_url or literal:
                     callers.add(relative)
-            if _imports_from(tree, "app.sourcing.sources.google_places"):
+            if _imports_from(tree, "app.sourcing.sources.google_places", package=_package_of(path)):
                 importers.add(relative)
 
         assert callers == {PLACES_MODULE}

@@ -85,8 +85,12 @@ would be vertical-specific code. A trade word is defused by :data:`_MIN_SHARED_W
 
 _MIN_SHARED_WORDS = 2
 """A name of up to this many distinguishing words must share all of them; a longer one, at least
-this many. One shared trade word (``LOGISTICS``) cannot tell neighbours in one building apart
-(PR #32 H3), and two still survive a storefront shortening a long legal name."""
+this many. So a neighbour in one building that shares only a trade word (``LOGISTICS``) is told
+apart **when the census name has two or more distinguishing words** the neighbour lacks one of
+(PR #32 H3), and two still survive a storefront shortening a long legal name. **Known limit**
+(round-2 M3, the option stands): a name that reduces to one word (``AJ LOGISTICS LLC`` is
+``LOGISTICS``) matches any neighbour carrying it, and a longer name sharing two trade words with
+a neighbour matches it too."""
 
 _MIN_TOKEN_LENGTH = 3
 _LETTERS = re.compile(r"[^\W\d_]+")
@@ -309,12 +313,17 @@ def _checkable(fields: CandidateFields) -> _Checkable | None:
 def search_query(fields: CandidateFields) -> str | None:
     """``"{dba or legal name}, {street}, {city}, {state} {zip}"``, or ``None`` when uncheckable.
 
-    The DBA first, because that is what a storefront usually shows. Built from our own cited
-    registry data only. Uncheckable means :func:`_checkable` says no match is possible.
+    The DBA first, because that is what a storefront usually shows, unless it has no
+    distinguishing word (``KC``): then the legal name, because a query by a name
+    :func:`match_place` cannot compare is a paid likely miss (PR #32 round-2 L3). Built from our
+    own cited registry data only. Uncheckable means :func:`_checkable` says no match is possible.
     """
-    name = fields.dba_name or fields.legal_name
-    if name is None or fields.address is None or _checkable(fields) is None:
+    if fields.address is None or _checkable(fields) is None:
         return None
+    # `_checkable` passed, so at least one of the two names has a distinguishing word.
+    name = next(
+        name for name in (fields.dba_name, fields.legal_name) if name and _name_tokens(name.value)
+    )
     address = fields.address.value
     return f"{name.value}, {address.street}, {address.city}, {address.state} {address.postal_code}"
 
@@ -350,9 +359,10 @@ def match_place(fields: CandidateFields, results: Sequence[PlaceResult]) -> Plac
 
     A result matches when its address **starts with** the census street number and holds the
     5-digit ZIP, **and** its name carries the legal or the DBA name's distinguishing words (see
-    :data:`_MIN_SHARED_WORDS`). A shared office building is told apart by the name, and a word of
-    the trade alone is not enough to do it. A live match is preferred to a permanently closed one
-    listed ahead of it (PR #32 M2); a closed match comes back only when it is the only one.
+    :data:`_MIN_SHARED_WORDS`). A shared office building is told apart by the name, within the
+    limit that constant records for a name of one distinguishing word. A live match is preferred
+    to a permanently closed one listed ahead of it (PR #32 M2); a closed match comes back only
+    when it is the only one.
     """
     checkable = _checkable(fields)
     if checkable is None:

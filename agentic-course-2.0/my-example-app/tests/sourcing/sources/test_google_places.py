@@ -253,6 +253,13 @@ class TestSearchQuery:
         )
         assert search_query(fields) is None
 
+    def test_a_dba_with_no_distinguishing_word_gives_way_to_the_legal_name(self) -> None:
+        """PR #32 round-2 L3: query by the name `match_place` can compare, or the call is wasted."""
+        fields = a_candidate().model_copy(update={"dba_name": sourced("KC")})
+        assert search_query(fields) == (
+            "Acme Logistics 1234567 LLC, 2100 Olympic Dr, Arlington, TX 76011"
+        )
+
 
 class TestMatchPlace:
     """A4: street number, 5-digit ZIP and a shared distinguishing word. Deterministic, no model."""
@@ -288,6 +295,16 @@ class TestMatchPlace:
             name="Zenith Logistics", address="2100 Olympic Dr Suite 500, Arlington, TX 76011, USA"
         )
         assert match_place(fields, [zenith]) is None
+
+    def test_a_one_word_name_still_matches_a_neighbour_sharing_that_word(self) -> None:
+        """PR #32 round-2 M3: a known limit, pinned so the docs cannot overclaim again. `AJ` is too
+        short to count, so `AJ LOGISTICS LLC` is the one word `LOGISTICS`, and all of one word is
+        shared. Telling neighbours apart needs two distinguishing words the neighbour lacks."""
+        fields = _named("AJ LOGISTICS LLC")
+        zenith = _result(
+            name="Zenith Logistics", address="2100 Olympic Dr Suite 500, Arlington, TX 76011, USA"
+        )
+        assert match_place(fields, [zenith]) is zenith
 
     def test_a_suite_number_is_not_the_street_number(self) -> None:
         """PR #32 H3: the census number must start the address, not appear anywhere in it."""

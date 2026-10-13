@@ -37,6 +37,12 @@ class TestEmailDomain:
         """PR #32 H2: a registrant-filed email must not aim the fetch at a metadata or LAN host."""
         assert email_domain(email) is None
 
+    @pytest.mark.parametrize("email", ["a@127.1", "a@0x7f.1", "a@169.254.43518", "a@acme.123"])
+    def test_a_short_form_ip_address_is_no_domain(self, email: str) -> None:
+        """PR #32 round-2 M1: `ipaddress` parses only dotted quads, but the OS resolver turns
+        `127.1` into loopback. No top-level domain starts with a digit, so none of these is one."""
+        assert email_domain(email) is None
+
 
 async def _check(web: MockWeb, domain: str = "acme.test") -> ProvenancedValue[str] | None:
     async with httpx.AsyncClient(transport=web.transport()) as client:
@@ -85,6 +91,32 @@ class TestHomepageChecker:
             assert await _check(web) is None
         assert [str(request.url) for request in web.requests] == ["https://acme.test/"]
         assert _reasons(logs) == ["other_host"]
+
+    @pytest.mark.parametrize("location", ["https://acme.test:6379/", "https://www.acme.test:8443/"])
+    async def test_a_hop_to_another_port_is_never_requested(self, location: str) -> None:
+        """PR #32 round-2 L1: the right host on another port could reach a service, not a site."""
+        web = MockWeb()
+        web.redirect("https://acme.test/", location)
+        with capture_logs() as logs:
+            assert await _check(web) is None
+        assert len(web.requests) == 1
+        assert _reasons(logs) == ["other_host"]
+
+    async def test_an_explicit_443_is_the_same_origin(self) -> None:
+        web = MockWeb()
+        web.redirect("https://acme.test/", "https://www.acme.test:443/")
+        web.html("https://www.acme.test/")
+        cited = await _check(web)
+        assert cited is not None
+        assert cited.value == "https://www.acme.test"
+
+    async def test_a_punycode_domain_is_its_own_host(self) -> None:
+        """PR #32 round-2 L2: httpx decodes `xn--` hosts for `.host`, so compare the raw host."""
+        web = MockWeb()
+        web.html("https://xn--bcher-kva.de/")
+        cited = await _check(web, domain="xn--bcher-kva.de")
+        assert cited is not None
+        assert cited.source_url == "https://xn--bcher-kva.de/"
 
     async def test_a_redirect_to_plain_http_is_not_followed(self) -> None:
         web = MockWeb()
