@@ -231,6 +231,15 @@ number-first test never refused a listing the number-anywhere test would have ke
   - **Open:** which `types` count as a mail drop (start with `post_office` and `business_center`, and check
     `shipping_service`), and whether the verdict lives on `PlaceCheck` or a new field. `PlaceCheck`'s shape is
     pinned by the D13 structure guard, so either way that test changes with the decision.
+  - **A second case, from run `732c039e` (2026-10-13, all 4 misses correct):** 3 of the 4 searches returned only
+    the address itself, with no business name: `premise` and `street_address` for `MASON TRANSPORTATION SERVICES
+    LLC` and `SHINE AUTO MOVERS LLC`, both residential and both later disqualified as `self_employed_shell`, and
+    `subpremise` for `AEROWAY TRANSPORTATION`'s suite. That means Places has **no listing at the address**, which
+    is a different answer from "a listing that didn't match". It could be recorded the same way, as our verdict
+    plus the place ID, under a separate value such as `no_listing`.
+  - **It shouldn't mean the same as `mail_drop`:** a home is still a door someone can knock, so `no_listing`
+    would be evidence for `self_employed_shell` without taking the door off routes. Open: whether to record it
+    at all, and whether `subpremise` (a suite with nothing listed) counts.
 - **Decide: candidates with no score.** Only 1 of the 6 checked candidates got a priority score; the other 5 log
   `score_absent` for `automatable`. `classify_rollup` was asked 42 signal answers (7 signals × 6). It left 33 without
   a citation, and the gate dropped them, as designed (prompt rule 4, `_Gate.admit`). Of the 9 it kept, 8 feed
