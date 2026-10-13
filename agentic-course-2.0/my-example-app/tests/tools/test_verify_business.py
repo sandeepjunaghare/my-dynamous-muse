@@ -406,7 +406,8 @@ class TestTheWebsite:
         web = MockWeb()
         web.status("https://alpha.test/", 404)
         context, _ = await _setup(db_session, _candidate("Alpha", email="ops@alpha.test"))
-        result = await _run(_stage(MockPlaces(), web), context)
+        places = MockPlaces(answers={"Alpha Freight": _found("ChIJ-alpha", "Alpha Freight")})
+        result = await _run(_stage(places, web), context)
         assert result.counts["website_unreachable"] == 1
         assert result.counts["places_verified"] == 1
 

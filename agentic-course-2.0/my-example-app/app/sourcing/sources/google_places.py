@@ -28,6 +28,7 @@ import asyncio
 import re
 import time
 from collections.abc import Sequence
+from typing import NamedTuple
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -80,7 +81,12 @@ _API_KEY_INVALID = "API_KEY_INVALID"
 
 _NAME_STOP_WORDS = frozenset({"THE", "AND", "OF"})
 """Words too common to tell two businesses apart. Nothing vertical: "FREIGHT" or "LOGISTICS" here
-would be vertical-specific code, and the address match carries the weight anyway."""
+would be vertical-specific code. A trade word is defused by :data:`_MIN_SHARED_WORDS` instead."""
+
+_MIN_SHARED_WORDS = 2
+"""A name of up to this many distinguishing words must share all of them; a longer one, at least
+this many. One shared trade word (``LOGISTICS``) cannot tell neighbours in one building apart
+(PR #32 H3), and two still survive a storefront shortening a long legal name."""
 
 _MIN_TOKEN_LENGTH = 3
 _LETTERS = re.compile(r"[^\W\d_]+")
@@ -269,19 +275,47 @@ class PlacesClient:
         )
 
 
+class _Checkable(NamedTuple):
+    """What :func:`match_place` compares, from our own registry data."""
+
+    zip5: str
+    number: str
+    names: tuple[frozenset[str], ...]
+
+
+def _checkable(fields: CandidateFields) -> _Checkable | None:
+    """The census ZIP, street number and name words, or ``None`` if a match is impossible.
+
+    One test for both :func:`search_query` and :func:`match_place`, so a call is never paid for a
+    candidate the matcher could not match (PR #32 M1): a street with no leading number (a PO box is
+    no door to knock on), no 5-digit ZIP, or no name with a distinguishing word.
+    """
+    if fields.address is None:
+        return None
+    address = fields.address.value
+    zip_match = _ZIP5.match(address.postal_code)
+    number_match = _LEADING_NUMBER.match(address.street)
+    if zip_match is None or number_match is None:
+        return None
+    cited = (fields.legal_name, fields.dba_name)
+    names = tuple(
+        tokens for tokens in (_name_tokens(name.value) for name in cited if name) if tokens
+    )
+    if not names:
+        return None
+    return _Checkable(zip5=zip_match.group(1), number=number_match.group(1), names=names)
+
+
 def search_query(fields: CandidateFields) -> str | None:
     """``"{dba or legal name}, {street}, {city}, {state} {zip}"``, or ``None`` when uncheckable.
 
     The DBA first, because that is what a storefront usually shows. Built from our own cited
-    registry data only. A street with no leading number (a PO box) is uncheckable: `match_place`
-    could never match it, so a call would pay for a certain miss.
+    registry data only. Uncheckable means :func:`_checkable` says no match is possible.
     """
     name = fields.dba_name or fields.legal_name
-    if name is None or fields.address is None:
+    if name is None or fields.address is None or _checkable(fields) is None:
         return None
     address = fields.address.value
-    if _LEADING_NUMBER.match(address.street) is None:
-        return None
     return f"{name.value}, {address.street}, {address.city}, {address.state} {address.postal_code}"
 
 
@@ -300,35 +334,40 @@ def _contains_number(text: str, number: str) -> bool:
     return re.search(rf"(?<!\d){re.escape(number)}(?!\d)", text) is not None
 
 
+def _starts_with_number(text: str, number: str) -> bool:
+    """The address's own street number, not a suite or a ZIP that happens to contain it."""
+    return re.match(rf"\s*{re.escape(number)}(?!\d)", text) is not None
+
+
+def _same_name(ours: frozenset[str], theirs: frozenset[str]) -> bool:
+    """All of a short name's distinguishing words, or :data:`_MIN_SHARED_WORDS` of a longer one."""
+    shared = len(ours & theirs)
+    return shared >= min(len(ours), _MIN_SHARED_WORDS)
+
+
 def match_place(fields: CandidateFields, results: Sequence[PlaceResult]) -> PlaceResult | None:
     """The first result that is this business, in Google's order, or ``None`` (A4). No model.
 
-    A result matches when its address holds the census street number **and** the 5-digit ZIP,
-    **and** its name shares a distinguishing word with the legal or DBA name. A census street with
-    no leading number (a PO box) never matches: ZIP and name alone would verify a business with no
-    door to knock on. A shared office building is told apart by the name.
+    A result matches when its address **starts with** the census street number and holds the
+    5-digit ZIP, **and** its name carries the legal or the DBA name's distinguishing words (see
+    :data:`_MIN_SHARED_WORDS`). A shared office building is told apart by the name, and a word of
+    the trade alone is not enough to do it. A live match is preferred to a permanently closed one
+    listed ahead of it (PR #32 M2); a closed match comes back only when it is the only one.
     """
-    if fields.address is None:
+    checkable = _checkable(fields)
+    if checkable is None:
         return None
-    address = fields.address.value
-    zip_match = _ZIP5.match(address.postal_code)
-    number_match = _LEADING_NUMBER.match(address.street)
-    if zip_match is None or number_match is None:
-        return None
-    zip5 = zip_match.group(1)
-    number = number_match.group(1)
-
-    names = [cited.value for cited in (fields.legal_name, fields.dba_name) if cited is not None]
-    ours = frozenset[str]().union(*(_name_tokens(name) for name in names))
-    if not ours:
-        return None
-
+    closed: PlaceResult | None = None
     for result in results:
         formatted = result.formatted_address or ""
-        if not _contains_number(formatted, zip5):
+        if not _contains_number(formatted, checkable.zip5):
             continue
-        if not _contains_number(formatted, number):
+        if not _starts_with_number(formatted, checkable.number):
             continue
-        if ours & _name_tokens(result.display_name or ""):
+        theirs = _name_tokens(result.display_name or "")
+        if not any(_same_name(ours, theirs) for ours in checkable.names):
+            continue
+        if result.business_status != CLOSED_PERMANENTLY:
             return result
-    return None
+        closed = closed or result
+    return closed

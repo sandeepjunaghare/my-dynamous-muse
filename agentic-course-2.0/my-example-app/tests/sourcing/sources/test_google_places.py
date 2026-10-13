@@ -18,6 +18,7 @@ from app.sourcing.exceptions import SourceAuthError, SourceRequestError
 from app.sourcing.schemas import CandidateFields, PostalAddress, is_google_maps
 from app.sourcing.sources.fmcsa import FMCSA_ADAPTERS
 from app.sourcing.sources.google_places import (
+    CLOSED_PERMANENTLY,
     PLACES_FIELD_MASK,
     PLACES_SEARCH_URL,
     PlaceResult,
@@ -208,6 +209,10 @@ def _result(
     return PlaceResult(id=place_id, display_name=name, formatted_address=address)
 
 
+def _named(legal_name: str) -> CandidateFields:
+    return a_candidate().model_copy(update={"legal_name": sourced(legal_name), "dba_name": None})
+
+
 def _at(street: str, postal_code: str = "76011") -> CandidateFields:
     return a_candidate().model_copy(
         update={
@@ -237,6 +242,17 @@ class TestSearchQuery:
         """A PO box can never match, so no call is paid for a certain miss."""
         assert search_query(_at("PO BOX 1234")) is None
 
+    def test_uncheckable_without_a_five_digit_zip(self) -> None:
+        """`match_place` needs the 5-digit ZIP, so a call without one is a certain miss."""
+        assert search_query(_at("2100 Olympic Dr", postal_code="L5T 1A1")) is None
+
+    def test_uncheckable_without_a_distinguishing_name_word(self) -> None:
+        """`KC LLC` has no word `match_place` could compare, so it is never paid for."""
+        fields = a_candidate().model_copy(
+            update={"legal_name": sourced("KC LLC"), "dba_name": None}
+        )
+        assert search_query(fields) is None
+
 
 class TestMatchPlace:
     """A4: street number, 5-digit ZIP and a shared distinguishing word. Deterministic, no model."""
@@ -264,6 +280,53 @@ class TestMatchPlace:
 
     def test_the_wrong_street_number_is_no_match(self) -> None:
         assert match_place(a_candidate(), [_result(address="12100 Olympic Dr, TX 76011")]) is None
+
+    def test_a_neighbour_sharing_one_word_in_the_same_building_is_no_match(self) -> None:
+        """PR #32 H3: `ACME LOGISTICS` is not `Zenith Logistics` one floor up."""
+        fields = _named("ACME LOGISTICS LLC")
+        zenith = _result(
+            name="Zenith Logistics", address="2100 Olympic Dr Suite 500, Arlington, TX 76011, USA"
+        )
+        assert match_place(fields, [zenith]) is None
+
+    def test_a_suite_number_is_not_the_street_number(self) -> None:
+        """PR #32 H3: the census number must start the address, not appear anywhere in it."""
+        result = _result(
+            name="Acme Freight", address="5000 Legacy Dr, Suite 2100, Arlington, TX 76011"
+        )
+        assert match_place(a_candidate(), [result]) is None
+
+    def test_a_short_name_needs_every_distinguishing_word(self) -> None:
+        assert (
+            match_place(_named("ACME LOGISTICS LLC"), [_result(name="Acme Logistics")]) is not None
+        )
+        assert match_place(_named("ACME LOGISTICS LLC"), [_result(name="Acme Dental")]) is None
+
+    def test_a_longer_name_matches_on_two_distinguishing_words(self) -> None:
+        """Storefronts shorten long legal names; two shared words still rule out a neighbour."""
+        fields = _named("ACME FREIGHT BROKERAGE SERVICES LLC")
+        assert match_place(fields, [_result(name="Acme Brokerage")]) is not None
+        assert match_place(fields, [_result(name="Zenith Freight")]) is None
+
+    def test_a_live_match_after_a_closed_one_wins(self) -> None:
+        """PR #32 M2: a closed former listing must not hide the live one behind it."""
+        closed = PlaceResult(
+            id="ChIJ-old",
+            display_name="Acme Freight",
+            formatted_address="2100 Olympic Dr, Arlington, TX 76011, USA",
+            business_status=CLOSED_PERMANENTLY,
+        )
+        live = _result(place_id="ChIJ-live")
+        assert match_place(a_candidate(), [closed, live]) is live
+
+    def test_a_closed_match_is_returned_when_it_is_the_only_one(self) -> None:
+        closed = PlaceResult(
+            id="ChIJ-old",
+            display_name="Acme Freight",
+            formatted_address="2100 Olympic Dr, Arlington, TX 76011, USA",
+            business_status=CLOSED_PERMANENTLY,
+        )
+        assert match_place(a_candidate(), [closed]) is closed
 
     def test_a_zip_plus_four_in_the_census_matches_on_five_digits(self) -> None:
         result = _result()
