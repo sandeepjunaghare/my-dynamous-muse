@@ -189,8 +189,8 @@ Open questions all went with the recommendations (OQ-1 b, OQ-2 a, OQ-3 a, OQ-4 a
   closed listing stores nothing; a miss is counted, not recorded (OQ-2). What Places saw rides
   `StageContext.places`, one dict per run, to `classify_rollup` (wired to read it in PR B).
 - **Places binds only where declared** (A3): no declared Places source, or no key, refuses the run unless
-  `--allow-degraded`. **Freight v8 declares none**, so the next freight run needs v9 (DRAFT `e0d32bec`) activated
-  with `--accept-terms …,places`.
+  `--allow-degraded`. **Freight v8 declared none**, so freight v9 (`e0d32bec`), which declares `places`, was
+  dry-run and activated on dev on 2026-10-12, with v8 superseded.
 - **Breaker:** `RunCost.charge` (closes deferred #6) against 500 calls; reaching it stops Places and finishes the
   stage degraded. Cost recorded at list price ($0.032), an upper bound.
 - **Website** from a free homepage fetch of the census email domain (free-mail and shared domains refused).
@@ -201,6 +201,36 @@ Open questions all went with the recommendations (OQ-1 b, OQ-2 a, OQ-3 a, OQ-4 a
 - **PR B** (left): the owner judgment node and `resolve_owner`, the `classify_rollup` edits (Places evidence in,
   website and headcount answers out, unverified skipped, its cap ending the stage degraded rather than the run
   failed), the PR #31 L2 ownership test, and the opt-in live eval.
+
+**First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
+`broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
+printed, nothing stored) showed what Places returned. It found 4 correct misses, 1 correct hit, and 1 false miss.
+**PR #32 review L4 is answered for this sample:** in every result the street number led the address, so the
+number-first test never refused a listing the number-anywhere test would have kept. Two decisions for PR B:
+- **Decide: the Spearpoint false miss.** `SPEARPOINT FREIGHT SERVICES LLC` (`usdot:4088267`) is listed as "Spearpoint
+  Logistics" at the census street number, suite #150 and ZIP. It shares one of its three distinguishing words, and
+  `_MIN_SHARED_WORDS` needs two, so it was counted `places_not_found`. This is the cost of the H3 fix: the rule that
+  stops a shared trade word verifying a neighbour also refuses a shared brand word, and telling the two apart in code
+  would make the matcher vertical-specific. Options:
+  - **(a) Leave it:** an occasional real business is recorded as not found.
+  - **(b) Also match on the cited website domain's words.** `spearpointlogistics.com` holds SPEARPOINT and LOGISTICS.
+    The domain is already cited from the census email and fetched, so this recovers the storefront-rename case
+    without loosening the rule for neighbours.
+  - With (b), the domain needs splitting into words (`spearpointlogistics` has no separator), and only a domain whose
+    homepage fetch succeeded should count.
+- **Decide: a "mail drop" verdict.** Two of the five misses were mail drops. `MEGA 13 LOGISTICS CORP`'s census
+  address is a post office (`types` `post_office`). `TUCANA PROJECT LOGISTICS`'s Coppell suite is a UPS Store
+  (`business_center`; the business itself is listed in La Porte). For a door-knocking tool, that is a door that
+  isn't there. D13 already allows storing *our verdict* as well as the place ID, but a miss is counted, not recorded
+  (OQ-2 a). So this reopens OQ-2 for one case only.
+  - **Proposal:** when a result at the census street number and ZIP has a mail-drop type, record a
+    `mail_drop` verdict tied to the checked address. Keep no Places name or address, only our verdict and the
+    place ID.
+  - **What it gives:** routing skips the door, `self_employed_shell` gets cited evidence instead of a guess, and
+    a rerun doesn't pay to check the same mailbox twice.
+  - **Open:** which `types` count as a mail drop (start with `post_office` and `business_center`, and check
+    `shipping_service`), and whether the verdict lives on `PlaceCheck` or a new field. `PlaceCheck`'s shape is
+    pinned by the D13 structure guard, so either way that test changes with the decision.
 
 ---
 
