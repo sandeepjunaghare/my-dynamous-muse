@@ -293,9 +293,10 @@ class TestPlacesIsACheckNeverASource:
 
     def test_one_module_calls_places_and_one_stage_uses_it(self) -> None:
         """Only the adapter constructs a result or names the endpoint, and only verify_business
-        imports the adapter among the stages: a second call site is a second way to store it."""
+        imports the adapter anywhere in ``app/``: a second call site is a second way to store it
+        (widened from ``app/tools/`` by PR #32 M3)."""
         callers: set[str] = set()
-        stage_importers: set[str] = set()
+        importers: set[str] = set()
         for path in _app_sources():
             relative = str(path.relative_to(ROOT))
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -313,13 +314,18 @@ class TestPlacesIsACheckNeverASource:
                 )
                 if constructs or names_url or literal:
                     callers.add(relative)
-            if relative.startswith("app/tools/") and _imports_from(
-                tree, "app.sourcing.sources.google_places"
-            ):
-                stage_importers.add(relative)
+            if _imports_from(tree, "app.sourcing.sources.google_places"):
+                importers.add(relative)
 
         assert callers == {PLACES_MODULE}
-        assert stage_importers == {"app/tools/verify_business.py"}
+        assert importers == {"app/tools/verify_business.py"}
+
+    def test_a_stored_check_holds_the_place_id_and_our_own_address_only(self) -> None:
+        """``business_check`` is the one stored Places artefact, so its shape is pinned: adding
+        ``display_name`` or a Places address to it would store content D13 forbids (PR #32 M3)."""
+        from app.sourcing.schemas import PlaceCheck
+
+        assert set(PlaceCheck.model_fields) == {"place_id", "checked_address"}
 
     def test_the_field_mask_is_pro_tier_only(self) -> None:
         from app.sourcing.sources.google_places import PLACES_FIELD_MASK
