@@ -4,9 +4,8 @@ One row per ``(vertical, registry_id)`` ever promoted or attempted: a state mach
 (``pending_create → pending_review → enrolling → enrolled``, terminal ``rejected``, ``duplicate``,
 ``withdrawn``) whose unique key is what makes a re-run promote nothing twice.
 
-**At merge with T6**: re-point ``down_revision`` at main's head then, and if T6 added a migration,
-rename this file and its revision id to the next free number (``conventions.md`` § merge) — safe
-because no environment has applied it.
+T6 merged without a migration, so ``0009`` is still main's head and this revision keeps its number.
+Dev applied it on 2026-10-13, so it can no longer be renumbered for free.
 
 Hand-written to match ``app/promotion/models.py`` exactly, so ``alembic check`` stays clean.
 
