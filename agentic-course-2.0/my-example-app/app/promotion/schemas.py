@@ -23,6 +23,7 @@ contradict themselves on ``hs_task_status``.
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -494,3 +495,127 @@ class AssociationsPage(BaseModel):
         if self.paging is None or self.paging.next is None:
             return None
         return self.paging.next.after
+
+
+# -- what promotion reports (T9). Ours, not HubSpot's: frozen, and never sent anywhere. --------
+
+_REPORT_CONFIG = ConfigDict(frozen=True)
+
+PROMOTE_COUNTS: tuple[str, ...] = (
+    "considered",
+    "created",
+    "already_promoted",
+    "refused_disqualified",
+    "refused_dead_score",
+    "refused_no_principal",
+    "refused_missing_fields",
+    "duplicate_in_hubspot",
+    "duplicate_in_ledger",
+    "recovered",
+    "recovery_deferred",
+    "recovery_pending",
+    "failed",
+    "name_ambiguous",
+)
+"""Every key a promote report carries, every time — zeros included, so a missing key is a bug."""
+
+REVIEW_COUNTS: tuple[str, ...] = ("read", "enrolled", "rejected", "withdrawn", "waiting", "failed")
+"""Every key a review sync report carries, every time."""
+
+
+class PromotedProspect(BaseModel):
+    """One business created in HubSpot at ``pending_review`` — or, in a dry run, that would be."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    legal_name: str
+    company_id: str | None
+    contact_id: str | None
+    company_url: str | None
+    contact_url: str | None
+    route_label: str | None
+    first_name: str | None
+    last_name: str
+    name_ambiguous: bool
+    recovered: bool = False
+    """Finished by the recovery of an earlier, interrupted pass rather than created afresh."""
+
+
+class DuplicateProspect(BaseModel):
+    """A business that was not created because it already exists — in HubSpot or the ledger."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    legal_name: str
+    matched_company_id: str | None = None
+    """The existing HubSpot company it matched; nothing was written to it (OQ5-A)."""
+    matched_company_url: str | None = None
+    duplicate_of: str | None = None
+    """The registry id of the ledger row it duplicates, when the match was the ledger's."""
+
+
+class PromotionFailure(BaseModel):
+    """A candidate whose promotion failed. Its ledger row, if any, is left for the next pass."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    message: str
+
+
+class PromotionReport(BaseModel):
+    """What one ``promote`` pass did, or — with ``dry_run`` — would do."""
+
+    model_config = _REPORT_CONFIG
+
+    run_id: UUID
+    vertical: str
+    dry_run: bool
+    counts: dict[str, int]
+    created: tuple[PromotedProspect, ...]
+    duplicates: tuple[DuplicateProspect, ...]
+    failures: tuple[PromotionFailure, ...]
+    missing_field_tally: dict[str, int]
+    """For ``refused_missing_fields``: how often each required field was the one absent."""
+    stopped: str | None = None
+    """Why the pass stopped early (an auth failure, the daily quota), or ``None``."""
+
+
+class ReviewOutcome(StrEnum):
+    """What a review sync did with one company."""
+
+    enrolled = "enrolled"
+    rejected = "rejected"
+    withdrawn = "withdrawn"
+
+
+class ReviewDecision(BaseModel):
+    """One founder decision a sync acted on — or, in a dry run, would act on."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    outcome: ReviewOutcome
+    company_id: str
+    contact_id: str
+    company_url: str | None
+    first_due_at: datetime | None = None
+    """When the first cadence touch is due, for an enrolment; ``None`` in a dry run."""
+    orphan_task_id: str | None = None
+    """A task another enrolment left open, for the person to close (``AlreadyEnrolledError``)."""
+
+
+class ReviewSyncReport(BaseModel):
+    """What one ``promotion sync`` did, or — with ``dry_run`` — would do."""
+
+    model_config = _REPORT_CONFIG
+
+    dry_run: bool
+    counts: dict[str, int]
+    decisions: tuple[ReviewDecision, ...]
+    failures: tuple[PromotionFailure, ...]
+    unrecognised: tuple[str, ...]
+    """Review-status values nobody taught the engine — a person may have added an option."""
+    stopped: str | None = None

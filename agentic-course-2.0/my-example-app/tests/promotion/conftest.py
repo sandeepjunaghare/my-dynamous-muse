@@ -16,12 +16,19 @@ import json
 from collections.abc import AsyncGenerator, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.promotion.client import HubSpotClient, aclose_hubspot_client
+from app.promotion.service import PromotionService
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
+
+if TYPE_CHECKING:
+    from tests.cadence.conftest import FakeClock
+    from tests.promotion.crm import FakeCrm
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -88,6 +95,14 @@ class MockPortal:
         self.requests: list[httpx.Request] = []
         self.transport = httpx.MockTransport(self._handle)
 
+    def prepend(self, *routes: Route) -> None:
+        """Match these before every existing route — for paths an existing fragment would catch."""
+        self._routes[:0] = routes
+
+    def extend(self, *routes: Route) -> None:
+        """Match these after every existing route — for fragments that would catch their paths."""
+        self._routes.extend(routes)
+
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         for method, fragment, responder in self._routes:
@@ -143,6 +158,53 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
     monkeypatch.setattr("app.promotion.client.asyncio.sleep", fake_sleep)
     return slept
+
+
+PORTAL_ID = "244766495"
+DEFAULT_OWNER = "77"
+
+
+@pytest.fixture
+def portal_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the portal id and default owner, so record URLs and owners never come from ``.env``."""
+    monkeypatch.setenv("HUBSPOT_PORTAL_ID", PORTAL_ID)
+    monkeypatch.setenv("HUBSPOT_UI_DOMAIN", "app-na2.hubspot.com")
+    monkeypatch.setenv("HUBSPOT_DEFAULT_OWNER_ID", DEFAULT_OWNER)
+
+
+@pytest.fixture
+def crm_clock() -> "FakeClock":
+    """Real time, so the ledger's server-stamped ``created_at`` and the clock agree."""
+    from tests.cadence.conftest import FakeClock
+
+    return FakeClock(datetime.now(UTC))
+
+
+@pytest.fixture
+def crm(crm_clock: "FakeClock") -> "FakeCrm":
+    """The fake CRM promotion and the cadence both talk to. Imported here, not at the top:
+    ``tests.cadence.conftest`` imports this module, so a top-level import would be circular."""
+    from tests.promotion.crm import FakeCrm
+
+    return FakeCrm(crm_clock)
+
+
+@pytest.fixture
+async def crm_client(crm: "FakeCrm") -> AsyncGenerator[HubSpotClient, None]:
+    client = make_client(crm.portal)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
+def promotion(
+    db_session: AsyncSession,
+    crm_client: HubSpotClient,
+    crm_clock: "FakeClock",
+    portal_settings: None,
+) -> PromotionService:
+    """The service under test: the rolled-back session, the fake CRM, the hand-moved clock."""
+    return PromotionService(db_session, hubspot=lambda: crm_client, clock=crm_clock)
 
 
 SOURCE_URL = "https://safer.fmcsa.dot.gov/query.asp?query_string=MC1234567"
