@@ -206,7 +206,7 @@ Open questions all went with the recommendations (OQ-1 b, OQ-2 a, OQ-3 a, OQ-4 a
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
 printed, nothing stored) showed what Places returned. It found 4 correct misses, 1 correct hit, and 1 false miss.
 **PR #32 review L4 is answered for this sample:** in every result the street number led the address, so the
-number-first test never refused a listing the number-anywhere test would have kept. Two decisions for PR B:
+number-first test never refused a listing the number-anywhere test would have kept. Three decisions for PR B:
 - **Decide: the Spearpoint false miss.** `SPEARPOINT FREIGHT SERVICES LLC` (`usdot:4088267`) is listed as "Spearpoint
   Logistics" at the census street number, suite #150 and ZIP. It shares one of its three distinguishing words, and
   `_MIN_SHARED_WORDS` needs two, so it was counted `places_not_found`. This is the cost of the H3 fix: the rule that
@@ -231,6 +231,21 @@ number-first test never refused a listing the number-anywhere test would have ke
   - **Open:** which `types` count as a mail drop (start with `post_office` and `business_center`, and check
     `shipping_service`), and whether the verdict lives on `PlaceCheck` or a new field. `PlaceCheck`'s shape is
     pinned by the D13 structure guard, so either way that test changes with the decision.
+- **Decide: candidates with no score.** Only 1 of the 6 checked candidates got a priority score; the other 5 log
+  `score_absent` for `automatable`. `classify_rollup` was asked 42 signal answers (7 signals × 6). It left 33 without
+  a citation, and the gate dropped them, as designed (prompt rule 4, `_Gate.admit`). Of the 9 it kept, 8 feed
+  `intensity`: `skeleton_back_office` on all six, plus `email_and_disconnected_systems` and `check_call_load` once
+  each. The only `automatable` answer was Spearpoint's `identifiable_tms`. **The gate is right:** an absent score is
+  honest, and a guessed one would be E18. The gap is in the manifest. All three of freight's `automatable` signals
+  (`identifiable_tms`, `structured_transaction_records`, `standard_rate_confirmation`) ask about back-office tooling
+  that a small broker's public pages rarely show. The node also had little to read: 2 of the 6 had no homepage read
+  (`mega13logistics.com` and `pglus.com` failed with `tool_error`), and 2 never fetched one. As it stands, about
+  $0.53 of judgment bought one score. Options:
+  - **(a) Accept it**, and decide what an unscored candidate does at review (T9): shown unranked, or held back.
+  - **(b) Re-author freight's `automatable` signals** as questions a public page or the registry can answer. That
+    means a new manifest version, with a dry-run and activation.
+  - Either way, add an eval-set case for an uncited axis, so a prompt change that starts guessing scores fails the
+    eval instead of passing it.
 
 ---
 
