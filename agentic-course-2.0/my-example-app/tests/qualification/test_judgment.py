@@ -25,9 +25,9 @@ from app.qualification.judgment import (
     run_judgment,
 )
 from app.qualification.prompts import build_user_prompt
-from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer, PlacesEvidence
+from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer
 from app.shared.provenance import RetrievalMethod
-from app.sourcing.schemas import CandidateFields, ScoreBand
+from app.sourcing.schemas import CandidateFields, PlacesEvidence, ScoreBand
 from tests.manifests.replay import (
     Replay,
     StreamLine,

@@ -1,4 +1,4 @@
-"""Stage 4 of 5: ``classify_rollup`` — one judgment call per surviving candidate (T7).
+"""Stage 3 of 5: ``classify_rollup`` — one judgment call per surviving candidate (T7).
 
 For each candidate of the run that no rule has already removed, the judgment node decides every
 judgment rule in the manifest and answers its qualifying signals in one call (D12). Fired rules

@@ -259,3 +259,164 @@ class TestStructure:
                     offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
 
         assert not offenders, f"vertical is data, not code: {sorted(set(offenders))}"
+
+
+PLACES_MODULE = "app/sourcing/sources/google_places.py"
+PLACES_PRO_FIELDS = frozenset(
+    {
+        "places.id",
+        "places.displayName",
+        "places.formattedAddress",
+        "places.businessStatus",
+        "places.types",
+    }
+)
+"""The Text Search Pro triggers (``places.id`` alone is Essentials). Anything else is Enterprise:
+billed at the higher rate for the whole request, and content D13 forbids storing anyway."""
+
+
+def _imports_from(tree: ast.AST, module: str, *, package: str) -> bool:
+    """Whether ``tree``, a module in ``package``, imports ``module`` in any spelling: ``import m``,
+    ``from m import x``, ``from parent import m``, ``from parent import *``, or any of those
+    relative (PR #32 round-2 M2, round-3 L1).
+
+    Known limit: an import of a package followed by attribute access (``from app.sourcing import
+    sources``, then ``sources.google_places``) is not seen. Nothing in ``app/`` reaches an
+    adapter that way; a test pins the limit so widening the matcher is a visible change.
+    """
+    parent = module.rpartition(".")[0]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == module for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            parts = package.split(".")
+            base = parts[: len(parts) - node.level + 1] if node.level else []
+            source = ".".join([*base, *([node.module] if node.module else [])])
+            if source == module or any(f"{source}.{alias.name}" == module for alias in node.names):
+                return True
+            # `google_places` has no `__all__`, so a star import of its package exposes it.
+            if source == parent and any(alias.name == "*" for alias in node.names):
+                return True
+    return False
+
+
+def _package_of(path: Path) -> str:
+    """The dotted package a source file's relative imports resolve against."""
+    return ".".join(path.relative_to(ROOT).parent.parts)
+
+
+class TestImportsFrom:
+    """The import matcher the D13 guard rests on, checked spelling by spelling: a matcher that
+    misses one spelling lets a second importer through with the guard still green."""
+
+    PLACES = "app.sourcing.sources.google_places"
+
+    @pytest.mark.parametrize(
+        ("source", "package"),
+        [
+            ("import app.sourcing.sources.google_places", "app.tools"),
+            ("from app.sourcing.sources.google_places import PlaceResult", "app.tools"),
+            ("from app.sourcing.sources import google_places", "app.tools"),
+            ("from app.sourcing.sources import http, google_places as gp", "app.tools"),
+            ("from .google_places import PlaceResult", "app.sourcing.sources"),
+            ("from . import google_places", "app.sourcing.sources"),
+            ("from .sources import google_places", "app.sourcing"),
+            ("from ..sources.google_places import PlaceResult", "app.sourcing.channel"),
+            ("from app.sourcing.sources import *", "app.tools"),
+            ("from . import *", "app.sourcing.sources"),
+        ],
+    )
+    def test_every_spelling_of_the_import_is_seen(self, source: str, package: str) -> None:
+        assert _imports_from(ast.parse(source), self.PLACES, package=package)
+
+    @pytest.mark.parametrize(
+        ("source", "package"),
+        [
+            ("from app.sourcing.sources import http", "app.tools"),
+            ("from app.sourcing.sources.google_places_extra import x", "app.tools"),
+            ("from . import google_places", "app.tools"),
+            ("import app.sourcing.sources", "app.tools"),
+            ("from app.sourcing import *", "app.tools"),
+        ],
+    )
+    def test_a_neighbouring_import_is_not_the_adapter(self, source: str, package: str) -> None:
+        assert not _imports_from(ast.parse(source), self.PLACES, package=package)
+
+    def test_attribute_access_through_a_package_is_a_known_limit(self) -> None:
+        """Round-3 L1: pinned, not fixed. If the matcher learns this, flip the assertion."""
+        source = "from app.sourcing import sources\nsources.google_places.PlaceResult"
+        assert not _imports_from(ast.parse(source), self.PLACES, package="app.tools")
+
+
+class TestPlacesIsACheckNeverASource:
+    """D13 at the structure level (T6 ticket: "a structure guard should reject one").
+
+    With the stored-row assertion in ``tests/tools/test_verify_business.py`` and the
+    ``CandidateFields`` validator, this covers "no Places field other than the place ID is ever
+    written to a candidate" at three layers.
+    """
+
+    def test_one_module_calls_places_and_one_stage_uses_it(self) -> None:
+        """Only the adapter constructs a result or names the endpoint, and only verify_business
+        imports the adapter anywhere in ``app/``: a second call site is a second way to store it
+        (widened from ``app/tools/`` by PR #32 M3)."""
+        callers: set[str] = set()
+        importers: set[str] = set()
+        for path in _app_sources():
+            relative = str(path.relative_to(ROOT))
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                constructs = (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "PlaceResult"
+                )
+                names_url = isinstance(node, ast.Name) and node.id == "PLACES_SEARCH_URL"
+                literal = (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and "places:searchText" in node.value
+                )
+                if constructs or names_url or literal:
+                    callers.add(relative)
+            if _imports_from(tree, "app.sourcing.sources.google_places", package=_package_of(path)):
+                importers.add(relative)
+
+        assert callers == {PLACES_MODULE}
+        assert importers == {"app/tools/verify_business.py"}
+
+    def test_a_stored_check_holds_the_place_id_and_our_own_address_only(self) -> None:
+        """``business_check`` is the one stored Places artefact, so its shape is pinned: adding
+        ``display_name`` or a Places address to it would store content D13 forbids (PR #32 M3)."""
+        from app.sourcing.schemas import PlaceCheck
+
+        assert set(PlaceCheck.model_fields) == {"place_id", "checked_address"}
+
+    def test_the_field_mask_is_pro_tier_only(self) -> None:
+        from app.sourcing.sources.google_places import PLACES_FIELD_MASK
+
+        assert set(PLACES_FIELD_MASK) <= PLACES_PRO_FIELDS
+
+    def test_places_content_has_no_home_in_a_candidate_or_a_table(self) -> None:
+        """Neither in-memory Places shape is a candidate field type, and no column is named for
+        Places content."""
+        from app.cadence import models as cadence_models
+        from app.core.database import Base
+        from app.manifests import models as manifest_models
+        from app.qualification import models as qualification_models
+        from app.routing import models as routing_models
+        from app.sourcing import models as sourcing_models
+        from app.sourcing.schemas import CandidateFields
+
+        assert all(
+            (cadence_models, manifest_models, qualification_models, routing_models, sourcing_models)
+        )
+        for name, field in CandidateFields.model_fields.items():
+            annotation = str(field.annotation)
+            assert "PlacesEvidence" not in annotation, name
+            assert "PlaceResult" not in annotation, name
+
+        content_columns = {"display_name", "formatted_address", "business_status"}
+        for table in Base.metadata.tables.values():
+            assert not content_columns & set(table.columns.keys()), table.name

@@ -1,0 +1,17 @@
+{
+  "places": [
+    {
+      "id": "ChIJ-neighbour",
+      "displayName": {
+        "text": "Olympic Dental Care",
+        "languageCode": "en"
+      },
+      "formattedAddress": "2100 Olympic Dr, Arlington, TX 76011, USA",
+      "businessStatus": "OPERATIONAL",
+      "types": [
+        "dentist",
+        "establishment"
+      ]
+    }
+  ]
+}

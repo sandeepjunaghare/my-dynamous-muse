@@ -5,8 +5,10 @@ batch best first, gather the free evidence, record cited candidates. It runs und
 **ACTIVE** manifest only — a draft is refused, because nobody has decided its sources' terms.
 
 ``--allow-degraded`` is the one way to spend a batch without a declared source's evidence (no
-webKey): without it, the run refuses before taking a batch, because a candidate already batched is
-never looked up again.
+webKey, no Places key, no Places source declared): without it, the run refuses before taking a
+batch (a Places key refused mid-batch fails the run, and its batch goes back to the pool), because a
+candidate already batched is never looked up again. It reaches ``search_registry`` and
+``verify_business``.
 
 The brief's ICP band is the active manifest's own: the CLI asks for "the vertical's run", and a
 band typed here would only be recorded, never applied (T7 reconciles bands).
@@ -23,6 +25,7 @@ from app.sourcing.pipeline import SourcingPipeline
 from app.sourcing.schemas import RunStatus, SourcingBrief, SourcingRunResponse
 from app.tools.registry import Stage, registered_stages
 from app.tools.search_registry import SearchRegistryStage
+from app.tools.verify_business import VerifyBusinessStage
 
 DEFAULT_GEOGRAPHY = "dfw"
 
@@ -43,8 +46,9 @@ def register(parser: argparse.ArgumentParser) -> None:
     run = subcommands.add_parser(
         "run",
         help=(
-            "refresh the vertical's backlog from its registry and record this run's batch of "
-            "cited candidates (free sources only)"
+            "refresh the vertical's backlog from its registry, take a batch, and verify it: free "
+            "sources first, then one paid Google Places check per candidate (up to "
+            "MAX_PLACES_CALLS_PER_RUN)"
         ),
     )
     run.add_argument("--vertical", required=True, help="a vertical with an ACTIVE manifest")
@@ -63,8 +67,9 @@ def register(parser: argparse.ArgumentParser) -> None:
         "--allow-degraded",
         action="store_true",
         help=(
-            "go on when a declared source cannot run (e.g. no FMCSA_WEBKEY); the batch is used up "
-            "without that source's evidence and is never looked up again"
+            "go on when a declared source cannot run (no FMCSA_WEBKEY, no GOOGLE_PLACES_API_KEY, "
+            "no Places source declared); the batch is used up without that evidence and is never "
+            "looked up again"
         ),
     )
 
@@ -82,23 +87,31 @@ def dispatch(args: argparse.Namespace) -> int:
 
 
 def _stages(batch_size: int | None, allow_degraded: bool) -> tuple[Stage, ...]:
-    """Every registered stage, ``search_registry`` carrying this run's options."""
-    return tuple(
-        stage.configured(batch_size=batch_size, allow_degraded=allow_degraded)
-        if isinstance(stage, SearchRegistryStage)
-        else stage
-        for stage in registered_stages()
-    )
+    """Every registered stage, ``search_registry`` and ``verify_business`` carrying this run's
+    options."""
+    return tuple(_configured(stage, batch_size, allow_degraded) for stage in registered_stages())
+
+
+def _configured(stage: Stage, batch_size: int | None, allow_degraded: bool) -> Stage:
+    if isinstance(stage, SearchRegistryStage):
+        return stage.configured(batch_size=batch_size, allow_degraded=allow_degraded)
+    if isinstance(stage, VerifyBusinessStage):
+        return stage.configured(allow_degraded=allow_degraded)
+    return stage
 
 
 async def _run(vertical: str, geography: str, batch_size: int | None, allow_degraded: bool) -> int:
     try:
         async with get_sessionmaker()() as session:
             manifest = await ManifestService(session).get_active(vertical)
+        stages = _stages(batch_size, allow_degraded)
+        for stage in stages:
+            if isinstance(stage, VerifyBusinessStage):
+                stage.preflight(manifest.body)
         brief = SourcingBrief(
             vertical=vertical, geography=geography, icp_band=manifest.body.icp_band.value
         )
-        run = await SourcingPipeline(stages=_stages(batch_size, allow_degraded)).run(brief)
+        run = await SourcingPipeline(stages=stages).run(brief)
     finally:
         await dispose_engine()
     _print(run)

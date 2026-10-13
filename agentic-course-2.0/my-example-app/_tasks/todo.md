@@ -1431,3 +1431,153 @@ companies. **Worked:** writing the failing cases first, then checking the whole 
 - **Blocker found:** `Settings` is `extra="forbid"` and main has no `google_places_api_key` field (T6 adds it), so
   with `GOOGLE_PLACES_API_KEY` in `.env`, every `lpe` command on main fails at startup. Comment the line out until T6
   merges, or land T6's config field first.
+
+---
+
+# T6 — planned: enrichment stages `verify_business` + `resolve_owner` (2026-10-12)
+
+**Plan:** `.claude/plans/t6-enrichment.md`. **Branch / worktree:** `feat/t6-enrichment` (off `752a994`) · test
+Postgres `lpe-test-pg-t6` on **5436** (T9 is on 5437) · **no migration** (JSONB; head stays `0009`).
+**Status:** planned, waiting for the human to answer OQ-1…OQ-5 before `/piv-implement`.
+
+**Measured while planning (live census, read-only, 2026-10-11, freight v8 predicates, 4,462 DFW rows):**
+- `company_officer_1` citable (passes `Principal`) for **3,008 (67.4%)**. Refused: 5. `company_officer_2` rescues 2.
+- Email present for 2,976, but **only 1,080 (24%) on a business domain**. The rest is free-mail (gmail 1,344…),
+  and ~45 are shared process-agent or franchisor domains. The docs' "website from email domain (67%)" is ~3× high.
+- **Freight v8 (ACTIVE) declares no Places source**, so a freight v9 declaring Places must be activated first.
+
+**Open questions for the human** (recommendation in bold; the plan is written to the recommendations):
+- [ ] OQ-1 website beyond the email domain: **`classify_rollup`'s existing call reports the fetched homepage**
+      (vs. email only; Brave API, whose terms forbid storing results; SDK WebSearch, which breaks D1)
+- [ ] OQ-2 record "checked, not found": **no, count only** (never a marker inside `business_check`, which would
+      pass T9's gate)
+- [ ] OQ-3 headcount band: **`HeadcountBand(low, high|None)`, answered by `classify_rollup`'s call, owned there**
+- [ ] OQ-4 SOS/filing source: **none in T6**; a Texas Comptroller API spike before T10 (free and keyed, limits unverified)
+- [ ] OQ-5 **skip both paid judgment steps for candidates Places did not verify** (T9 cannot promote them)
+
+**Derived, flag if wrong:**
+- A1 reorder: `classify_rollup` before `resolve_owner`, per D8 (2026-10-09).
+- A2 the census adapter fills `owner` and `email`; `has_principal` uses `principal_or_none` (L1).
+- A3 no Places source, or no key, refuses the run unless `--allow-degraded`.
+- A8 `PlaceCheck.checked_address`.
+
+**Human, before the first run:** a Google Places API (New) key (`GOOGLE_PLACES_API_KEY`, Pro tier, 5,000 free
+calls a month) and freight v9 with a `places` source: dry-run, then `activate --accept-terms …,places`.
+
+**Finding (not T6's to change):** `classify_rollup` raises at its call cap, and its docstring says "degraded",
+but the runner finishes the run **failed**.
+
+---
+
+## T6 PR A implemented: `verify_business`, the reorder, the census owner and email (2026-10-12)
+
+**Scope** (plan *AMENDMENTS* item 2): tasks 1–11, 20, 21, their docs (part of 23) and full validation (24).
+OQ-1…OQ-5 all went with the recommendations. PR B (tasks 12–19, 22, and amendment 3) is not started.
+Branch `feat/t6-enrichment`, worktree `worktrees/t6`, test Postgres `lpe-test-pg-t6` on 5436. Not pushed.
+
+- [x] 1 `RunCost.charge`: the cap check and the record in one call (closes deferred #6)
+- [x] 2 `principal_or_none` / `has_entity_designator`, `PlaceCheck.checked_address`, value-compared
+      `has_verified_address`, `HeadcountBand`, `email` + `headcount_band`, `PlacesEvidence` moved to sourcing
+- [x] 3 stage reorder (D8): `… verify_business → classify_rollup → resolve_owner …`; owner rows for the new fields
+- [x] 4 settings: Places list price, owner-node breakers, `max_places_calls_per_run > 0` (the key was already on main)
+- [x] 5 the census adapter fills `owner` (via `principal_or_none`) and `email`; `has_principal` uses the same test
+- [x] 6 `http.post` on the shared retry loop (reads only; headers never logged)
+- [x] 7–8 `sources/google_places.py`: Pro-only client, bad-key detection, binding by declared source, the matcher
+- [x] 9 `website.py` + `shared_email_domains`: free-mail and shared domains refused, one homepage fetch
+- [x] 10 `StageContext.places`, one dict per run, shared by every stage
+- [x] 11 `verify_business` (stage 2), with the refusal, the breaker and the stored-row D13 assertion
+- [x] 20 `--allow-degraded` reaches `verify_business`
+- [x] 21 D13 structure guard (call site, Pro mask, no Places shape in a field or a column)
+- [x] 23 (PR A part) CLAUDE.md map, `app/sourcing/README.md`, `adding-a-vertical.md`, tickets (T6 built note, T9
+      hand-over), architecture (*Boundaries*: 24%, the checked address)
+- [x] 24 validation: ruff, format, mypy, pyright clean; pytest **1262 passed, 2 skipped** with the DB (offline
+      901 passed, 363 skipped); `alembic check` no drift, head still `0009`; zero suppressions. Mutation checks:
+      all 7 applicable caught (mask gains `websiteUri`; display name copied into the check; the `removed` filter
+      dropped; `search_registry` owns `owner`; `has_verified_address` ignores the address; a fresh dict per stage;
+      the breaker caught without stopping). The two owner-node mutations are PR B's.
+
+### Review
+
+- **Worked:** the plan's patterns were all in the codebase (T5's refusal, T8's MockTransport tests), so the stage
+  went in with no design surprises. Running the mutation list as one script that reverts with `git checkout` was
+  quick and left the tree clean. Committing per phase kept the commits atomic, including splitting `stages.py`
+  into the owner rows (with the schema) and the reorder.
+- **Didn't:** the sandbox's writable `.` is the main checkout, not this worktree, and heredocs fail inside it, so
+  every scripted edit needed the sandbox off. One `ruff format --check` failure was masked by a `| tail` in a
+  chained command and needed an amend of an unpushed commit.
+- **Improve:** a sourcing-wide `MockWeb` is now in `tests/sourcing/conftest.py`; PR B's end-to-end run should
+  reuse it rather than fork one. The plan's matcher text is ambiguous on a census street with no leading number
+  ("required only when it starts with digits" vs "a PO box can never match"). **Decided 2026-10-12: a PO box
+  never matches**, and `search_query` treats it as uncheckable, so no Places call is paid for it.
+
+**Divergences:** the channel test lives in `tests/sourcing/test_places_channel.py` (it needs that suite's
+`session_factory`), not `tests/tools/`. `tests/sourcing/builders._source` became public `a_source`. The blank-key
+test sits with the Places adapter tests rather than in `tests/core/test_config.py` (core tests should not import a
+sourcing adapter). The end-to-end five-stage run in *Testing strategy* is PR B's: it needs both judgment nodes.
+
+**Human, Level 4 (not run here):** set `GOOGLE_PLACES_API_KEY` in `.env`; dry-run and activate freight v9
+(`e0d32bec`) with `--accept-terms fmcsa_company_census,fmcsa_qcmobile,fmcsa_revocations,places`; then
+`uv run lpe sourcing run --vertical freight --batch-size 10` and check `places_verified`, `website_found`, the
+`places_lookup` cost (≤ 10 calls), and that no stored candidate holds a Places display name or formatted address.
+**Until v9 is active, a freight run refuses at `verify_business`** (pass `--allow-degraded` to run without Places).
+
+## PR #32 review fixes (2026-10-12)
+
+Scope (owner): all findings, H1–H3, M1–M3, L1–L3. H3 approach (owner): (a) stricter name overlap, no pool data.
+
+- [x] H1: the homepage check catches `httpx.InvalidURL` and `ValueError` (`bad_url`); every parse is inside the guard.
+- [x] H2: IP-address email domains refused; each hop fenced (`https`, own host) before it is requested; status and
+  headers only via `stream`; the whole check bounded by `asyncio.timeout(10)`. Not fenced, and documented: a domain
+  whose own DNS points at a private address.
+- [x] H3: the street number must start `formattedAddress`; the name needs all distinguishing words of a 1–2 word
+  name, two of a longer one (`_MIN_SHARED_WORDS`). No trade words in code.
+- [x] M1: one `_checkable` precondition shared by `search_query` and `match_place`.
+- [x] M2: a live match beats a closed one listed ahead of it.
+- [x] M3: `PlaceCheck`'s fields pinned; the adapter importer scan widened to all of `app/`.
+- [x] L1: CLI help names the paid Places step. L2: `VerifyBusinessStage.preflight` refuses from the manifest before
+  the census pull; the CLI calls it, and the stage's own refusal stays as the backstop (T10 should call it too).
+  L3: the breaker docstring says a retry across runs pays again.
+
+**Review:** 1,282 passed, 2 skipped (DB tier on 5436); 921 without the DB; ruff, format, mypy, pyright, `alembic
+check` clean. Each new test failed first; both widened guards were mutation-checked.
+**Worked:** reproducing H3 before fixing it. The fix then broke one existing test, which had been passing *because*
+of the bug ("Alpha Freight" verified against "Acme Freight" on the word FREIGHT).
+**Didn't:** two of the planned `bad_url` reasons were wrong. httpx parses `https://x:abc/` and `//[bad` leniently, so
+those cases end as `other_host` or a transport error. Still `None`, never raised, which is the property that matters.
+**Improve:** the `Stage` protocol has no preflight, so the CLI special-cases `VerifyBusinessStage`. T10 is the point
+to decide whether every stage gets a `preflight(manifest)` hook.
+
+## PR #32 round-2 review fixes (2026-10-12)
+
+Scope (owner): M1–M3 and L1–L3; L4 deferred to the Level 4 live run (it needs live data).
+
+- [x] M1: `email_domain` refuses a domain whose TLD does not start with a letter, so short-form IPs (`127.1`,
+  `0x7f.1`, `169.254.43518`) are refused too; `ipaddress` dropped.
+- [x] M2: `_imports_from` resolves `from pkg import google_places`, aliases and relative imports against the
+  file's package. Its own spelling tests; the old matcher misses all four new spellings (mutation-checked).
+- [x] M3: docs say two or more distinguishing words are needed to tell a neighbour apart; the one-word limit
+  (`AJ LOGISTICS LLC`) is pinned by a test.
+- [x] L1: a hop off port 443 is `other_host`. L2: hosts compared as `raw_host`, so `xn--` domains work, and the
+  origin is kept in its ASCII form. L3: the query uses the DBA only if it has a distinguishing word.
+- [ ] L4 (deferred): does requiring the address to start with the street number miss listings where Google puts
+  a building name first? Count `places_not_found` against the raw results during the Level 4 run.
+
+**Review:** 1,304 passed, 2 skipped (paid live eval; DB tier on 5436); ruff, format, mypy, pyright, `alembic check`
+clean. Each new test failed first.
+**Didn't:** comparing raw hosts let `acme[.test` through the fence, because httpx percent-encodes it the same way
+on both sides. Fixed by refusing a `%` in the host as `bad_url` before any request.
+**Improve:** a fence that compares two values httpx built can't catch anything httpx normalises. Check the
+input's own shape first.
+
+## PR #32 round-3 review and its Lows (2026-10-12)
+
+Round 3 approved `ec7ccb2`: no Critical, High or Medium findings. The reviewer could only read code, so the httpx
+behaviour it relied on was run on the PR head and held.
+
+- [x] L1: the import guard catches `from <adapter's package> import *` (the adapter has no `__all__`). Attribute
+  access through a package is a documented limit, pinned by a test.
+- [x] L2: the malformed-domain test asserts `bad_url` and that nothing was requested.
+- [x] L3: a Unicode census domain (`bücher.de`) is fetched and cited in its punycode form, now tested.
+
+**Review:** 1,309 passed, 2 skipped (DB tier on 5436); all checks clean. The star-import cases fail with the new
+condition disabled.

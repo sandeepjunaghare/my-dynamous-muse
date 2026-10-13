@@ -21,7 +21,14 @@ from typing import Annotated, Self, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from app.core.cost import BillableKind, RunCost
 from app.manifests.schemas import SLUG_PATTERN, IcpBand
@@ -99,7 +106,7 @@ class PostalAddress(BaseModel):
 
 
 class PlaceCheck(BaseModel):
-    """What a Google Places check keeps: the place ID, and nothing else (D13, option A).
+    """What a Google Places check keeps: the place ID, and the census address it checked (D13).
 
     The terms let a place ID be stored indefinitely and bar storing the content behind it. Its
     citation's ``retrieved_at`` is when the check ran. "Verified" means Places found this business
@@ -109,6 +116,11 @@ class PlaceCheck(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     place_id: str = Field(min_length=1)
+
+    checked_address: PostalAddress
+    """The census address the check was run against: **our** registry data, not Places content,
+    so storing it is allowed. It is what makes a later address change un-verify the check
+    (``CandidateFields.has_verified_address`` compares values; PR #13 review L2)."""
 
     @field_validator("place_id")
     @classmethod
@@ -135,6 +147,11 @@ widen it only with a check of what is already stored. CO, LC and PC are left out
 "Co" is a surname and refusing a real owner costs more than a rare ``ACME CO`` reaching review."""
 
 
+def has_entity_designator(name: str) -> bool:
+    """Whether ``name`` carries a legal-entity designator as a whole word (LLC, INC, CORP…)."""
+    return _ENTITY_DESIGNATOR.search(name) is not None
+
+
 class Principal(BaseModel):
     """The owner or principal of a business: the person a HubSpot Contact is created for (T9).
 
@@ -158,7 +175,7 @@ class Principal(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("name must not be blank")
-        if _ENTITY_DESIGNATOR.search(stripped):
+        if has_entity_designator(stripped):
             raise ValueError(
                 f"{stripped!r} carries a legal-entity designator; a company name is not a person "
                 "(E18). Leave the owner absent rather than cite a company as one"
@@ -171,6 +188,51 @@ class Principal(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+
+def principal_or_none(name: str | None, title: str | None = None) -> Principal | None:
+    """A :class:`Principal`, or ``None`` when the name is absent, blank or refused.
+
+    The one test of "names a citable person" (PR #31 L1): the backlog's ``has_principal`` and the
+    census adapter both ask it, so neither can drift from what ``Principal`` accepts. It catches the
+    refusal itself (PR #31 M2), so a company in the officer column never fails a pull.
+    """
+    if name is None or not name.strip():
+        return None
+    try:
+        return Principal(name=name, title=title)
+    except ValidationError:
+        return None
+
+
+class HeadcountBand(BaseModel):
+    """How many people work at a business, as an inclusive range the source stated (M8).
+
+    ``"11-50 employees"`` is ``(11, 50)``; ``"a team of 12"`` is ``(12, 12)``; ``"50+"`` is
+    ``(50, None)``. A range rather than an enum of buckets, because sources state ranges and
+    numbers; bucketing is T9's HubSpot-mapping concern. Frozen, because it is cited.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    low: int = Field(ge=1)
+    high: int | None = Field(default=None, ge=1)
+    """``None`` is open-ended (``50+``)."""
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.high is not None and self.high < self.low:
+            raise ValueError(f"headcount band {self.low}-{self.high} is inverted")
+        return self
+
+    @property
+    def label(self) -> str:
+        """``"11-50"``, ``"50+"`` or ``"12"``."""
+        if self.high is None:
+            return f"{self.low}+"
+        if self.high == self.low:
+            return str(self.low)
+        return f"{self.low}-{self.high}"
 
 
 class ScoreBand(StrEnum):
@@ -286,6 +348,22 @@ def is_google_maps(url: str) -> bool:
     return (is_google or host == "goo.gl") and (path == "/maps" or path.startswith("/maps/"))
 
 
+class PlacesEvidence(BaseModel):
+    """What ``verify_business``'s Places check saw, handed to the judgment node within the run.
+
+    Never a ``CandidateFields`` member, never stored, never logged (D13): the Maps Platform Terms
+    bar storing it. Built by ``verify_business``, read by ``classify_rollup`` in the same run
+    through ``StageContext.places``, and dropped with the run. Context for the model, never a
+    citation.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    display_name: str | None = None
+    business_status: str | None = None
+    types: tuple[str, ...] = ()
+
+
 class CandidateFields(BaseModel):
     """A sourced business's identity, every field carrying its own provenance.
 
@@ -293,7 +371,6 @@ class CandidateFields(BaseModel):
     exists *because* a registry named it, so its id is the one field that cannot be absent. Every
     other field may be ``None`` — storable, and not promotable (see the module docstring).
 
-    Enrichment fields T6 has yet to add (headcount band, years in business) belong here too.
     Because the column is JSONB, adding a field is a schema change with no migration, and rows
     written before it existed load with it absent — which is honestly what they are.
     """
@@ -307,7 +384,15 @@ class CandidateFields(BaseModel):
     dba_name: ProvenancedValue[str] | None = None
     address: ProvenancedValue[PostalAddress] | None = None
     phone: ProvenancedValue[str] | None = None
+    email: ProvenancedValue[str] | None = None
+    """The registry's stated contact email (T6), cited ``bulk_file`` to the census row, lowercased.
+    Filled by the registry adapter; ``verify_business`` reads its domain for the website check.
+    Whether it reaches HubSpot is T9's call."""
+
     website: ProvenancedValue[str] | None = None
+    """The business's own homepage origin, from ``verify_business``'s free fetch of the email
+    domain, cited ``web_lookup`` to the page it fetched."""
+
     business_check: ProvenancedValue[PlaceCheck] | None = None
     """The Google Places check of this record (T6): the place ID, cited to Places. Absent means
     never checked, or checked and not found."""
@@ -317,6 +402,11 @@ class CandidateFields(BaseModel):
     ``bulk_file``; the judgment node only where that is absent, cited ``llm_inference`` to the page
     it read. Absent means nobody could be cited, and T9 does not promote such a candidate: the
     cadence is keyed on a contact."""
+
+    headcount_band: ProvenancedValue[HeadcountBand] | None = None
+    """How many people work there (M8), as a range a page stated, owned by ``classify_rollup``
+    (its one call answers it, cited to a page it fetched). Absent when nothing citable states it,
+    which is common for small businesses and honest: a guessed band is E18."""
 
     source_records: tuple[ProvenancedValue[SourceRecord], ...] = ()
     """Every source's raw record for this candidate, each with its own citation (T5).
@@ -402,13 +492,19 @@ class CandidateFields(BaseModel):
         return {name: value for name, value in dumped.items() if value != []}
 
     def has_verified_address(self) -> bool:
-        """Whether this candidate has an address **and** a business check that found it.
+        """Whether this candidate has an address **and** a business check of *that* address.
 
         The rule T8 clusters on: a candidate without one is excluded, never geocoded from a guess.
         The address is the registry's copy either way (D13); verification is the separate fact
-        that Places found the business, not a different address.
+        that Places found the business there. The check's ``checked_address`` must equal the
+        current address — values, never ``retrieved_at``, which every registry refresh bumps
+        (PR #13 review L2) — so a moved business is unverified until it is checked again.
         """
-        return self.address is not None and self.business_check is not None
+        return (
+            self.address is not None
+            and self.business_check is not None
+            and self.business_check.value.checked_address == self.address.value
+        )
 
     def unprovenanced_fields(self) -> tuple[str, ...]:
         """The fields with no citation, in declaration order.

@@ -179,6 +179,29 @@ system"), *Boundaries & contracts* (Google Places), *Cost: a circuit breaker, no
 **Files:** `app/tools/{verify_business,resolve_owner}.py`, `app/sourcing/sources/google_places.py`, `tests/`
 **Size:** ~1000–1400 lines · **Depends on:** T5 (no longer T7: verification now runs before the judgment call, D8)
 
+**Built, PR A — `verify_business` (2026-10-12; plan `.claude/plans/t6-enrichment.md`, split per its amendments).**
+Open questions all went with the recommendations (OQ-1 b, OQ-2 a, OQ-3 a, OQ-4 a, OQ-5 a). In PR A:
+- **Stage order is now D8's:** `search_registry → verify_business → classify_rollup → resolve_owner →
+  cluster_routes` (A1), so the owner node never pays for a candidate the judgment rules remove.
+- **`verify_business`** (stage 2): one Pro-fields-only Text Search per survivor, matched deterministically (street
+  number, 5-digit ZIP, a shared name word; A4); stores `PlaceCheck(place_id, checked_address)` only, and
+  `has_verified_address()` now compares the check's address with the current one (PR #13 L2). A permanently
+  closed listing stores nothing; a miss is counted, not recorded (OQ-2). What Places saw rides
+  `StageContext.places`, one dict per run, to `classify_rollup` (wired to read it in PR B).
+- **Places binds only where declared** (A3): no declared Places source, or no key, refuses the run unless
+  `--allow-degraded`. **Freight v8 declares none**, so the next freight run needs v9 (DRAFT `e0d32bec`) activated
+  with `--accept-terms …,places`.
+- **Breaker:** `RunCost.charge` (closes deferred #6) against 500 calls; reaching it stops Places and finishes the
+  stage degraded. Cost recorded at list price ($0.032), an upper bound.
+- **Website** from a free homepage fetch of the census email domain (free-mail and shared domains refused).
+- **The census adapter fills `owner` and `email`** (A2): `company_officer_1` via `principal_or_none` (refused →
+  absent, never a failed pull; `has_principal` uses the same test, PR #31 L1). `search_registry` only fills
+  `owner`. New fields `email` (owned by `search_registry`) and `headcount_band` (`HeadcountBand(low, high)`, owned
+  by `classify_rollup`). No migration.
+- **PR B** (left): the owner judgment node and `resolve_owner`, the `classify_rollup` edits (Places evidence in,
+  website and headcount answers out, unverified skipped, its cap ending the stage degraded rather than the run
+  failed), the PR #31 L2 ownership test, and the opt-in live eval.
+
 ---
 
 ### T7 — Qualification slice: disqualifiers, rollup classifier, priority score
@@ -252,6 +275,13 @@ hand today") · PRD §6 step 5.
 - **Hands off to T11** for the cadence: promotion's job ends when the record exists and the first touch has been requested.
 - **Routes carry only qualified candidates** *(handed over from T8, 2026-10-10)*. T8 routes every candidate with a verified address and does not read T7's `disqualification`, so `route_assignment` holds disqualified doors too. Whatever promotion attaches a route to, or shows a founder, reads only qualified candidates' rows. Filtering `route_assignment` by qualification is not enough on its own, because the remaining routes are then lopsided; T10 decides whether to re-route instead.
 - **Adopted contacts (T13) already exist in HubSpot and carry no provenance.** The first field write to one of them cites `retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's create date — honest, not an exemption *(moved here from T13, 2026-10-10)*.
+
+- **Handed over from T6 PR A (2026-10-12), for the rebase:** `place_checked()` (tests) and `PlaceCheck` now take the
+  census address the check was run against (`checked_address`, required), and `has_verified_address()` compares
+  values; `CandidateFields` gains `email` and `headcount_band`, so `unprovenanced_fields()` lists two more names;
+  `PipelineStage` order is now `search_registry, verify_business, classify_rollup, resolve_owner, cluster_routes`.
+  T9 maps `HeadcountBand` (an inclusive range, `high=None` for "50+") to HubSpot and decides whether `email` is
+  written. The census officer now arrives as `owner` from stage 1 (`bulk_file`).
 
 **Per-ticket context:** `.claude/references/hubspot-integration.md` · architecture → *Review surface: HubSpot,
 no frontend* · M4/M8.

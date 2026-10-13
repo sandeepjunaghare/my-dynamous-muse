@@ -108,6 +108,98 @@ class MockFmcsa:
         return [request for request in self.requests if path_fragment in request.url.path]
 
 
+TEST_PLACES_KEY = "places-key-fixture-not-a-secret"
+"""Asserted never to reach a URL, a citation or a log line."""
+
+
+@dataclass
+class MockPlaces:
+    """A mock of the Places Text Search endpoint (T6), and a log of what was asked.
+
+    ``answers`` maps a substring of the ``textQuery`` to a ``(status, body)``; a query matching none
+    gets ``default``. Raises on any other request, so "no network" is proven, not intended.
+    """
+
+    answers: dict[str, tuple[int, object]] = field(default_factory=dict[str, tuple[int, object]])
+    default: tuple[int, object] = field(default_factory=lambda: (200, load_fixture("places_match")))
+    requests: list[httpx.Request] = field(default_factory=list[httpx.Request])
+
+    def handles(self, request: httpx.Request) -> bool:
+        return request.url.host == "places.googleapis.com"
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if not self.handles(request) or request.method != "POST":
+            raise AssertionError(
+                f"unexpected request to mock Places: {request.method} {request.url}"
+            )
+        self.requests.append(request)
+        body = cast(dict[str, object], json.loads(request.content))
+        query = str(body["textQuery"])
+        for fragment, (status, answer) in self.answers.items():
+            if fragment in query:
+                return httpx.Response(status, json=answer)
+        status, answer = self.default
+        return httpx.Response(status, json=answer)
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handler)
+
+    def queries(self) -> list[str]:
+        return [
+            str(cast(dict[str, object], json.loads(request.content))["textQuery"])
+            for request in self.requests
+        ]
+
+
+@dataclass
+class MockWeb:
+    """Homepages by URL (T6's website check). An unrouted URL raises; a callable may raise too."""
+
+    pages: dict[str, Callable[[httpx.Request], httpx.Response]] = field(
+        default_factory=dict[str, Callable[[httpx.Request], httpx.Response]]
+    )
+    requests: list[httpx.Request] = field(default_factory=list[httpx.Request])
+
+    def html(self, url: str, body: str = "<html><title>Acme</title></html>") -> None:
+        self.pages[url] = lambda _request: httpx.Response(
+            200, text=body, headers={"content-type": "text/html; charset=utf-8"}
+        )
+
+    def redirect(self, url: str, location: str) -> None:
+        self.pages[url] = lambda _request: httpx.Response(301, headers={"location": location})
+
+    def status(self, url: str, status: int, content_type: str = "text/html") -> None:
+        self.pages[url] = lambda _request: httpx.Response(
+            status, content=b"%PDF-1.7", headers={"content-type": content_type}
+        )
+
+    def handles(self, request: httpx.Request) -> bool:
+        return str(request.url) in self.pages
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        page = self.pages.get(str(request.url))
+        if page is None:
+            raise AssertionError(
+                f"unexpected request to the mock web: {request.method} {request.url}"
+            )
+        return page(request)
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handler)
+
+
+def routed(places: MockPlaces, web: MockWeb) -> httpx.MockTransport:
+    """One transport for a stage that talks to Places and to homepages."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if places.handles(request):
+            return places.handler(request)
+        return web.handler(request)
+
+    return httpx.MockTransport(handler)
+
+
 @pytest.fixture
 def mock_fmcsa() -> MockFmcsa:
     return MockFmcsa()

@@ -15,7 +15,14 @@ before first use (FMCSA, Google Places and any state registry each have their ow
 vertical must name a **registry** to find candidates in: a licensing board, the Secretary of State, or a
 federal dataset. "Search Places for X in DFW" is not a source; saving what it finds is an index, which the
 terms ban. Places only confirms a record the registry already gave us, within the run, and only its place ID
-is kept.
+(plus the census address it checked) is kept.
+
+**A vertical that wants verification declares Places as a source** (T6, A3): a `web_lookup` source whose
+`base_url` is the API (`https://places.googleapis.com/v1/places:searchText`) or its docs page, and accepts its
+terms at `activate` (`--accept-terms …,places`, on the D13 basis). Terms are decided per declared source, so
+`verify_business` calls Places **only** for a manifest that declares it. A manifest without one — or a run
+without `GOOGLE_PLACES_API_KEY` — fails `lpe sourcing run` unless `--allow-degraded`, and an unverified
+candidate can never be promoted (T9 requires `business_check`).
 
 The weekly run is a **deterministic pipeline of five generic stages, all parameterized by the manifest**:
 search a declared registry · verify a business identity · resolve the owner · classify rollup-vs-local ·

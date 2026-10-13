@@ -8,9 +8,8 @@ vertical toward that one's shape — vertical is data, here too.
 from collections.abc import Sequence
 
 from app.manifests.schemas import DisqualifierRule, QualifyingSignal
-from app.qualification.schemas import PlacesEvidence
 from app.shared.provenance import ProvenancedValue
-from app.sourcing.schemas import CandidateFields
+from app.sourcing.schemas import CandidateFields, PlacesEvidence
 
 SYSTEM_PROMPT = """\
 You assess one local business for an internal prospecting tool used by a small consultancy. A \

@@ -1,0 +1,30 @@
+{
+  "places": [
+    {
+      "id": "ChIJ-neighbour",
+      "displayName": {
+        "text": "Olympic Dental Care",
+        "languageCode": "en"
+      },
+      "formattedAddress": "2100 Olympic Dr, Arlington, TX 76011, USA",
+      "businessStatus": "OPERATIONAL",
+      "types": [
+        "dentist"
+      ]
+    },
+    {
+      "id": "ChIJ-acme-second",
+      "displayName": {
+        "text": "ACME FREIGHT",
+        "languageCode": "en"
+      },
+      "formattedAddress": "2100 Olympic Dr Suite 200, Arlington, TX 76011, USA",
+      "businessStatus": "OPERATIONAL",
+      "types": [
+        "moving_company",
+        "point_of_interest",
+        "establishment"
+      ]
+    }
+  ]
+}

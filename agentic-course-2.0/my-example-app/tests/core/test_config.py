@@ -1,5 +1,6 @@
 """Config must fail loudly. A silent default is how a run points at the wrong database."""
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,12 @@ _MANAGED_VARS = (
     "LOG_LEVEL",
     "MAX_PLACES_CALLS_PER_RUN",
     "HUBSPOT_PRIVATE_APP_TOKEN",
+    "GOOGLE_PLACES_API_KEY",
+    "PLACES_TEXT_SEARCH_USD",
+    "OWNER_RESOLVER_MODEL",
+    "OWNER_RESOLVER_MAX_TURNS",
+    "OWNER_RESOLVER_MAX_BUDGET_USD",
+    "MAX_OWNER_CALLS_PER_RUN",
 )
 
 VALID_URL = "postgresql+asyncpg://u:p@db.abc.supabase.co:5432/postgres"
@@ -99,6 +106,35 @@ class TestDefaults:
             if isinstance(value, str):
                 assert not value.startswith("/"), f"{name} looks like an absolute path"
                 assert "\\" not in value, f"{name} looks like a Windows path"
+
+
+class TestEnrichmentSettings:
+    """T6: the Places price and the owner node's breakers, mirroring classify_rollup's."""
+
+    def test_defaults(self, env: pytest.MonkeyPatch) -> None:
+        env.setenv("DATABASE_URL", VALID_URL)
+        settings = Settings.model_validate({})
+
+        assert settings.google_places_api_key is None
+        assert settings.places_text_search_usd == Decimal("0.032")
+        assert settings.owner_resolver_model == "claude-opus-5-5"
+        assert settings.owner_resolver_max_turns == 10
+        assert settings.owner_resolver_max_budget_usd == Decimal("0.50")
+        assert settings.max_owner_calls_per_run == 500
+
+    def test_the_places_key_never_prints(self, env: pytest.MonkeyPatch) -> None:
+        env.setenv("DATABASE_URL", VALID_URL)
+        env.setenv("GOOGLE_PLACES_API_KEY", "places-key-not-a-secret")
+        settings = Settings.model_validate({})
+
+        assert "places-key-not-a-secret" not in repr(settings)
+
+    @pytest.mark.parametrize("name", ["MAX_PLACES_CALLS_PER_RUN", "MAX_OWNER_CALLS_PER_RUN"])
+    def test_a_zero_breaker_is_refused(self, env: pytest.MonkeyPatch, name: str) -> None:
+        env.setenv("DATABASE_URL", VALID_URL)
+        env.setenv(name, "0")
+        with pytest.raises(ValidationError):
+            Settings.model_validate({})
 
 
 class TestCaching:

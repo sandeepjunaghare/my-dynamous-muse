@@ -37,6 +37,7 @@ from app.sourcing.schemas import (
 )
 from app.sourcing.sources.base import PoolRecord
 from app.sourcing.stages import PipelineStage
+from app.sourcing.website import SHARED_DOMAIN_MIN_BUSINESSES
 
 logger = get_logger(__name__)
 
@@ -217,6 +218,13 @@ class SourcingService:
             batched=len(selection.selected),
         )
         return selection
+
+    async def shared_email_domains(self, vertical: str) -> frozenset[str]:
+        """The email domains too many of the vertical's pool businesses share to be any one's own
+        website (process agents, franchisors). Read once per run by ``verify_business``."""
+        return await PoolRepository(self._session).shared_email_domains(
+            vertical, min_businesses=SHARED_DOMAIN_MIN_BUSINESSES
+        )
 
     async def _require_run(self, run_id: UUID) -> SourcingRun:
         """Return the run, or raise :class:`SourcingRunNotFoundError`."""

@@ -17,11 +17,12 @@ five stages (registry search, business verification, route clustering) never nee
 place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
-**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), T13 from Wave 4, and T5, T7 and T8 from Wave 5:
-the service boots, validates clean, the provenance primitive exists, and seven slices are built — `manifests/`
-with its authoring agent and dry-run gate, the gateway half of `promotion/`, `sourcing/` with the pipeline
-runner, backlog and FMCSA adapters, the `cadence/` state machine with adoption, `qualification/` with the
-`classify_rollup` stage, and `routing/` with its stage, `cluster_routes`.
+**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), T13 from Wave 4, T5, T7 and T8 from Wave 5, and
+the first half of Wave 6's T6 (`verify_business`): the service boots, validates clean, the provenance primitive
+exists, and seven slices are built — `manifests/` with its authoring agent and dry-run gate, the gateway half of
+`promotion/`, `sourcing/` with the pipeline runner, backlog, FMCSA and Places adapters and the website check,
+the `cadence/` state machine with adoption, `qualification/` with the `classify_rollup` stage, and `routing/`
+with its stage, `cluster_routes`.
 ```
 app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
 app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
@@ -30,13 +31,16 @@ app/shared/{page_reads,agent_reads}.py      # which pages an Agent SDK run verif
 app/manifests/                              # vertical_manifest DRAFT→ACTIVE, the terms gate, read-only routes, the CLI, the authoring agent (T12)
 app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties, task/activity reads
 app/sourcing/                               # sourcing_run + candidate (field-level provenance, one owner per field), the pipeline runner, the sourcing_pool backlog, `lpe sourcing run`
-app/sourcing/sources/                       # adapters bound by base_url: FMCSA census (discovery) · QCMobile (lookup) · Motus revocations (join); SoQL pushdown
+app/sourcing/sources/                       # adapters bound by base_url: FMCSA census (discovery; also fills owner + email) · QCMobile (lookup) · Motus revocations (join); SoQL pushdown
+app/sourcing/sources/google_places.py       # the Places Text Search check (Pro fields only), the deterministic matcher, binding by declared source — never a source (D13)
+app/sourcing/website.py                     # the census email domain → one free homepage fetch; free-mail and shared domains refused
 app/qualification/                          # free predicate evaluator, classify_rollup judgment node, priority score, disqualification + suppression, dry-run (T7)
 app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, adoption (T13), routes + CLI
 app/routing/                                # route_assignment, the Census Geocoder (never Places), balanced-bisection clustering (T8)
-app/tools/registry.py                       # the Stage contract; a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
+app/tools/registry.py                       # the Stage contract (+ the run's in-memory Places channel); a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
 app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushdown, refresh the pool, take a batch best first, free evidence, free predicates (T7)
-app/tools/classify_rollup.py                # stage 4 of 5 (T7)
+app/tools/verify_business.py                # stage 2 of 5 (T6): website from the email domain, Places check → place ID + checked address only; refuses without a declared source/key
+app/tools/classify_rollup.py                # stage 3 of 5 (T7)
 app/tools/cluster_routes.py                 # stage 5 of 5 (T8): verified addresses → drive routes of ≤ ROUTE_MAX_DOORS
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
 alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification · 0009 run-scoped candidate FKs
@@ -54,7 +58,8 @@ infra that predates any feature, and only what 3+ slices need, duplicating until
 ```
 app/
   promotion/       # create Company/Contact, own the `promotion` ledger (T9) — the gateway above is built
-  tools/           # the remaining stage module (T6), one file per PipelineStage — search_registry, classify_rollup and cluster_routes are built
+  sourcing/owner/  # the resolve_owner judgment node (T6, PR B)
+  tools/           # the remaining stage module, resolve_owner (stage 4; T6, PR B) — the other four are built
 ```
 `cadence/` is a domain, not promotion's back half: our HubSpot tier has no sequences (see *Ground rules*), and
 adoption gives it a consumer with nothing to do with sourcing. It depends only on `core/` and the HubSpot
@@ -129,8 +134,9 @@ The cadence is synced **daily by an external launchd job**, not by the weekly ru
 plain enrol command by design — adoption reconstructs, and T9 enrols in code).
 
 Sourcing is run by hand until T10's `POST /runs` (T5): `uv run lpe sourcing run --vertical <slug> [--batch-size N]`
-— ACTIVE manifests only. Without `FMCSA_WEBKEY` it refuses before taking a batch; `--allow-degraded` spends the
-batch without QCMobile evidence, which is never looked up again.
+— ACTIVE manifests only. Without `FMCSA_WEBKEY` it refuses before taking a batch; without a declared Places
+source or `GOOGLE_PLACES_API_KEY`, `verify_business` fails the run and the batch goes back to the pool.
+`--allow-degraded` spends the batch without that evidence, which is never looked up again.
 
 Database-backed tests need a throwaway Postgres and skip without one:
 `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·

@@ -1,0 +1,18 @@
+{
+  "places": [
+    {
+      "id": "ChIJ-acme-closed",
+      "displayName": {
+        "text": "Acme Freight",
+        "languageCode": "en"
+      },
+      "formattedAddress": "2100 Olympic Dr, Arlington, TX 76011, USA",
+      "businessStatus": "CLOSED_PERMANENTLY",
+      "types": [
+        "moving_company",
+        "point_of_interest",
+        "establishment"
+      ]
+    }
+  ]
+}

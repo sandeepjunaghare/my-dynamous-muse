@@ -167,3 +167,19 @@ class PoolRepository:
             currency_cutoff=currency_cutoff.isoformat(),
         )
         return selected
+
+    async def shared_email_domains(self, vertical: str, *, min_businesses: int) -> frozenset[str]:
+        """Email domains that ``min_businesses`` or more distinct entries of the vertical share.
+
+        One grouped query over the stored ``email`` field; it names no domain. A domain a process
+        agent or a franchisor files for many businesses is nobody's own website (T6).
+        """
+        email = func.lower(func.jsonb_extract_path_text(SourcingPool.fields, "email", "value"))
+        domain = func.split_part(email, "@", 2)
+        result = await self._session.execute(
+            select(domain)
+            .where(SourcingPool.vertical == vertical, email.is_not(None))
+            .group_by(domain)
+            .having(func.count(func.distinct(SourcingPool.registry_id)) >= min_businesses)
+        )
+        return frozenset(str(row[0]) for row in result.all() if row[0])

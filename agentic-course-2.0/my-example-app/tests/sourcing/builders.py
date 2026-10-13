@@ -54,9 +54,22 @@ def looked_up[T](value: T) -> ProvenancedValue[T]:
     return sourced(value, SEARCH_RESULT_URL, RetrievalMethod.web_lookup)
 
 
-def place_checked(place_id: str = "ChIJ-acme-logistics") -> ProvenancedValue[PlaceCheck]:
-    """The one thing ``verify_business`` may keep from Google Places: the place ID (D13)."""
-    return sourced(PlaceCheck(place_id=place_id), PLACES_URL, RetrievalMethod.web_lookup)
+ARLINGTON = PostalAddress(
+    street="2100 Olympic Dr", city="Arlington", state="TX", postal_code="76011"
+)
+"""The census address :func:`a_candidate` carries, and the one :func:`place_checked` checks."""
+
+
+def place_checked(
+    place_id: str = "ChIJ-acme-logistics", *, address: PostalAddress = ARLINGTON
+) -> ProvenancedValue[PlaceCheck]:
+    """What ``verify_business`` keeps from Google Places: the place ID, plus the census address
+    it checked (D13; PR #13 L2). Defaults to :func:`a_candidate`'s address."""
+    return sourced(
+        PlaceCheck(place_id=place_id, checked_address=address),
+        PLACES_URL,
+        RetrievalMethod.web_lookup,
+    )
 
 
 def a_brief(vertical: str | None = None) -> SourcingBrief:
@@ -74,14 +87,7 @@ def a_candidate(registry_id: str = "1234567", *, with_phone: bool = True) -> Can
         registry_id=sourced(registry_id),
         legal_name=sourced(f"Acme Logistics {registry_id} LLC"),
         dba_name=sourced("Acme Freight"),
-        address=sourced(
-            PostalAddress(
-                street="2100 Olympic Dr",
-                city="Arlington",
-                state="TX",
-                postal_code="76011",
-            )
-        ),
+        address=sourced(ARLINGTON),
         phone=sourced("+1-817-555-0100", QCMOBILE_URL, RetrievalMethod.registry_api)
         if with_phone
         else None,
@@ -154,7 +160,7 @@ def freight_v3_rules() -> tuple[DisqualifierRule, ...]:
     )  # fmt: skip
 
 
-def _source(name: str, kind: SourceKind, base_url: str) -> ProvenancedValue[ManifestSource]:
+def a_source(name: str, kind: SourceKind, base_url: str) -> ProvenancedValue[ManifestSource]:
     return cited(
         ManifestSource(name=name, kind=kind, description=f"the {name} source", base_url=base_url)
     )
@@ -166,10 +172,10 @@ def a_freight_body(*, revocations_url: str = MOTUS_REVOCATIONS_URL) -> ManifestB
     return base.model_copy(
         update={
             "sources": (
-                _source("fmcsa_company_census", SourceKind.bulk_file, CENSUS_SOURCE_URL),
-                _source("fmcsa_qcmobile", SourceKind.registry_api, QCMOBILE_SOURCE_URL),
-                _source("fmcsa_authority_history", SourceKind.bulk_file, AUTHORITY_HISTORY_URL),
-                _source("fmcsa_revocations", SourceKind.bulk_file, revocations_url),
+                a_source("fmcsa_company_census", SourceKind.bulk_file, CENSUS_SOURCE_URL),
+                a_source("fmcsa_qcmobile", SourceKind.registry_api, QCMOBILE_SOURCE_URL),
+                a_source("fmcsa_authority_history", SourceKind.bulk_file, AUTHORITY_HISTORY_URL),
+                a_source("fmcsa_revocations", SourceKind.bulk_file, revocations_url),
             ),
             "disqualifier_rules": tuple(cited(rule) for rule in freight_v3_rules()),
         }
@@ -182,8 +188,8 @@ def a_fire_body() -> ManifestBody:
     return base.model_copy(
         update={
             "sources": (
-                _source("tx_fire_marshal", SourceKind.registry_api, TX_FIRE_MARSHAL_URL),
-                _source("places", SourceKind.web_lookup, PLACES_SOURCE_URL),
+                a_source("tx_fire_marshal", SourceKind.registry_api, TX_FIRE_MARSHAL_URL),
+                a_source("places", SourceKind.web_lookup, PLACES_SOURCE_URL),
             ),
         }
     )

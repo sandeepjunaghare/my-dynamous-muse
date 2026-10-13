@@ -14,7 +14,7 @@ The runner itself is T5's (``app/sourcing/``). This module only states what a st
 
 import importlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cost import RunCost
 from app.manifests.schemas import ManifestResponse
+from app.sourcing.schemas import PlacesEvidence
 from app.sourcing.stages import PipelineStage
 
 STAGES_PACKAGE = "app.tools"
@@ -38,6 +39,12 @@ class StageContext:
     manifest: ManifestResponse
     session: AsyncSession
     cost: RunCost
+    places: dict[str, PlacesEvidence] = field(default_factory=dict[str, PlacesEvidence])
+    """What Places saw, by ``registry_id``, for the stages after ``verify_business`` (D13 rule 2:
+    use and discard). In memory, created **once per run** by the runner and shared by every stage
+    of that run, so it dies with the run. Never persisted, never logged. The binding is frozen,
+    not the contents. A test-built context gets a fresh, empty one — which is also how a runner
+    that forgot to pass it would silently disconnect the stages, so a test pins that it does."""
 
 
 @dataclass(frozen=True, kw_only=True)

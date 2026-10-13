@@ -180,9 +180,11 @@ class TestProvenanceRoundTrip:
         assert is_promotable(loaded.legal_name) is True
         assert loaded.unprovenanced_fields() == (
             "phone",
+            "email",
             "website",
             "business_check",
             "owner",
+            "headcount_band",
             "priority",
         )
 

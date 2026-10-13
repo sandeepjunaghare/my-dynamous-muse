@@ -15,6 +15,7 @@ from app.manifests.schemas import IcpBand
 from app.shared.provenance import ProvenancedValue, RetrievalMethod, is_promotable
 from app.sourcing.schemas import (
     CandidateFields,
+    HeadcountBand,
     PlaceCheck,
     PostalAddress,
     Principal,
@@ -27,8 +28,11 @@ from app.sourcing.schemas import (
     SourceRecord,
     SourceRow,
     SourcingBrief,
+    has_entity_designator,
+    principal_or_none,
 )
 from tests.sourcing.builders import (
+    ARLINGTON,
     PLACES_URL,
     QCMOBILE_URL,
     a_brief,
@@ -118,9 +122,11 @@ class TestCandidateFields:
         candidate = a_candidate(with_phone=False)
         assert candidate.unprovenanced_fields() == (
             "phone",
+            "email",
             "website",
             "business_check",
             "owner",
+            "headcount_band",
             "priority",
         )
 
@@ -131,9 +137,15 @@ class TestCandidateFields:
             dba_name=sourced("B"),
             address=a_candidate().address,
             phone=sourced("1"),
+            email=sourced("jane@example.com"),
             website=sourced("https://example.com"),
             business_check=place_checked(),
             owner=sourced(Principal(name="Jane Doe")),
+            headcount_band=sourced(
+                HeadcountBand(low=11, high=50),
+                "https://example.com/about",
+                RetrievalMethod.llm_inference,
+            ),
             priority=sourced(
                 PriorityScore(intensity=4, automatable=4),
                 "https://example.com/about",
@@ -197,13 +209,40 @@ class TestBusinessCheck:
 
     def test_a_blank_place_id_is_refused(self) -> None:
         with pytest.raises(ValidationError):
-            PlaceCheck(place_id="  ")
+            PlaceCheck(place_id="  ", checked_address=ARLINGTON)
+
+    def test_a_check_must_say_which_address_it_checked(self) -> None:
+        """A8: a check not tied to an address cannot be told apart from a stale one."""
+        with pytest.raises(ValidationError, match="checked_address"):
+            PlaceCheck.model_validate({"place_id": "ChIJ-x"})
+
+    def test_a_changed_address_un_verifies_the_check(self) -> None:
+        """PR #13 L2: compare values. The business moved, so the check is of somewhere else."""
+        moved = PostalAddress(street="1 Main St", city="Dallas", state="TX", postal_code="75201")
+        checked = a_candidate().model_copy(
+            update={"business_check": place_checked(), "address": sourced(moved)}
+        )
+        assert checked.has_verified_address() is False
+
+    def test_a_refreshed_citation_of_the_same_address_stays_verified(self) -> None:
+        """Every registry refresh bumps ``retrieved_at``; that alone must not un-verify."""
+        refreshed = ProvenancedValue(
+            value=ARLINGTON,
+            source_url="https://data.transportation.gov/d/az4n-8mr2",
+            retrieved_at=sourced("x").retrieved_at.replace(year=2027),
+            retrieval_method=RetrievalMethod.bulk_file,
+        )
+        checked = a_candidate().model_copy(
+            update={"business_check": place_checked(), "address": refreshed}
+        )
+        assert checked.has_verified_address() is True
 
     def test_the_check_survives_the_json_trip(self) -> None:
         checked = a_candidate().model_copy(update={"business_check": place_checked("ChIJ-x")})
         restored = CandidateFields.model_validate(checked.model_dump(mode="json"))
         assert restored.business_check is not None
         assert restored.business_check.value.place_id == "ChIJ-x"
+        assert restored.business_check.value.checked_address == ARLINGTON
         assert restored.business_check.source_url == PLACES_URL
 
     @pytest.mark.parametrize(
@@ -521,3 +560,89 @@ class TestSourceRecords:
     def test_source_records_are_never_reported_as_unprovenanced(self) -> None:
         fields = CandidateFields(registry_id=sourced("usdot:1"))
         assert "source_records" not in fields.unprovenanced_fields()
+
+
+class TestPrincipalOrNone:
+    """PR #31 L1 and M2: one test of "names a citable person", and it never raises."""
+
+    @pytest.mark.parametrize("name", [None, "", "  ", "KZ TRANS INC", "VAB FREIGHT BROKERAGE LLC"])
+    def test_absent_blank_or_refused_names_give_none(self, name: str | None) -> None:
+        assert principal_or_none(name) is None
+
+    def test_a_person_gives_a_principal(self) -> None:
+        principal = principal_or_none("JAMES OEHLKE", "Owner")
+        assert principal == Principal(name="JAMES OEHLKE", title="Owner")
+
+    def test_a_person_and_a_company_in_one_string_is_refused_not_split(self) -> None:
+        """Never guessed apart: the judgment node runs instead."""
+        assert principal_or_none("GUNNER CAPITAL PARTNERS LLC - BRYAN GRIGGS") is None
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("ACME LLC", True),
+            ("Acme, Inc.", True),
+            ("LLOYD INCE", False),
+            ("Vincent Corpus", False),
+        ],
+    )
+    def test_the_designator_helper_is_the_principal_rule(self, name: str, expected: bool) -> None:
+        assert has_entity_designator(name) is expected
+
+
+class TestHeadcountBand:
+    """OQ-3: an inclusive range, as the source stated it; bucketing is T9's mapping."""
+
+    def test_an_inverted_range_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="inverted"):
+            HeadcountBand(low=50, high=11)
+
+    def test_zero_people_is_refused(self) -> None:
+        with pytest.raises(ValidationError):
+            HeadcountBand(low=0, high=5)
+
+    @pytest.mark.parametrize(
+        ("band", "label"),
+        [
+            (HeadcountBand(low=11, high=50), "11-50"),
+            (HeadcountBand(low=50), "50+"),
+            (HeadcountBand(low=12, high=12), "12"),
+        ],
+    )
+    def test_labels(self, band: HeadcountBand, label: str) -> None:
+        assert band.label == label
+
+    def test_an_open_band_survives_the_stored_round_trip(self) -> None:
+        """``to_stored`` drops ``None`` at the top level only; an open ``high`` stays inside."""
+        candidate = a_candidate().model_copy(
+            update={
+                "headcount_band": sourced(
+                    HeadcountBand(low=50),
+                    "https://www.acmefreight.test/about",
+                    RetrievalMethod.llm_inference,
+                )
+            }
+        )
+        restored = CandidateFields.model_validate(candidate.to_stored())
+        assert restored.headcount_band is not None
+        assert restored.headcount_band.value == HeadcountBand(low=50, high=None)
+
+
+class TestTheNewFieldsUnderD13:
+    """The D13 walk covers every field, the new ones included."""
+
+    def test_an_email_cited_to_google_maps_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="D13"):
+            CandidateFields(
+                registry_id=sourced("1234567"),
+                email=sourced("a@acme.test", PLACES_URL, RetrievalMethod.web_lookup),
+            )
+
+    def test_a_headcount_cited_to_google_maps_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="D13"):
+            CandidateFields(
+                registry_id=sourced("1234567"),
+                headcount_band=sourced(
+                    HeadcountBand(low=11, high=50), PLACES_URL, RetrievalMethod.web_lookup
+                ),
+            )

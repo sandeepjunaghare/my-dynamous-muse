@@ -84,6 +84,56 @@ class TestCensusRowMapping:
         assert census_pool_record(row, source="c", retrieved_at=RUN_CLOCK) is None
 
 
+class TestCensusOwnerAndEmail:
+    """A2: the census adapter maps its own officer and email columns; no generic stage does."""
+
+    def _mapped(self, **overrides: str) -> PoolRecord:
+        row = {**census_rows()[0], **overrides}
+        record = census_pool_record(row, source="fmcsa_company_census", retrieved_at=RUN_CLOCK)
+        assert record is not None
+        return record
+
+    def test_a_person_officer_is_the_owner_cited_to_the_row(self) -> None:
+        record = self._mapped()
+        owner = record.fields.owner
+        assert owner is not None
+        assert owner.value.name == "JANE ALPHA"
+        assert owner.retrieval_method is RetrievalMethod.bulk_file
+        assert owner.source_url == (
+            "https://data.transportation.gov/resource/az4n-8mr2.json?dot_number=1000001"
+        )
+        assert record.has_principal is True
+
+    def test_a_company_officer_is_absent_and_logged_without_the_name(self) -> None:
+        """PR #31 L1 and M2: refused, never raised, and has_principal agrees with Principal."""
+        with capture_logs() as logs:
+            record = self._mapped(company_officer_1="VAB FREIGHT BROKERAGE LLC")
+        assert record.fields.owner is None
+        assert record.has_principal is False
+        refused = [log for log in logs if log["event"] == "sourcing.census.officer_refused"]
+        assert len(refused) == 1
+        assert "VAB" not in str(refused[0])
+
+    def test_a_blank_officer_is_neither_owner_nor_logged(self) -> None:
+        with capture_logs() as logs:
+            record = self._mapped(company_officer_1="   ")
+        assert record.fields.owner is None
+        assert record.has_principal is False
+        assert not any(log["event"] == "sourcing.census.officer_refused" for log in logs)
+
+    def test_an_email_is_kept_lowercased_and_stripped(self) -> None:
+        email = self._mapped(email_address=" JOHN@ACME.COM ").fields.email
+        assert email is not None
+        assert email.value == "john@acme.com"
+        assert email.retrieval_method is RetrievalMethod.bulk_file
+
+    @pytest.mark.parametrize(
+        "raw", ["n/a", "@acme.com", "john@", "info@acme.com; ops@acme.com", "a b@acme.com"]
+    )
+    def test_anything_but_one_address_is_no_email(self, raw: str) -> None:
+        assert self._mapped(email_address=raw).fields.email is None
+
+
 class TestCensusPull:
     async def test_the_pull_sends_the_pushdown_and_returns_sorted_records(
         self, source_env: SourceEnv, mock_fmcsa: MockFmcsa

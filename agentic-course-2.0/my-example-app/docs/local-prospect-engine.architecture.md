@@ -159,12 +159,15 @@ That keeps M4 honest — there is no shadow CRM — while giving the system a me
   1. **Look up within the run, never ahead of it.** Only the current batch, while it is being processed. Nothing
      is fetched for later (no pre-fetch).
   2. **Use and discard.** The response feeds the judgment call in the same run and is dropped. We keep only the
-     **place ID** and our own verdict on the census record.
+     **place ID** and the census address it checked (ours, not Places content), so a later address change
+     un-verifies the check (T6: `PlaceCheck(place_id, checked_address)`; the values are compared).
   3. **Places never discovers prospects.** Candidates come from a registry the manifest names, for every
      vertical. Text Search used to *find* businesses and save them is an index.
 
   The fields a person reads come from sources we may keep. **Address and phone come from the census** (phone is
-  present for 97%). **Website** comes from the census email domain (67%) or a web search. **Coordinates for
+  present for 97%). **Website** comes from a free homepage fetch of the census email domain: measured 2026-10-11,
+only **24%** of DFW brokers carry a business-domain email (67% carry an email, but most are free-mail), and
+`classify_rollup`'s existing call may report the homepage it fetched (OQ-1, T6 PR B). **Coordinates for
   routing** come from the **US Census Geocoder** (free, public domain). The review-name owner signal is dropped
   (reviews are named in the ban), and census `company_officer_1` covers 67%.
   **Price:** businessStatus, name and address are the **Pro** tier ($32 per 1,000, 5,000 free a month). Phone and

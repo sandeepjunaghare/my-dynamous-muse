@@ -17,6 +17,10 @@ Shapes, read live 2026-10-10:
 * census JSON states every value as a string and **omits empty fields**; ``dot_number`` is typed
   ``number`` but arrives as ``"7989"``; dates are ``YYYYMMDD``; ``power_units`` and the other fleet
   counts are text and are cast here (T5 ticket: "cast them at the adapter").
+* census ``company_officer_1`` is one free-text string; a person there becomes the candidate's
+  ``owner`` (cited ``bulk_file``), and a company there (``VAB FREIGHT BROKERAGE LLC``) is refused by
+  ``principal_or_none`` and counts as absent (T6, A2). ``email_address`` becomes ``email``,
+  lowercased, when it is one address. The registry stage only *fills* ``owner``; it owns ``email``.
 * Motus ``usdot_number`` is unpadded (``"1006607"``); rows repeat, and some lack a docket.
 * QCMobile ``/carriers/{dot}`` says ``allowedToOperate`` (``"Y"``/``"N"``), not the docs'
   ``allowToOperate``; ``isPassengerCarrier`` is ``"N"``, not a boolean. An unknown USDOT is a 200
@@ -44,6 +48,7 @@ from app.sourcing.schemas import (
     SourceRecord,
     SourceRow,
     SourceValue,
+    principal_or_none,
 )
 from app.sourcing.sources import http
 from app.sourcing.sources.base import (
@@ -155,6 +160,21 @@ def _text(row: Mapping[str, str], key: str) -> str | None:
     return stripped or None
 
 
+def _email(raw: str | None) -> str | None:
+    """One email address, stripped and lowercased, or ``None``.
+
+    Exactly one ``@`` with text on both sides: ``"n/a"`` is no address, and
+    ``"info@acme.com; ops@acme.com"`` is two, which is not ours to pick between.
+    """
+    if raw is None:
+        return None
+    email = raw.strip().lower()
+    local, at, domain = email.partition("@")
+    if not at or not local or not domain or "@" in domain or any(c.isspace() for c in email):
+        return None
+    return email
+
+
 def _yyyymmdd(raw: str | None) -> date | None:
     """A census ``YYYYMMDD`` date, or ``None`` when absent or unreadable — never a guess."""
     if raw is None:
@@ -209,12 +229,20 @@ def census_pool_record(
         if street and city and state and postal
         else None
     )
+    raw_officer = _text(row, "company_officer_1")
+    officer = principal_or_none(raw_officer)
+    if raw_officer is not None and officer is None:
+        # Never the name: a refused officer string can still hold a person's name.
+        logger.info("sourcing.census.officer_refused", dot_number=dot)
+    email = _email(_text(row, "email_address"))
     fields = CandidateFields(
         registry_id=cite(f"{NAMESPACE}:{dot}"),
         legal_name=cite(legal_name) if legal_name else None,
         dba_name=cite(dba_name) if dba_name else None,
         address=cite(address) if address else None,
         phone=cite(phone) if phone else None,
+        email=cite(email) if email else None,
+        owner=cite(officer) if officer else None,
         source_records=(
             cite(SourceRecord(source=source, rows=(census_source_row(row, dot=dot),))),
         ),
@@ -224,7 +252,7 @@ def census_pool_record(
         native_id=dot,
         fields=fields,
         currency_date=_yyyymmdd(row.get("mcs150_date")),
-        has_principal=_text(row, "company_officer_1") is not None,
+        has_principal=officer is not None,
     )
 
 
