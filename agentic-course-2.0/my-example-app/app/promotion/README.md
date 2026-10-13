@@ -1,8 +1,10 @@
-# `app/promotion/` — the HubSpot gateway
+# `app/promotion/` — the HubSpot gateway, and promotion
 
-The one place this service talks to HubSpot. **T3 ships the gateway and no caller**: the promotion
-slice proper (T9 — the write-gate in anger, Company/Contact create, the `promotion` ledger) and the
-cadence slice (T11) are what use it.
+The one place this service talks to HubSpot. T3 built the gateway (`client.py`, `dedupe.py`,
+`properties.py`); T9 built promotion on it — a finished run's qualified candidates become a
+Company + Contact at `pending review`, and the founder's decision is read back and handed to the
+cadence (`service.py`, the `promotion` ledger, `lpe promotion`). The cadence slice (T11) is the
+gateway's other caller.
 
 ## The write-gate
 
@@ -20,7 +22,15 @@ nothing is serialized until the whole mapping has passed — no partial payload 
 22 hand-typed prospects already in the portal; they carry no citable fields at all, and a gate
 applied to `create_task` would refuse the ticket that exists to rescue them. A test asserts it.
 
-## The five custom properties
+**Engine metadata is the other carve-out** (T9, OQ6-A). Four properties are not claims about the
+prospect but facts about our process, with no honest URL to cite: `lpe_vertical`,
+`lpe_review_status`, `lpe_route_cluster` and `hubspot_owner_id`. They travel in `RecordMeta`, a
+closed, typed model of exactly those four (a test pins the set), rendered **after** the prospect
+fields have passed the gate and merged into the same body; a key claimed by both halves is refused
+before any request. `lpe_priority_score` is not metadata — it is a judgment about the business, and
+goes through the gate with its `llm_inference` citation.
+
+## The six custom properties
 
 | Internal name | Type / fieldType | COMPANY | CONTACT |
 |---|---|---|---|
@@ -29,10 +39,18 @@ applied to `create_task` would refuse the ticket that exists to rescue them. A t
 | `lpe_vertical` | `string` / `text` | ✅ | ✅ |
 | `lpe_priority_score` | `number` / `number` | ✅ | — |
 | `lpe_route_cluster` | `string` / `text` | ✅ | — |
+| `lpe_review_status` | `enumeration` / `select` | ✅ | — |
 
-Scoring and routing describe a business; provenance describes a record, and E18 is a *contact*-
+Scoring, routing and review describe a business; provenance describes a record, and E18 is a *contact*-
 quality finding. There is no `datetime` fieldType in HubSpot — the type is `datetime`, the
 fieldType is `date`.
+
+`lpe_review_status` (T9, OQ2-A) **is** an enumeration — `pending_review` · `accepted` · `rejected`
+— because its values are a closed workflow, not data, and a select is what lets the founder filter
+and bulk-edit the company list view. No "pending review" stage existed in the portal, and
+`hs_lead_status` is the founders' own (10 contacts carry it), so reusing it would read their status
+changes as review decisions. Options a human adds later are not drift: nothing PATCHes options.
+It is created by the first real `lpe promotion promote`, which runs `ensure_properties` first.
 
 `lpe_vertical` is a **string, not an enumeration.** An enum reads better in the HubSpot UI, but it
 would make vertical #3 a property migration — exactly the coupling "vertical is data, not code"
@@ -42,7 +60,7 @@ Property internal names are **permanent** in HubSpot; there is no rename. The `l
 our fields unmistakably ours in a portal holding 3,118 contacts of mixed provenance.
 
 `ensure_properties()` is read-then-create and safe on every deploy: a second pass issues zero
-writes and logs eight `property_present` events. It never PATCHes — a human may have edited a
+writes and logs nine `property_present` events. It never PATCHes — a human may have edited a
 label, and a property whose type has drifted is logged (`property_drifted`) and left alone.
 
 ## The API version
@@ -80,7 +98,79 @@ reads one. The 429 body is also shaped differently from every other error: `erro
 
 HubSpot's search index lags writes by "a few moments", with no published SLA. Two candidates in the
 same run that resolve to the same company will both miss and both create. The protection against
-that is **T9's `promotion` ledger**, not this module.
+that is the `promotion` ledger (below), not `dedupe.py`.
+
+## Promotion (T9)
+
+```
+lpe promotion promote --run <id> [--dry-run]
+  run completed or degraded? ──no──▶ RunNotPromotableError (a failed run is re-batched)
+  resume the vertical's pending_create rows (recovery, below)
+  per candidate, in registry-id order:
+    eligible? ──no──▶ counted by reason; nothing written, no ledger row
+    in the ledger already (any run, any status)? ──yes──▶ already_promoted
+    both payloads through the gate ──fail──▶ failed (no orphan company)
+    claim the ledger row (pending_create, with company_key + dedupe keys) ── commit
+    same phone/domain as another ledger row? ──yes──▶ duplicate (duplicate_in_ledger)
+    already in HubSpot (domain, then phone)? ──yes──▶ duplicate (duplicate_in_hubspot); nothing written to it
+    create company ── commit its id ── create contact (inline primary association) ── pending_review ── commit
+```
+
+- **Eligible** (`eligibility.py`) means the six required fields are cited — `registry_id`,
+  `legal_name`, `address`, `phone`, `business_check`, `owner` — and the candidate is **qualified
+  under OQ1-D**: not suppressed (no `disqualification` for its `(vertical, registry_id)`) and not a
+  cited-*dead* score. **An unscored candidate is promotable** (absent is not bad; the founder judges
+  it at review — confirmed 2026-10-13). Reasons are checked in a fixed order: `disqualified`, then
+  missing fields (`no_principal` when the owner is the only gap), then `dead_score`.
+- **The ledger** (`models.py`) is a state machine, one row per `(vertical, registry_id)`:
+  `pending_create → pending_review → enrolling → enrolled`, terminal `rejected`, `duplicate`,
+  `withdrawn`. Its unique key is what makes a re-run, or next week's run, promote nothing twice.
+- **Mapping** (`mapping.py`): every property carries its source field's citation unchanged — the
+  address split into four, the owner's name into two. `lpe_source_url` / `lpe_sourced_at` are
+  **derived** from the registry citation (company) and the owner citation (contact). The contact
+  gets **no email and no phone**: both census values are the business's. `dba_name` and the
+  headcount band are not written.
+- **Recovery.** The intent is committed before every create, so an interrupted pass is resumed, not
+  repeated. A row with a company id but no contact: walk the company's contacts (associated in the
+  same request, so no lag) and adopt ours by `lpe_source_url` + `lastname`, else create it. A row
+  with no company id: only once it is **10 minutes** old (past the search lag), search companies by
+  `lpe_source_url`; found → adopt, not found → dedupe and create. Younger → `recovery_deferred`.
+  A create is never retried in process.
+- **A bad token or the daily quota stops the pass**; any other HubSpot failure is counted and the
+  next candidate goes on.
+- **A dry run** makes the same reads (portal dedupe included) and the same in-run ledger dedupe, in
+  memory, and writes nothing — no ledger row, no record, no property provisioning.
+
+**The first write to a record that already existed** has not happened yet: under OQ5-A a duplicate
+is flagged and nothing is written to it. Whoever builds enrichment (OQ5-B) must stamp what they
+write onto a pre-existing record as `manual_hubspot_entry` — source the record's URL, retrieved at
+its `createdate` — never as if we had sourced it.
+
+## Review (T9)
+
+`lpe promotion sync [--dry-run]` reads each `pending_review` company's `lpe_review_status`:
+
+| Founder set | The sync | Ledger |
+|---|---|---|
+| `accepted` | `CadenceService.enrol(contact, company=…)` — the cadence creates the first task | `enrolling` → `enrolled` |
+| `rejected` | nothing in HubSpot | `rejected` |
+| *(company deleted or archived)* | nothing | `withdrawn` |
+| `pending_review`, blank | nothing | waiting |
+| anything else | warned about (someone added an option) | waiting |
+
+Promotion never creates a task itself; its job ends at the hand-off. A row left `enrolling` by a
+crash is retried first on the next sync — `enrol` reuses a task that carries its key. A contact
+already in the cadence counts as enrolled. **Run it daily from the 07:00 launchd job, before
+`lpe cadence sync`** (a human edit of the plist).
+
+## Names (OQ4-A)
+
+`names.py` splits the census `company_officer_1` string: the first word is `firstname`, everything
+after it is `lastname`, a single-letter initial stays with the first name and a trailing JR/SR/II
+with the last. **Case is never changed** and nothing is dropped. Three or more full words —
+a middle name, a compound surname, a glued title — are ambiguous: split the same way, **flagged**
+in the CLI and counted `name_ambiguous`, for the founder to fix at review. Measured on 3,000 census
+values: 73.5% split confidently, 26.5% are ambiguous, 1 is a single word.
 
 ## Deliberately absent
 

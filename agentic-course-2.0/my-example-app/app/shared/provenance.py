@@ -182,7 +182,9 @@ def is_promotable[T](value: ProvenancedValue[T] | None) -> bool:
     **The gate governs prospect field writes, not task creation.** A candidate with zero citable
     fields still gets its cadence tasks — T13 adopts exactly such records, and a gate that refused
     them would refuse the 22 prospects the whole adoption ticket exists to rescue. What the gate
-    refuses is writing a *prospect field* nobody can cite.
+    refuses is writing a *prospect field* nobody can cite. Engine metadata — which vertical, the
+    review status, the route label, the owner — is not a prospect field either, and travels beside
+    the gated fields in the closed ``RecordMeta`` (T9, OQ6-A).
 
     The predicate is deliberately thin: by the time a ``ProvenancedValue`` exists, construction has
     already enforced that its source, timestamp and method are present and well-formed. All that is

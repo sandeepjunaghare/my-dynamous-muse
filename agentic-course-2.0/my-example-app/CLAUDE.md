@@ -18,9 +18,9 @@ place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
 **Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), T13 from Wave 4, T5, T7 and T8 from Wave 5, and
-the first half of Wave 6's T6 (`verify_business`): the service boots, validates clean, the provenance primitive
-exists, and seven slices are built — `manifests/` with its authoring agent and dry-run gate, the gateway half of
-`promotion/`, `sourcing/` with the pipeline runner, backlog, FMCSA and Places adapters and the website check,
+the first half of Wave 6's T6 (`verify_business`), and T9: the service boots, validates clean, the provenance
+primitive exists, and seven slices are built — `manifests/` with its authoring agent and dry-run gate,
+`promotion/` (the gateway, the `promotion` ledger, promote and review sync), `sourcing/` with the pipeline runner, backlog, FMCSA and Places adapters and the website check,
 the `cadence/` state machine with adoption, `qualification/` with the `classify_rollup` stage, and `routing/`
 with its stage, `cluster_routes`.
 ```
@@ -30,6 +30,7 @@ app/shared/provenance.py                    # ProvenancedValue[T] + is_promotabl
 app/shared/{page_reads,agent_reads}.py      # which pages an Agent SDK run verifiably read (fail-closed) — T12, T7, T6
 app/manifests/                              # vertical_manifest DRAFT→ACTIVE, the terms gate, read-only routes, the CLI, the authoring agent (T12)
 app/promotion/                              # the HubSpot gateway: client, dedupe, idempotent custom properties, task/activity reads
+app/promotion/service.py                    # T9: run → Company + Contact at pending_review (the ledger, dedupe, recovery); review → CadenceService.enrol
 app/sourcing/                               # sourcing_run + candidate (field-level provenance, one owner per field), the pipeline runner, the sourcing_pool backlog, `lpe sourcing run`
 app/sourcing/sources/                       # adapters bound by base_url: FMCSA census (discovery; also fills owner + email) · QCMobile (lookup) · Motus revocations (join); SoQL pushdown
 app/sourcing/sources/google_places.py       # the Places Text Search check (Pro fields only), the deterministic matcher, binding by declared source — never a source (D13)
@@ -43,7 +44,7 @@ app/tools/verify_business.py                # stage 2 of 5 (T6): website from th
 app/tools/classify_rollup.py                # stage 3 of 5 (T7)
 app/tools/cluster_routes.py                 # stage 5 of 5 (T8): verified addresses → drive routes of ≤ ROUTE_MAX_DOORS
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
-alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification · 0009 run-scoped candidate FKs
+alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification · 0009 run-scoped candidate FKs · 0010 promotion
 tests/                                      # mirrors app/, plus the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
@@ -57,7 +58,6 @@ each one lands. `core/` and `shared/` above are their built counterparts — the
 infra that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
 ```
 app/
-  promotion/       # create Company/Contact, own the `promotion` ledger (T9) — the gateway above is built
   sourcing/owner/  # the resolve_owner judgment node (T6, PR B)
   tools/           # the remaining stage module, resolve_owner (stage 4; T6, PR B) — the other four are built
 ```
@@ -69,8 +69,10 @@ client, so it builds in parallel with the whole sourcing line.
 - **Provenance is a write-gate.** Every prospect field carries source URL, retrieval timestamp and method;
   a field without provenance cannot be written to HubSpot (E18 → M6/M8). **The gate governs prospect field
   writes, not task creation** — otherwise adopting the 22 existing hand-typed prospects would be refused
-  outright. Adopted records get honest provenance (`retrieval_method = "manual_hubspot_entry"`), not an
-  exemption: marking data unverifiable is as much the primitive's job as certifying it.
+  outright. **Engine metadata is the other carve-out** (T9, OQ6-A): vertical, review status, route label and
+  owner travel in the closed, typed `RecordMeta`, merged after the prospect fields pass. Adopted records get
+  honest provenance (`retrieval_method = "manual_hubspot_entry"`), not an exemption: marking data unverifiable
+  is as much the primitive's job as certifying it.
 - **Google Places is a check, never a source** (D13, its terms forbid storage). Look up only within the run;
   use the response and discard it; keep only the place ID. Places never discovers prospects. Stored address
   and phone come from the registry, and coordinates from the US Census Geocoder.
@@ -137,6 +139,12 @@ Sourcing is run by hand until T10's `POST /runs` (T5): `uv run lpe sourcing run 
 — ACTIVE manifests only. Without `FMCSA_WEBKEY` it refuses before taking a batch; without a declared Places
 source or `GOOGLE_PLACES_API_KEY`, `verify_business` fails the run and the batch goes back to the pool.
 `--allow-degraded` spends the batch without that evidence, which is never looked up again.
+
+Promotion is run by hand until T10 calls it after the stages (T9): `uv run lpe promotion promote --run <id> [--dry-run]`
+— completed or degraded runs only; creates each qualified, fully cited candidate as a Company + Contact at
+`lpe_review_status = pending_review` (unscored is allowed, a cited-dead score is not), and provisions the custom
+properties first. The founder accepts or rejects in HubSpot; `uv run lpe promotion sync [--dry-run]` reads the
+decisions back and enrols accepted contacts in the cadence. Run it daily in the launchd job, before `lpe cadence sync`.
 
 Database-backed tests need a throwaway Postgres and skip without one:
 `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·

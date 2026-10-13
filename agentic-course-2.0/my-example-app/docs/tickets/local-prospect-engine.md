@@ -337,9 +337,29 @@ hand today") · PRD §6 step 5.
   T9 maps `HeadcountBand` (an inclusive range, `high=None` for "50+") to HubSpot and decides whether `email` is
   written. The census officer now arrives as `owner` from stage 1 (`bulk_file`).
 
+**Built (2026-10-12/13, `feat/t9-promotion`).** `lpe promotion promote --run <id> [--dry-run]` and
+`lpe promotion sync [--dry-run]`; the `promotion` ledger (`0010_promotion`, applied to dev 2026-10-13). The
+plan's eight open questions went to their recommendations (`.claude/plans/t9-promotion.md`):
+- **Qualified = OQ1-D:** not suppressed and not a cited-dead score. **Unscored candidates are promotable**
+  (re-confirmed 2026-10-13, after both live runs scored almost nothing).
+- **`pending review` = a new COMPANY enumeration `lpe_review_status`** (OQ2-A), created by the first real
+  `promote`; **acceptance is the founder setting it** and `promotion sync` reading it back (OQ3-A), then
+  `CadenceService.enrol`. Rejected is recorded and left alone.
+- Names split first word / rest, case kept, ambiguous ones flagged (OQ4-A). A dedupe hit is flagged
+  `duplicate` and nothing is written to the match (OQ5-A), so the `manual_hubspot_entry` rule above still
+  has no write to act on. Engine metadata passes in the closed `RecordMeta` (OQ6-A). CLI only, `routes.py`
+  dropped (OQ7). `cluster_routes` leaves disqualified candidates off routes (OQ8-B).
+- **From the T6 handover:** `email` is **not written** — the census email is the business's stated address,
+  and writing it on the person would claim it is theirs (the plan's "no contact email or phone"). The
+  headcount band is **not mapped yet**: its HubSpot shape is a follow-up, not designed.
+- **Human steps left:** a live `promote --dry-run`, then the first real `promote` (creates the properties),
+  accept/reject in HubSpot, `sync`, and `lpe promotion sync` added to the 07:00 launchd job before
+  `lpe cadence sync`.
+
 **Per-ticket context:** `.claude/references/hubspot-integration.md` · architecture → *Review surface: HubSpot,
 no frontend* · M4/M8.
-**Files:** `app/promotion/{service,gate,models,repository,routes}.py`, `alembic/versions/`, `tests/promotion/`
+**Files:** `app/promotion/{service,eligibility,mapping,names,models,repository,cli}.py` (no `gate.py` — the gate
+stays `to_property_payload`; no `routes.py`, OQ7), `alembic/versions/0010_promotion.py`, `tests/promotion/`
 **Size:** ~900–1200 lines · **Depends on:** T3, T7, T8
 
 ---
@@ -407,6 +427,11 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
 - **M3 renders `not configured`, never `0`** — the `$999 assessment` pipeline does not exist and we have decided not to create it (D10, GATE-A). An uninstrumented zero and a real zero are different facts.
 - Failure semantics: a degraded enrichment run still promotes what it can cite, and says what it dropped.
 - **Routes after qualification** *(handed over from T8, 2026-10-10)*. `cluster_routes` routes every verified address, disqualified or not. Before routes reach a founder, decide and build one: run `cluster_routes` after qualification over qualified candidates only, or re-run it once qualification is done. The stage replaces its rows, so a re-run is cheap. Geocodes that failed already finish the run `degraded` with a count; the Friday report should surface that, not hide it.
+- **Promotion is `PromotionService.promote_run(run_id)` after the five stages** *(T9, 2026-10-13)* — not a
+  stage; it runs on a finished run (completed or degraded) and is idempotent through the ledger. Import it as
+  `app.promotion.service`, never from the package. The Friday report reads accept/reject (M6) from the
+  `promotion` ledger. Routes already exclude disqualified candidates (T9, OQ8-B); re-routing if qualification
+  changes after stage 5 stays here.
 - **Before the first real run (Spike 1 checkpoint, 2026-10-09):** read M5 on the T13-adopted prospects. If touches still are not getting done with the machine running, fix that before the run adds volume. This is a human check, not a code gate.
 
 **Per-ticket context:** PRD §6 steps 1–8 · M7 · architecture → *Scheduling: boring on purpose*, *Cost* ·

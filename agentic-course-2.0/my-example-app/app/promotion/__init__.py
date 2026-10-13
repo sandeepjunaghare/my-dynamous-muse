@@ -1,7 +1,10 @@
-"""The HubSpot gateway — the only place this service talks to the portal.
+"""The HubSpot gateway — the only place this service talks to the portal — and promotion.
 
-T3 ships the gateway and no caller. The promotion slice proper (T9: the write-gate in anger,
-Company/Contact create, the ``promotion`` ledger) and the cadence slice (T11) are what use it.
+T3 built the gateway; T9 built promotion on it (``service.py``: a finished run's qualified
+candidates → Company + Contact at ``pending_review``, and the founder's decision → the cadence).
+The cadence slice (T11) is the gateway's other caller. ``PromotionService`` is deliberately **not**
+exported here: ``app.cadence.service`` imports this package, and promotion imports the cadence, so
+an export would be a circular import. Import it as ``app.promotion.service``.
 
 The public surface:
 
