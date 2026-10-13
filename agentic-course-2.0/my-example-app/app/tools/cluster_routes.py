@@ -6,7 +6,7 @@ it writes only ``route_assignment``. The work is ``app/routing/``; this module i
 finds it.
 
 **Routes carry only survivors** (T9, OQ8-B). Qualification runs before this stage — the free
-predicates in stage 1, the judgment node in stage 4 — so by now every disqualification of the run is
+predicates in stage 1, the judgment node in stage 3 — so by now every disqualification of the run is
 recorded. This module reads them and hands them to routing as ``exclude``, which keeps ``routing/``
 from importing ``qualification/``.
 """
