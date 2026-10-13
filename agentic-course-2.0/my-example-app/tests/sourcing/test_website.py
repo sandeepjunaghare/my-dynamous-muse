@@ -110,6 +110,16 @@ class TestHomepageChecker:
         assert cited is not None
         assert cited.value == "https://www.acme.test"
 
+    async def test_a_unicode_domain_is_fetched_and_cited_in_its_punycode_form(self) -> None:
+        """PR #32 round-3 L3: the census may state `bücher.de`; httpx IDNA-encodes it, and the
+        origin and the citation agree on the encoded host."""
+        web = MockWeb()
+        web.html("https://xn--bcher-kva.de/")
+        cited = await _check(web, domain="bücher.de")
+        assert cited is not None
+        assert cited.value == "https://xn--bcher-kva.de"
+        assert cited.source_url == "https://xn--bcher-kva.de/"
+
     async def test_a_punycode_domain_is_its_own_host(self) -> None:
         """PR #32 round-2 L2: httpx decodes `xn--` hosts for `.host`, so compare the raw host."""
         web = MockWeb()
@@ -136,9 +146,12 @@ class TestHomepageChecker:
         assert len(_reasons(logs)) == 1
 
     async def test_a_domain_that_does_not_parse_is_none_and_never_raises(self) -> None:
+        """httpx percent-encodes the host rather than raising, so it is refused before a request."""
+        web = MockWeb()
         with capture_logs() as logs:
-            assert await _check(MockWeb(), domain="acme[.test") is None
-        assert len(_reasons(logs)) == 1
+            assert await _check(web, domain="acme[.test") is None
+        assert _reasons(logs) == ["bad_url"]
+        assert not web.requests
 
     async def test_an_invalid_url_from_httpx_is_none_and_never_raises(self) -> None:
         """PR #32 H1: `httpx.InvalidURL` is no `HTTPError`, so it needs catching on its own."""

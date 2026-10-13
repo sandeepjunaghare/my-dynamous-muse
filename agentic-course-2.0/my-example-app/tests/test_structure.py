@@ -277,7 +277,14 @@ billed at the higher rate for the whole request, and content D13 forbids storing
 
 def _imports_from(tree: ast.AST, module: str, *, package: str) -> bool:
     """Whether ``tree``, a module in ``package``, imports ``module`` in any spelling: ``import m``,
-    ``from m import x``, ``from parent import m``, or any of those relative (PR #32 round-2 M2)."""
+    ``from m import x``, ``from parent import m``, ``from parent import *``, or any of those
+    relative (PR #32 round-2 M2, round-3 L1).
+
+    Known limit: an import of a package followed by attribute access (``from app.sourcing import
+    sources``, then ``sources.google_places``) is not seen. Nothing in ``app/`` reaches an
+    adapter that way; a test pins the limit so widening the matcher is a visible change.
+    """
+    parent = module.rpartition(".")[0]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             if any(alias.name == module for alias in node.names):
@@ -287,6 +294,9 @@ def _imports_from(tree: ast.AST, module: str, *, package: str) -> bool:
             base = parts[: len(parts) - node.level + 1] if node.level else []
             source = ".".join([*base, *([node.module] if node.module else [])])
             if source == module or any(f"{source}.{alias.name}" == module for alias in node.names):
+                return True
+            # `google_places` has no `__all__`, so a star import of its package exposes it.
+            if source == parent and any(alias.name == "*" for alias in node.names):
                 return True
     return False
 
@@ -313,6 +323,8 @@ class TestImportsFrom:
             ("from . import google_places", "app.sourcing.sources"),
             ("from .sources import google_places", "app.sourcing"),
             ("from ..sources.google_places import PlaceResult", "app.sourcing.channel"),
+            ("from app.sourcing.sources import *", "app.tools"),
+            ("from . import *", "app.sourcing.sources"),
         ],
     )
     def test_every_spelling_of_the_import_is_seen(self, source: str, package: str) -> None:
@@ -325,10 +337,16 @@ class TestImportsFrom:
             ("from app.sourcing.sources.google_places_extra import x", "app.tools"),
             ("from . import google_places", "app.tools"),
             ("import app.sourcing.sources", "app.tools"),
+            ("from app.sourcing import *", "app.tools"),
         ],
     )
     def test_a_neighbouring_import_is_not_the_adapter(self, source: str, package: str) -> None:
         assert not _imports_from(ast.parse(source), self.PLACES, package=package)
+
+    def test_attribute_access_through_a_package_is_a_known_limit(self) -> None:
+        """Round-3 L1: pinned, not fixed. If the matcher learns this, flip the assertion."""
+        source = "from app.sourcing import sources\nsources.google_places.PlaceResult"
+        assert not _imports_from(ast.parse(source), self.PLACES, package="app.tools")
 
 
 class TestPlacesIsACheckNeverASource:

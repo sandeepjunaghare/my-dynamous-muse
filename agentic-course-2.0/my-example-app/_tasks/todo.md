@@ -1568,3 +1568,16 @@ clean. Each new test failed first.
 on both sides. Fixed by refusing a `%` in the host as `bad_url` before any request.
 **Improve:** a fence that compares two values httpx built can't catch anything httpx normalises. Check the
 input's own shape first.
+
+## PR #32 round-3 review and its Lows (2026-10-12)
+
+Round 3 approved `ec7ccb2`: no Critical, High or Medium findings. The reviewer could only read code, so the httpx
+behaviour it relied on was run on the PR head and held.
+
+- [x] L1: the import guard catches `from <adapter's package> import *` (the adapter has no `__all__`). Attribute
+  access through a package is a documented limit, pinned by a test.
+- [x] L2: the malformed-domain test asserts `bad_url` and that nothing was requested.
+- [x] L3: a Unicode census domain (`bücher.de`) is fetched and cited in its punycode form, now tested.
+
+**Review:** 1,309 passed, 2 skipped (DB tier on 5436); all checks clean. The star-import cases fail with the new
+condition disabled.
