@@ -99,3 +99,18 @@ class SourceUnavailableError(SourcingError):
     def __init__(self, message: str, *, reasons: tuple[str, ...]) -> None:
         super().__init__(message)
         self.reasons = reasons
+
+
+class OwnerJudgmentError(SourcingError):
+    """The ``resolve_owner`` node's run did not produce a usable answer.
+
+    The SDK failed to start, the run ended on a cap or an error, or the result carried no valid
+    structured answer. Nothing is recorded for the candidate. 502: an upstream dependency failed.
+    """
+
+    default_code: ClassVar[str] = "owner_judgment_failed"
+    status_code: ClassVar[int] = 502
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
