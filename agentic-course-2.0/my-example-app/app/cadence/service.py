@@ -378,7 +378,7 @@ class CadenceService:
                         report,
                         contact_id,
                         "invalid_hubspot_response",
-                        f"HubSpot answered a body that failed validation ({exc.title}, "
+                        f"a value read from HubSpot failed validation here ({exc.title}, "
                         f"{exc.error_count()} error(s))",
                     )
                     continue

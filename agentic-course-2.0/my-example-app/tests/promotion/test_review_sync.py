@@ -4,6 +4,8 @@ The enrolment is T11's ``CadenceService.enrol``, run for real against the same f
 hand-off is tested end to end: one task, on the right contact and company, and a cadence row.
 """
 
+from collections.abc import Awaitable, Callable
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +15,13 @@ from app.cadence.repository import CadenceRepository
 from app.cadence.service import CadenceService
 from app.promotion.client import HubSpotClient
 from app.promotion.models import Promotion
-from app.promotion.schemas import PromotedProspect, ReviewOutcome, ReviewSyncReport
+from app.promotion.repository import PromotionRepository
+from app.promotion.schemas import (
+    PromotedProspect,
+    PromotionStatus,
+    ReviewOutcome,
+    ReviewSyncReport,
+)
 from app.promotion.service import PromotionService
 from tests.cadence.conftest import FakeClock, raced_by_another_run
 from tests.conftest import requires_db
@@ -55,6 +63,19 @@ async def _status(session: AsyncSession, registry_id: str) -> str:
 
 def _nonzero(report: ReviewSyncReport) -> dict[str, int]:
     return {name: count for name, count in report.counts.items() if count}
+
+
+def _losing_rejections[**P](
+    real: Callable[P, Awaitable[Promotion | None]],
+) -> Callable[P, Awaitable[Promotion | None]]:
+    """Wrap ``PromotionRepository.transition`` so a move to ``rejected`` loses its race."""
+
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> Promotion | None:
+        if kwargs.get("to_status") is PromotionStatus.rejected:
+            return None
+        return await real(*args, **kwargs)
+
+    return wrapper
 
 
 class TestAccepted:
@@ -227,6 +248,25 @@ class TestOtherDecisions:
         assert crm.writes() == writes
         assert await _status(db_session, prospect.registry_id) == "rejected"
 
+    async def test_a_rejection_another_sync_recorded_first_is_not_reported_twice(
+        self,
+        db_session: AsyncSession,
+        promotion: PromotionService,
+        crm: FakeCrm,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The compare-and-set decides who reports a decision (PR #33 round-2 L3)."""
+        (prospect,) = await _promoted(db_session, promotion)
+        crm.set_review_status(_ids(prospect)[0], "rejected")
+        monkeypatch.setattr(
+            PromotionRepository, "transition", _losing_rejections(PromotionRepository.transition)
+        )
+
+        report = await promotion.sync_reviews()
+
+        assert _nonzero(report) == {"read": 1}
+        assert report.decisions == ()
+
     async def test_pending_review_is_waiting(
         self, db_session: AsyncSession, promotion: PromotionService
     ) -> None:
@@ -298,3 +338,25 @@ class TestDryRun:
         real = await promotion.sync_reviews()
         assert dry.counts == real.counts
         assert [d.outcome for d in dry.decisions] == [d.outcome for d in real.decisions]
+
+    async def test_a_dry_run_follows_retried_enrolments_as_the_real_sync_does(
+        self, db_session: AsyncSession, promotion: PromotionService, crm: FakeCrm
+    ) -> None:
+        """Rows left ``enrolling`` take the same branches dry and real (PR #33 round-2 L4)."""
+        rejected, cleared = await _promoted(db_session, promotion, count=2)
+        for prospect in (rejected, cleared):
+            crm.set_review_status(_ids(prospect)[0], "accepted")
+        crm.fail_creates = 2
+        await promotion.sync_reviews()
+        crm.set_review_status(_ids(rejected)[0], "rejected")
+        crm.set_review_status(_ids(cleared)[0], None)
+
+        dry = await promotion.sync_reviews(dry_run=True)
+
+        for prospect in (rejected, cleared):
+            assert await _status(db_session, prospect.registry_id) == "enrolling"
+        real = await promotion.sync_reviews()
+        assert _nonzero(real) == {"read": 2, "rejected": 1, "waiting": 1}
+        assert dry.counts == real.counts
+        assert [d.outcome for d in dry.decisions] == [d.outcome for d in real.decisions]
+        assert crm.tasks == {}

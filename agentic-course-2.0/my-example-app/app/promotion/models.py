@@ -105,7 +105,12 @@ class Promotion(Base):
         DateTime(timezone=True), nullable=False, server_default=sql_func.now()
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    """When a sync read the founder's accept or reject."""
+    """When a sync last acted on a founder's decision: an accept, a reject, or a deletion.
+
+    Never cleared (no transition clears a column): a row accepted and then set back to
+    ``pending_review`` before its enrolment landed keeps the accept time until the next decision
+    overwrites it.
+    """
     enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (

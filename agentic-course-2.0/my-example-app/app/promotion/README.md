@@ -133,8 +133,10 @@ lpe promotion promote --run <id> [--dry-run]
 - **Recovery.** The intent is committed before every create, so an interrupted pass is resumed, not
   repeated. A row with a company id but no contact: walk the company's contacts (associated in the
   same request, so no lag) and adopt ours by `lpe_source_url` + `lastname`, else create it. A row
-  with no company id: only once it is **10 minutes** old (past the search lag), search companies by
-  `lpe_source_url`; found → adopt, not found → dedupe and create. Younger → `recovery_deferred`.
+  with no company id: only once **10 minutes** have passed since its last create attempt (past the
+  search lag), search companies by `lpe_source_url`; found → adopt, not found → dedupe and create.
+  Sooner → `recovery_deferred`. Every company create stamps the row's `updated_at` first, so a
+  recovery whose own create was lost waits the full interval again.
   A create is never retried in process.
 - **A bad token or the daily quota stops the pass**; any other HubSpot failure is counted and the
   next candidate goes on.
@@ -163,6 +165,9 @@ A row left `enrolling` by a failed enrolment is read again with the rest and fol
 value: still `accepted` retries the enrolment; `rejected` or deleted is recorded as such; anything
 else moves it back to `pending_review`. A founder who rejects a prospect after a failed enrolment
 never gets its task.
+
+`decided_at` is when a sync last acted on a decision. Like every ledger column it is never cleared,
+so a row set back to `pending_review` keeps the time of the accept it was moved back from.
 
 **Decisions are final once synced.** `rejected`, `withdrawn` and `enrolled` are never read again,
 so changing `lpe_review_status` afterwards does nothing. The ledger is machine state and is never

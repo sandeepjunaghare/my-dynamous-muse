@@ -1699,3 +1699,23 @@ The first README draft told a reader to delete a ledger row by hand, which CLAUD
 **Improve:** the cadence's own `batch_read` callers still treat every absence as "deleted" (task gone → re-create).
 They now have `batch_read_with_not_found` available. Whether they should use it is a T11 question, not this PR's.
 
+
+## PR #33 round-2 review and its Lows (2026-10-15)
+
+Scope (owner): all Lows, L1–L5. L2 (owner): document `decided_at` as when a sync last acted on a decision;
+`transition` keeps never clearing a column.
+
+- [x] L1: README: recovery waits 10 minutes after the last create attempt.
+- [x] L2: `decided_at` docstring and README: the latest decision a sync acted on.
+- [x] L3: `_decide` skips the count and the decision when its move loses the compare-and-set; test a lost reject.
+- [x] L4: dry-run test with two `enrolling` rows, one flipped to rejected and one to blank.
+- [x] L5: the cadence's `invalid_hubspot_response` message names a validation failure, not HubSpot's body.
+
+**Review:** 1,520 passed, 2 skipped (DB tier on 5434); ruff, format, mypy, pyright and `alembic check` clean. The
+L3 test failed first; the L4 test passed first, since the branch was right but untested.
+**Worked:** a reviewer with a fresh context caught the README line M1 left stale, which the round-1 fix pass missed
+while writing the fix.
+**Improve:** promotion sync has no run lock, so L3 only stops double reporting; two syncs can still both read
+the same rows. The cadence sync has a lock. T10's launchd wiring is the place to decide whether `lpe promotion
+sync` gets one too.
+

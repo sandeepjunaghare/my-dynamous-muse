@@ -777,11 +777,15 @@ class PromotionService:
         unrecognised: list[str],
         dry_run: bool,
     ) -> None:
-        """Act on one row's current value; ``held`` is the status it was read in."""
+        """Act on one row's current value; ``held`` is the status it was read in.
+
+        A move that loses its compare-and-set means another sync acted first and reports it, so
+        this one counts and reports nothing for the row.
+        """
         company_id = row.company_id
         if company_id in reads.not_found:
-            if not dry_run:
-                await self._move(row, held, PromotionStatus.withdrawn)
+            if not dry_run and await self._move(row, held, PromotionStatus.withdrawn) is None:
+                return
             counts["withdrawn"] += 1
             decisions.append(self._decision(row, ReviewOutcome.withdrawn))
             return
@@ -802,8 +806,8 @@ class PromotionService:
             return
         value = (reads.values[company_id] or "").strip()
         if value == ReviewStatus.rejected.value:
-            if not dry_run:
-                await self._move(row, held, PromotionStatus.rejected)
+            if not dry_run and await self._move(row, held, PromotionStatus.rejected) is None:
+                return
             counts["rejected"] += 1
             decisions.append(self._decision(row, ReviewOutcome.rejected))
             return
@@ -819,10 +823,12 @@ class PromotionService:
                 row = claimed
             await self._enrol(row, counts, decisions, failures, dry_run=False)
             return
-        counts["waiting"] += 1
         if held is PromotionStatus.enrolling and not dry_run:
             # Accepted once, then changed back before the enrolment landed: wait for a decision.
-            await self._move(row, held, PromotionStatus.pending_review, decided=False)
+            moved = await self._move(row, held, PromotionStatus.pending_review, decided=False)
+            if moved is None:
+                return
+        counts["waiting"] += 1
         if value and value != ReviewStatus.pending_review.value:
             unrecognised.append(value)
             logger.warning(
