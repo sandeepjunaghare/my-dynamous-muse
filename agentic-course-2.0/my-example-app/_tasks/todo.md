@@ -1753,3 +1753,29 @@ Branch `feat/t6-owner` in the main checkout; test DB on 5434; no migration. Appr
   small read API if a fourth node appears. The three *Decide* items in the T6 ticket (Spearpoint, mail drop,
   unscored) were outside this plan and are left open, not answered.
 
+
+## PR #34 review fixes: M1, M2, L1–L3 (2026-10-15)
+
+Review: `.claude/code-reviews/pr-34-review.md`. Scope chosen by the owner: M1 + M2 + L1–L3; M1 refuses (fail
+closed) rather than redacts. M3 → the website-verification follow-up ticket; L4–L6 logged as deferred.
+
+- [x] M1: `admit_judgment` refuses a rule reason / signal answer (or its quote) that repeats the Places listing
+  name, unless that name is one of the candidate's own cited names; stage passes it; unit + stage tests
+- [x] M2: `admit_owner` logs a fixed omission reason; the model's free text stays on `omitted` only; log test
+- [x] L1: surname matched on word boundaries, suffixes (`jr`, `sr`, `ii`…) skipped; tests
+- [x] L2: agent titles also matched in the quote, plus "agent for service of process"; tests
+- [x] L3: trailing `,;:` stripped from the name before it is stored; test asserts the stored value
+- [x] Log M3, L4–L6 as deferred: M3 on the website-verification follow-up in the T6 ticket; L4–L6 → issue #35
+- [x] `/piv-validate`, commit, push
+
+### Review (2026-10-15)
+
+- **Worked:** each fix was small and lived where the reviewer said. Five mutation checks, one per finding, each
+  undid a fix and was caught by the test written for it; files restored and diffed afterwards.
+- **M1 nuance the review missed:** a Places name usually *is* the business's own name, which the census already
+  gives cited. Refusing any text containing it would have dropped most valid verdicts, so `listing_name` holds
+  back only a listing name not contained in the legal or DBA name.
+- **Didn't:** one fix script broke on an apostrophe inside a Python heredoc and silently changed nothing; caught
+  only because ruff still failed. Edit is the safer tool for prose edits.
+- **Validation:** ruff, format, mypy, pyright clean; pytest with the DB 1,607 passed, 4 skipped (paid `live`);
+  alembic check no drift.

@@ -238,6 +238,10 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
 - **Open for that ticket's plan:** whether a website-verified business with a no-listing verdict is still routed
   (a virtual suite is no door to knock); which `types` count as a mail drop; whether the verdict lives on
   `PlaceCheck` or in a new field (either way the D13 structure guard changes); and whether `subpremise` counts.
+- **Carried into that ticket (PR #34 review M3):** nothing ties the page `resolve_owner` cites to *this* business,
+  so a same-named company's "Dana Reyes, President" passes the surname check. (b) makes website-only candidates
+  reach the owner node, which raises the stakes. Candidate fix: require a core token of the legal name or DBA in
+  the quote, or check the quote against a hash of the fetched text (T7 deferred #23).
 
 **First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
