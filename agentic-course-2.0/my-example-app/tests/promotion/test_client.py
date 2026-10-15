@@ -27,6 +27,7 @@ from app.promotion.exceptions import (
     HubSpotAuthError,
     HubSpotRateLimitError,
     HubSpotResponseError,
+    HubSpotResponseShapeError,
     HubSpotTransportError,
     UnprovenancedWriteError,
 )
@@ -635,3 +636,61 @@ class TestObjectWrites:
             }
         ]
         await client.aclose()
+
+
+class TestAnUnreadableBody:
+    """A 2xx whose body is not what we asked for is a typed error, never a traceback (PR #33 L1)."""
+
+    async def test_a_create_answered_with_html_is_a_shape_error(self) -> None:
+        portal = MockPortal([(*COMPANIES, text_responder(201, "<html>proxy</html>"))])
+        client = make_client(portal)
+
+        with pytest.raises(HubSpotResponseShapeError):
+            await client.create_company(DOMAIN)
+
+        assert portal.count("POST", "/companies") == 1
+
+    async def test_a_record_without_an_id_is_a_shape_error(self) -> None:
+        portal = MockPortal([(*COMPANIES, json_responder(201, {"properties": {}}))])
+        client = make_client(portal)
+
+        with pytest.raises(HubSpotResponseShapeError):
+            await client.create_company(DOMAIN)
+
+    async def test_a_batch_read_answered_with_html_is_a_shape_error(self) -> None:
+        portal = MockPortal(
+            [("POST", "/companies/batch/read", text_responder(200, "<html>proxy</html>"))]
+        )
+        client = make_client(portal)
+
+        with pytest.raises(HubSpotResponseShapeError):
+            await client.batch_read(ObjectType.companies, ["7001"], ["name"])
+
+
+class TestBatchReadNotFound:
+    """Only an explicit ``OBJECT_NOT_FOUND`` says a record is gone (PR #33 M3)."""
+
+    async def test_not_found_ids_are_reported_apart_from_the_results(self) -> None:
+        payload = {
+            "status": "COMPLETE",
+            "results": [{"id": "7001", "properties": {"name": "Acme"}}],
+            "numErrors": 2,
+            "errors": [
+                {
+                    "status": "error",
+                    "category": "OBJECT_NOT_FOUND",
+                    "message": "Could not get some COMPANY objects.",
+                    "context": {"ids": ["7002"]},
+                },
+                {"status": "error", "category": "INTERNAL_ERROR", "message": "try again"},
+            ],
+        }
+        portal = MockPortal([("POST", "/companies/batch/read", json_responder(207, payload))])
+        client = make_client(portal)
+
+        read = await client.batch_read_with_not_found(
+            ObjectType.companies, ["7001", "7002", "7003"], ["name"]
+        )
+
+        assert [record.id for record in read.results] == ["7001"]
+        assert read.not_found == frozenset({"7002"})

@@ -1668,3 +1668,34 @@ unreachable as first written — the `rejected` branch runs first — and passed
 a test matched "the first company create" by path suffix and caught a property create instead. **Improve:** the
 sandbox blocks writes to a worktree outside the session directory, so every edit there needs the editor tools or an
 unsandboxed command; start such sessions in the worktree. Nothing was written to the live portal.
+
+## PR #33 review fixes (2026-10-14)
+
+Scope (owner): all findings, M1–M4 and L1–L7. M1 (owner): reuse `updated_at`, stamped by a
+`pending_create → pending_create` transition before every company create; no migration. M2 (owner): a retried
+`enrolling` row follows the current value — `accepted` enrols, `rejected` → rejected, not found → withdrawn,
+anything else → back to `pending_review`. L7 (owner): synced decisions are final; the README says so.
+
+- [x] M1: stamp and commit before every company create; the recovery guard reads `updated_at`; test two lost creates.
+- [x] M2: `enrolling` rows join the batch read; `_move` takes `from_status`; test accepted → 5xx → rejected.
+- [x] M3: the batch read reports explicit not-found ids; only those withdraw; any other absence stays and is counted.
+- [x] M4: test a lost enrol race followed by a second accepted row.
+- [x] L1: the client raises `HubSpotResponseShapeError` on an unreadable body. The cadence's per-prospect
+  failure code for one is now the gateway's `hubspot_response_shape_unrecognised`; one cadence test updated.
+- [x] L2: a blank `HUBSPOT_UI_DOMAIN` falls back to the default.
+- [x] L3: a dry run records keys only for would-create / would-fail.
+- [x] L4: test that a refused contact payload creates nothing.
+- [x] L5: test the lost-claim branch.
+- [x] L6: `_mark_duplicate` honours the compare-and-set.
+- [x] L7: README: decisions are final once synced.
+
+**Review:** 1,518 passed, 2 skipped (DB tier on 5434); ruff, format, mypy, pyright and `alembic check` clean; no
+migration. 15 new tests: 12 failed first for the reason each finding gave. The other 3 (L4, L5 and M4) pin
+behaviour that was already right but untested.
+**Worked:** writing every test before any fix showed which findings were real defects and which were coverage gaps.
+**Didn't:** the first M1 design compared the app clock with the database's `now()`. In tests that is the
+transaction's start time, so the guard could never fire. The stamp now carries the caller's clock (`touched_at`).
+The first README draft told a reader to delete a ledger row by hand, which CLAUDE.md forbids; it was reworded.
+**Improve:** the cadence's own `batch_read` callers still treat every absence as "deleted" (task gone → re-create).
+They now have `batch_read_with_not_found` available. Whether they should use it is a T11 question, not this PR's.
+

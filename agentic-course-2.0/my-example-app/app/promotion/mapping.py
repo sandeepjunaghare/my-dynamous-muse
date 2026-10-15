@@ -25,7 +25,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from app.core.config import get_settings
+from app.core.config import DEFAULT_HUBSPOT_UI_DOMAIN, get_settings
 from app.core.logging import get_logger
 from app.promotion.client import ProvenancedProperty
 from app.promotion.names import NameSplit, split_owner_name
@@ -152,5 +152,6 @@ def record_url(object_type: ObjectType, object_id: str) -> str | None:
     portal = (settings.hubspot_portal_id or "").strip()
     if not portal:
         return None
+    domain = settings.hubspot_ui_domain.strip() or DEFAULT_HUBSPOT_UI_DOMAIN
     type_id = _OBJECT_TYPE_IDS[object_type]
-    return f"https://{settings.hubspot_ui_domain}/contacts/{portal}/record/{type_id}/{object_id}"
+    return f"https://{domain}/contacts/{portal}/record/{type_id}/{object_id}"

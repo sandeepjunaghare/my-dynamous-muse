@@ -15,6 +15,8 @@ what ``enrol`` needs. This adds what promotion talks to, shaped like the recorde
 * **Property provisioning**: groups and properties, read-then-create, so ``ensure_properties``
   runs against it and a test can see what it created.
 * **What a founder does**: :meth:`set_review_status`, :meth:`delete_company`.
+* **A read that loses a record without saying it is gone**: ``dropped_from_reads`` leaves a company
+  out of a batch read's results with no ``OBJECT_NOT_FOUND`` entry for it.
 """
 
 import json
@@ -51,6 +53,7 @@ class FakeCrm(FakeHubSpot):
         self.lose_company_create_responses = 0
         self.fail_contact_creates = 0
         self.lose_contact_create_responses = 0
+        self.dropped_from_reads: set[str] = set()
         self.groups: set[str] = set()
         self.provisioned: dict[tuple[str, str], dict[str, object]] = {}
         self.portal.prepend(
@@ -127,7 +130,13 @@ class FakeCrm(FakeHubSpot):
         return httpx.Response(200, json={"total": len(found), "results": found})
 
     def _read_companies(self, request: httpx.Request) -> httpx.Response:
-        return self._batch(request, self.companies)
+        response = self._batch(request, self.companies)
+        if not self.dropped_from_reads:
+            return response
+        payload: dict[str, object] = json.loads(response.content)
+        results = cast(list[dict[str, object]], payload["results"])
+        payload["results"] = [r for r in results if r["id"] not in self.dropped_from_reads]
+        return httpx.Response(207, json=payload)
 
     def _create_company(self, request: httpx.Request) -> httpx.Response:
         if self.fail_company_creates:

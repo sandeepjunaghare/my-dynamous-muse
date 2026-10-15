@@ -153,12 +153,15 @@ class PromotionRepository:
         duplicate_of_id: UUID | None = None,
         decided_at: datetime | None = None,
         enrolled_at: datetime | None = None,
+        touched_at: datetime | None = None,
     ) -> Promotion | None:
         """Move a row from ``from_status`` to ``to_status``; ``None`` when it was not in ``from``.
 
         A compare-and-set, so a lost race changes nothing. Only the values given are set — no
         transition ever clears a column. ``from == to`` is allowed: recording the company id the
-        moment its create returns, still ``pending_create``.
+        moment its create returns, still ``pending_create``, or stamping a create attempt.
+        ``touched_at`` is the ``updated_at`` to record, from the caller's clock; the database's
+        ``now()`` when omitted.
         """
         given: dict[str, str | UUID | datetime | None] = {
             "hubspot_company_id": hubspot_company_id,
@@ -172,7 +175,11 @@ class PromotionRepository:
         result = await self._session.scalars(
             update(Promotion)
             .where(Promotion.id == row_id, Promotion.status == from_status.value)
-            .values(status=to_status.value, updated_at=func.now(), **values)
+            .values(
+                status=to_status.value,
+                updated_at=func.now() if touched_at is None else touched_at,
+                **values,
+            )
             .returning(Promotion),
             execution_options={"populate_existing": True},
         )

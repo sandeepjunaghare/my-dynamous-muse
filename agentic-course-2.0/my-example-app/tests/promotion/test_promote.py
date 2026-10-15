@@ -4,6 +4,7 @@
 promotes nothing is followed by a new candidate that is still promoted.
 """
 
+from collections.abc import Awaitable, Callable, Mapping
 from uuid import uuid4
 
 import httpx
@@ -11,9 +12,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.promotion.client import API_VERSION
-from app.promotion.exceptions import RunNotPromotableError
+from app.promotion import service as service_module
+from app.promotion.client import API_VERSION, ProvenancedProperty, to_property_payload
+from app.promotion.exceptions import RunNotPromotableError, UnprovenancedWriteError
 from app.promotion.models import Promotion
+from app.promotion.repository import PromotionRepository
 from app.promotion.schemas import PromotionReport, PromotionStatus
 from app.promotion.service import PromotionService
 from app.sourcing.exceptions import SourcingRunNotFoundError
@@ -39,6 +42,19 @@ async def _ledger(session: AsyncSession, vertical: str) -> dict[str, Promotion]:
 
 def _nonzero(report: PromotionReport) -> dict[str, int]:
     return {name: count for name, count in report.counts.items() if count}
+
+
+def _losing_duplicate_marks[**P](
+    real: Callable[P, Awaitable[Promotion | None]],
+) -> Callable[P, Awaitable[Promotion | None]]:
+    """Wrap ``PromotionRepository.transition`` so a move to ``duplicate`` loses its race."""
+
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> Promotion | None:
+        if kwargs.get("to_status") is PromotionStatus.duplicate:
+            return None
+        return await real(*args, **kwargs)
+
+    return wrapper
 
 
 class TestHappyPath:
@@ -278,6 +294,80 @@ class TestNoPartialWrites:
         assert row.status == "pending_create"
         assert row.hubspot_company_id is not None and row.hubspot_contact_id is None
 
+    async def test_a_contact_the_gate_refuses_creates_no_company(
+        self,
+        db_session: AsyncSession,
+        promotion: PromotionService,
+        crm: FakeCrm,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AC 7: both payloads pass the gate before the company create (PR #33 L4)."""
+
+        def refusing_contacts(
+            properties: Mapping[str, ProvenancedProperty | None],
+        ) -> dict[str, str]:
+            if "lastname" in properties:
+                raise UnprovenancedWriteError("lastname cannot be cited", fields=("lastname",))
+            return to_property_payload(properties)
+
+        monkeypatch.setattr(service_module, "to_property_payload", refusing_contacts)
+        scenario = await a_finished_run(db_session, [a_promotable("1000001")])
+
+        report = await promotion.promote_run(scenario.run.id)
+
+        assert _nonzero(report) == {"considered": 1, "failed": 1}
+        assert crm.writes() == 0
+        assert await _ledger(db_session, scenario.vertical) == {}
+
+
+class TestRaces:
+    async def test_a_claim_lost_to_another_promote_counts_already_promoted(
+        self,
+        db_session: AsyncSession,
+        promotion: PromotionService,
+        crm: FakeCrm,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Another promote inserts the row between our read and our claim (PR #33 L5)."""
+        scenario = await a_finished_run(db_session, [a_promotable("1000001")])
+        await promotion.promote_run(scenario.run.id)
+
+        async def unseen(
+            self: PromotionRepository, vertical: str, registry_id: str
+        ) -> Promotion | None:
+            return None
+
+        monkeypatch.setattr(PromotionRepository, "get_by_registry_id", unseen)
+        writes = crm.writes()
+
+        report = await promotion.promote_run(scenario.run.id)
+
+        assert _nonzero(report) == {"considered": 1, "already_promoted": 1}
+        assert crm.writes() == writes
+
+    async def test_a_duplicate_mark_lost_to_another_pass_is_not_counted(
+        self,
+        db_session: AsyncSession,
+        promotion: PromotionService,
+        crm: FakeCrm,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The compare-and-set decides, as it does for every other move (PR #33 L6)."""
+        crm.add_company(phone="(214) 555-0109")
+        scenario = await a_finished_run(
+            db_session, [a_promotable("1000009", phone="+1-214-555-0109")]
+        )
+        monkeypatch.setattr(
+            PromotionRepository,
+            "transition",
+            _losing_duplicate_marks(PromotionRepository.transition),
+        )
+
+        report = await promotion.promote_run(scenario.run.id)
+
+        assert _nonzero(report) == {"considered": 1}
+        assert report.duplicates == ()
+
 
 class TestRecovery:
     async def test_an_ambiguous_company_create_is_found_after_the_lag_not_made_twice(
@@ -325,6 +415,37 @@ class TestRecovery:
         report = await promotion.promote_run(scenario.run.id)
 
         assert report.counts["recovered"] == 1
+        assert len(crm.companies) == 1
+
+    async def test_a_second_ambiguous_create_waits_out_the_lag_again(
+        self,
+        db_session: AsyncSession,
+        promotion: PromotionService,
+        crm: FakeCrm,
+        crm_clock: FakeClock,
+    ) -> None:
+        """The wait counts from the last create attempt, not from the claim (PR #33 M1)."""
+        crm.fail_company_creates = 1
+        scenario = await a_finished_run(db_session, [a_promotable("1000001")])
+        await promotion.promote_run(scenario.run.id)
+        assert crm.companies == {}
+
+        crm_clock.advance(minutes=11)
+        crm.lose_company_create_responses = 1
+        second = await promotion.promote_run(scenario.run.id)
+        assert second.counts["failed"] == 1
+        assert len(crm.companies) == 1
+
+        crm_clock.advance(minutes=1)
+        early = await promotion.promote_run(scenario.run.id)
+        assert _nonzero(early) == {"considered": 1, "already_promoted": 1, "recovery_deferred": 1}
+        assert len(crm.companies) == 1
+
+        crm.catch_up()
+        crm_clock.advance(minutes=10)
+        late = await promotion.promote_run(scenario.run.id)
+
+        assert late.counts["recovered"] == 1
         assert len(crm.companies) == 1
 
     async def test_an_ambiguous_contact_create_is_found_by_the_association_walk(
@@ -404,3 +525,23 @@ class TestDryRun:
         real = await promotion.promote_run(scenario.run.id)
         assert dry.counts == real.counts
         assert [p.registry_id for p in dry.created] == [p.registry_id for p in real.created]
+
+    async def test_a_key_shared_with_a_portal_duplicate_is_sorted_as_the_real_pass_sorts_it(
+        self, db_session: AsyncSession, promotion: PromotionService, crm: FakeCrm
+    ) -> None:
+        """A portal duplicate leaves no ledger key behind, so the next one is a portal hit too
+        (PR #33 L3)."""
+        crm.add_company(phone="(214) 555-0109")
+        scenario = await a_finished_run(
+            db_session,
+            [
+                a_promotable("1000009", phone="+1-214-555-0109"),
+                a_promotable("1000011", phone="+1-214-555-0109"),
+            ],
+        )
+
+        dry = await promotion.promote_run(scenario.run.id, dry_run=True)
+        real = await promotion.promote_run(scenario.run.id)
+
+        assert real.counts["duplicate_in_hubspot"] == 2
+        assert dry.counts == real.counts

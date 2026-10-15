@@ -157,6 +157,17 @@ its `createdate` — never as if we had sourced it.
 | *(company deleted or archived)* | nothing | `withdrawn` |
 | `pending_review`, blank | nothing | waiting |
 | anything else | warned about (someone added an option) | waiting |
+| *(left out of HubSpot's answer, not reported deleted)* | counted `failed` | unchanged; read again next sync |
+
+A row left `enrolling` by a failed enrolment is read again with the rest and follows the **current**
+value: still `accepted` retries the enrolment; `rejected` or deleted is recorded as such; anything
+else moves it back to `pending_review`. A founder who rejects a prospect after a failed enrolment
+never gets its task.
+
+**Decisions are final once synced.** `rejected`, `withdrawn` and `enrolled` are never read again,
+so changing `lpe_review_status` afterwards does nothing. The ledger is machine state and is never
+edited by hand, so there is no way back for a synced rejection; if one is ever needed, it is a new
+`lpe` command, not a SQL edit.
 
 Promotion never creates a task itself; its job ends at the hand-off. A row left `enrolling` by a
 crash is retried first on the next sync — `enrol` reuses a task that carries its key. A contact

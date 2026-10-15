@@ -15,6 +15,9 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_HUBSPOT_UI_DOMAIN = "app-na2.hubspot.com"
+"""The UI host for portal 244766495's data centre (na2)."""
+
 
 class Settings(BaseSettings):
     """Application-wide configuration."""
@@ -74,9 +77,10 @@ class Settings(BaseSettings):
     # cadence warns about it on every enrol and sync. Blank counts as unset.
     hubspot_default_owner_id: str | None = None
     # The portal and UI host a record's URL is built from, so `lpe promotion` prints a link a
-    # founder can open instead of a bare id. Blank counts as unset: the CLI then prints the id.
+    # founder can open instead of a bare id. Blank counts as unset: a blank portal id prints the
+    # bare id, and a blank UI domain falls back to the default host.
     hubspot_portal_id: str | None = None
-    hubspot_ui_domain: str = "app-na2.hubspot.com"
+    hubspot_ui_domain: str = DEFAULT_HUBSPOT_UI_DOMAIN
 
     # Manifest-authoring agent (T12). The key is optional: when unset, the Agent SDK falls back to
     # whatever credential its bundled CLI already resolves. Declared so that a key placed in `.env`

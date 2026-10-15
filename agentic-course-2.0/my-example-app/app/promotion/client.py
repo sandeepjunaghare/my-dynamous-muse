@@ -22,11 +22,13 @@ import random
 import re
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import cast
 from urllib.parse import urlencode
 
 import httpx
+from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.core.exceptions import ConfigurationError
@@ -201,6 +203,42 @@ def _parse_error_body(response: httpx.Response) -> HubSpotErrorBody | None:
     except (ValueError, TypeError):
         logger.info("promotion.hubspot.body_unparsed", status_code=response.status_code)
         return None
+
+
+def _parse[M: BaseModel](model: type[M], response: httpx.Response) -> M:
+    """A 2xx body read as ``model``; one that is not raises :class:`HubSpotResponseShapeError`.
+
+    A proxy's HTML page, or a record without its id, would otherwise escape as a ``ValueError``
+    nobody handles — a traceback from the CLI, and a whole pass lost to one bad answer. As a
+    ``HubSpotError`` it takes the path every failed call takes: an unread create stays
+    ``pending_create`` and is recovered, never repeated.
+    """
+    try:
+        return model.model_validate(response.json())
+    except (ValueError, TypeError) as exc:
+        request = response.request
+        logger.warning(
+            "promotion.hubspot.body_unrecognised",
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            expected=model.__name__,
+        )
+        raise HubSpotResponseShapeError(
+            f"HubSpot answered {response.status_code} for {request.method} {request.url.path} "
+            f"with a body that is not a {model.__name__}"
+        ) from exc
+
+
+@dataclass(frozen=True)
+class BatchReadResult:
+    """A batch read's records, and the ids HubSpot said explicitly do not exist.
+
+    An id in neither was not read: HubSpot left it out without saying it is gone.
+    """
+
+    results: list[HubSpotObject]
+    not_found: frozenset[str]
 
 
 def _missing_scope(error: HubSpotErrorBody | None) -> str | None:
@@ -434,7 +472,7 @@ class HubSpotClient:
                 json_body=request.model_dump(by_alias=True, exclude_none=True),
                 retry_on_server_error=True,
             )
-        return SearchResponse.model_validate(response.json())
+        return _parse(SearchResponse, response)
 
     async def get_property(self, object_type: ObjectType, name: str) -> ExistingProperty | None:
         """Read one property definition. ``None`` means it does not exist yet."""
@@ -446,7 +484,7 @@ class HubSpotClient:
         )
         if response.status_code == _NOT_FOUND:
             return None
-        return ExistingProperty.model_validate(response.json())
+        return _parse(ExistingProperty, response)
 
     async def create_property(
         self, object_type: ObjectType, definition: PropertyDefinition
@@ -522,7 +560,7 @@ class HubSpotClient:
                 json_body=body.model_dump(by_alias=True, exclude_none=True),
                 retry_on_server_error=False,
             )
-            created = HubSpotObject.model_validate(response.json())
+            created = _parse(HubSpotObject, response)
             logger.info(
                 "promotion.hubspot.object_created",
                 object_type=object_type.value,
@@ -535,7 +573,7 @@ class HubSpotClient:
             json_body=body.model_dump(by_alias=True, exclude_none=True),
             retry_on_server_error=True,
         )
-        return HubSpotObject.model_validate(response.json())
+        return _parse(HubSpotObject, response)
 
     async def create_company(
         self,
@@ -633,7 +671,7 @@ class HubSpotClient:
             contact_id=contact_id,
             company_id=company_id,
         )
-        return HubSpotObject.model_validate(response.json())
+        return _parse(HubSpotObject, response)
 
     async def batch_read(
         self,
@@ -647,8 +685,22 @@ class HubSpotClient:
         duplicate anything. Ids that do not exist (deleted, archived) are absent from the result
         rather than an error; what an absence means is the caller's policy, not transport's.
         """
+        return (await self.batch_read_with_not_found(object_type, ids, properties)).results
+
+    async def batch_read_with_not_found(
+        self,
+        object_type: ObjectType,
+        ids: Sequence[str],
+        properties: Sequence[str],
+    ) -> BatchReadResult:
+        """:meth:`batch_read`, plus the ids HubSpot answered ``OBJECT_NOT_FOUND`` for.
+
+        For a caller to whom "gone" and "not read" mean different things: promotion withdraws a
+        prospect only on an explicit not-found, never on an absence.
+        """
         unique_ids = list(dict.fromkeys(ids))
         results: list[HubSpotObject] = []
+        not_found: set[str] = set()
         for start in range(0, len(unique_ids), _BATCH_READ_LIMIT):
             chunk = unique_ids[start : start + _BATCH_READ_LIMIT]
             body = BatchReadRequest(
@@ -661,8 +713,10 @@ class HubSpotClient:
                 json_body=body.model_dump(by_alias=True, exclude_none=True),
                 retry_on_server_error=True,
             )
-            results.extend(BatchReadResponse.model_validate(response.json()).results)
-        return results
+            page = _parse(BatchReadResponse, response)
+            results.extend(page.results)
+            not_found |= page.not_found_ids()
+        return BatchReadResult(results=results, not_found=frozenset(not_found))
 
     async def list_associated_ids(
         self,
@@ -691,7 +745,7 @@ class HubSpotClient:
             response = await self._request(
                 "GET", f"{path}?{urlencode(params)}", retry_on_server_error=True
             )
-            page = AssociationsPage.model_validate(response.json())
+            page = _parse(AssociationsPage, response)
             ids = [
                 associated.object_id
                 for associated in page.results

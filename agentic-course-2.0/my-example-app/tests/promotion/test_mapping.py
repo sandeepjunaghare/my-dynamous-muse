@@ -226,6 +226,18 @@ class TestRecordUrl:
             "https://app-na2.hubspot.com/contacts/244766495/record/0-1/4001"
         )
 
+    @pytest.mark.parametrize("domain", ["", "  "])
+    def test_a_blank_ui_domain_falls_back_to_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, domain: str
+    ) -> None:
+        """Blank counts as unset, as it does for the portal id (PR #33 L2)."""
+        monkeypatch.setenv("HUBSPOT_PORTAL_ID", "244766495")
+        monkeypatch.setenv("HUBSPOT_UI_DOMAIN", domain)
+
+        assert record_url(ObjectType.companies, "7001") == (
+            "https://app-na2.hubspot.com/contacts/244766495/record/0-2/7001"
+        )
+
     @pytest.mark.parametrize("portal", ["", "  "])
     def test_a_blank_portal_id_gives_no_url(
         self, monkeypatch: pytest.MonkeyPatch, portal: str

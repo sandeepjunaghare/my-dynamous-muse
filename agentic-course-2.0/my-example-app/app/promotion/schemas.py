@@ -425,17 +425,49 @@ class BatchReadRequest(BaseModel):
     inputs: list[BatchReadInput]
 
 
-class BatchReadResponse(BaseModel):
-    """A batch read's results.
+NOT_FOUND_CATEGORY = "OBJECT_NOT_FOUND"
+"""The 207 error category HubSpot gives an id that does not exist, or was archived."""
 
-    An id that does not exist — or was archived — is simply **absent** from ``results`` (HubSpot
-    answers 207 and lists it under ``errors``, which is ignored here). The caller decides what an
-    absent record means; for a cadence task it means a human deleted it.
+
+class BatchReadErrorContext(BaseModel):
+    """What a batch read's error was about; for a not-found, the ids."""
+
+    model_config = _RESPONSE_CONFIG
+
+    ids: list[str] = Field(default_factory=list[str])
+
+
+class BatchReadError(BaseModel):
+    """One entry of a 207's ``errors``."""
+
+    model_config = _RESPONSE_CONFIG
+
+    category: str | None = None
+    context: BatchReadErrorContext | None = None
+
+
+class BatchReadResponse(BaseModel):
+    """A batch read's results, and the errors of a 207.
+
+    An id that does not exist — or was archived — is **absent** from ``results``, and HubSpot lists
+    it under ``errors`` as ``OBJECT_NOT_FOUND``. Most callers read only ``results`` and decide what
+    an absence means (for a cadence task, that a human deleted it). One that must not mistake a
+    failed read for a deletion asks for :meth:`not_found_ids`.
     """
 
     model_config = _RESPONSE_CONFIG
 
     results: list[HubSpotObject] = Field(default_factory=list[HubSpotObject])
+    errors: list[BatchReadError] = Field(default_factory=list[BatchReadError])
+
+    def not_found_ids(self) -> set[str]:
+        """The ids HubSpot said explicitly do not exist."""
+        return {
+            object_id
+            for error in self.errors
+            if error.category == NOT_FOUND_CATEGORY and error.context is not None
+            for object_id in error.context.ids
+        }
 
 
 class AssociatedObject(BaseModel):

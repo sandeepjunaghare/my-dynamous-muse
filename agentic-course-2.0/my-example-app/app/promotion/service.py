@@ -20,8 +20,9 @@ How a promote never creates a business twice
 * **After an interrupted create**, the intent is already committed (``pending_create``, carrying
   the company's ``lpe_source_url`` as its key), and the next pass resumes it before anything new:
   a company id recorded → walk its contacts (written in the same request, so no lag) for ours;
-  none recorded → search companies by the key, but only once the row is ``RECOVERY_MIN_AGE`` old,
-  safely past the search index's lag. A create is never retried in process (D20).
+  none recorded → search companies by the key, but only once ``RECOVERY_MIN_AGE`` has passed
+  since the last create attempt (stamped on ``updated_at`` before every create), safely past the
+  search index's lag. A create is never retried in process (D20).
 
 **No partial writes.** Both payloads are put through the write-gate before the company create, so
 a contact that could not pass never leaves an orphan company. The ledger is committed after every
@@ -95,9 +96,10 @@ from app.sourcing.service import SourcingService
 logger = get_logger(__name__)
 
 RECOVERY_MIN_AGE = timedelta(minutes=10)
-"""How old a ``pending_create`` row without a company id must be before its company is searched
-for. HubSpot's search lags writes by "a few moments", with no SLA; a weekly, human-run command
-makes waiting free."""
+"""How long after its last create attempt a ``pending_create`` row without a company id must wait
+before its company is searched for. HubSpot's search lags writes by "a few moments", with no SLA;
+a weekly, human-run command makes waiting free. Measured from the attempt, not the claim: a
+recovery whose own create was lost needs the same wait again."""
 
 _PROMOTABLE_RUNS = frozenset({RunStatus.completed, RunStatus.degraded})
 _DAILY_POLICY = "DAILY"
@@ -138,6 +140,17 @@ class _Row:
             company_id=row.hubspot_company_id,
             contact_id=row.hubspot_contact_id,
         )
+
+
+@dataclass(frozen=True)
+class _Reads:
+    """One review sync's batch read: each read company's value, and the ids HubSpot says are gone.
+
+    A company in neither was not read, which is not the same answer as gone.
+    """
+
+    values: dict[str, str | None]
+    not_found: frozenset[str]
 
 
 @dataclass
@@ -345,7 +358,12 @@ class PromotionService:
         tally: _Tally,
         seen_keys: dict[str, str],
     ) -> None:
-        """What a real pass would do with ``writes``: the same reads, nothing written."""
+        """What a real pass would do with ``writes``: the same reads, nothing written.
+
+        A candidate's keys are remembered only where the real pass leaves a row that later
+        candidates dedupe against: a would-be create, or a create that failed and stays
+        ``pending_create``. A duplicate's row is ``duplicate``, which ledger dedupe skips.
+        """
         registry_id = writes.candidate.registry_id
         keys = [key for key in (writes.phone_key, writes.domain_key) if key is not None]
         earlier = next((seen_keys[key] for key in keys if key in seen_keys), None)
@@ -357,8 +375,6 @@ class PromotionService:
                 excluding_id=uuid4(),
             )
             earlier = row.registry_id if row is not None else None
-        for key in keys:
-            seen_keys.setdefault(key, registry_id)
         if earlier is not None:
             tally.counts["duplicate_in_ledger"] += 1
             tally.duplicates.append(self._duplicate(writes, duplicate_of=earlier))
@@ -368,12 +384,16 @@ class PromotionService:
                 client, domain=writes.domain_key, phone=writes.phone_key
             )
         except HubSpotError as exc:
+            for key in keys:
+                seen_keys.setdefault(key, registry_id)
             self._fail_or_stop(registry_id, exc, tally)
             return
         if match is not None:
             tally.counts["duplicate_in_hubspot"] += 1
             tally.duplicates.append(self._duplicate(writes, matched_company_id=match.id))
             return
+        for key in keys:
+            seen_keys.setdefault(key, registry_id)
         tally.counts["created"] += 1
         tally.created.append(self._prospect(writes, company_id=None, contact_id=None))
 
@@ -393,7 +413,8 @@ class PromotionService:
             vertical, phone=row.dedupe_phone, domain=row.dedupe_domain, excluding_id=row.id
         )
         if twin is not None:
-            await self._mark_duplicate(row, duplicate_of_id=twin.id)
+            if not await self._mark_duplicate(row, duplicate_of_id=twin.id):
+                return
             tally.counts["duplicate_in_ledger"] += 1
             tally.duplicates.append(self._duplicate(writes, duplicate_of=twin.registry_id))
             return
@@ -405,9 +426,12 @@ class PromotionService:
             self._fail_or_stop(registry_id, exc, tally)
             return
         if match is not None:
-            await self._mark_duplicate(row, matched_company_id=match.id)
+            if not await self._mark_duplicate(row, matched_company_id=match.id):
+                return
             tally.counts["duplicate_in_hubspot"] += 1
             tally.duplicates.append(self._duplicate(writes, matched_company_id=match.id))
+            return
+        if not await self._stamp_attempt(row):
             return
         try:
             company = await client.create_company(
@@ -419,6 +443,21 @@ class PromotionService:
             return
         await self._record_company(row, company.id)
         await self._finish_contact(client, row, company.id, writes, tally, recovered=recovered)
+
+    async def _stamp_attempt(self, row: Promotion) -> bool:
+        """Record, committed, that a company create is about to be sent; ``False``: row lost.
+
+        Recovery's wait is measured from this stamp, so an attempt whose answer is lost always
+        gets the full search-lag wait before anything searches for what it may have made.
+        """
+        stamped = await self._repository.transition(
+            row.id,
+            from_status=PromotionStatus.pending_create,
+            to_status=PromotionStatus.pending_create,
+            touched_at=self._clock(),
+        )
+        await self._session.commit()
+        return stamped is not None
 
     async def _record_company(self, row: Promotion, company_id: str) -> None:
         moved = await self._repository.transition(
@@ -481,8 +520,9 @@ class PromotionService:
         *,
         matched_company_id: str | None = None,
         duplicate_of_id: UUID | None = None,
-    ) -> None:
-        await self._repository.transition(
+    ) -> bool:
+        """``pending_create`` → ``duplicate``, committed; ``False`` when another pass moved it."""
+        moved = await self._repository.transition(
             row.id,
             from_status=PromotionStatus.pending_create,
             to_status=PromotionStatus.duplicate,
@@ -490,12 +530,15 @@ class PromotionService:
             duplicate_of_id=duplicate_of_id,
         )
         await self._session.commit()
+        if moved is None:
+            return False
         logger.info(
             "promotion.service.duplicate_found",
             registry_id=row.registry_id,
             matched_company_id=matched_company_id,
             duplicate_of_id=None if duplicate_of_id is None else str(duplicate_of_id),
         )
+        return True
 
     def _fail_or_stop(self, registry_id: str, exc: HubSpotError, tally: _Tally) -> None:
         tally.fail(registry_id, exc.message)
@@ -526,7 +569,7 @@ class PromotionService:
             if row.hubspot_company_id is not None:
                 await self._recover_contact(client, row, row.hubspot_company_id, writes, tally)
                 continue
-            if self._clock() - row.created_at < RECOVERY_MIN_AGE:
+            if self._clock() - row.updated_at < RECOVERY_MIN_AGE:
                 tally.counts["recovery_deferred"] += 1
                 logger.info("promotion.service.recovery_deferred", registry_id=row.registry_id)
                 continue
@@ -656,9 +699,14 @@ class PromotionService:
         """Read the founder's review decisions back and act on them.
 
         ``accepted`` → enrolled in the cadence (its first task is the cadence's to create);
-        ``rejected`` → recorded, HubSpot left alone; a company that is gone → ``withdrawn``;
-        anything else → waiting. Rows an earlier sync left ``enrolling`` are retried first —
-        ``enrol`` is safe to retry.
+        ``rejected`` → recorded, HubSpot left alone; a company HubSpot says is gone →
+        ``withdrawn``; anything else → waiting. A company HubSpot left out of its answer without
+        saying it is gone was not read: it is counted ``failed`` and left for the next sync.
+
+        Rows an earlier sync left ``enrolling`` are read again with the rest and follow the
+        **current** value: still ``accepted`` → the enrolment is retried (``enrol`` is safe to
+        retry); changed since → recorded as it now stands, so a founder who rejects a prospect
+        after a failed enrolment never gets its task. Decisions are final once synced (README).
         """
         counts = dict.fromkeys(REVIEW_COUNTS, 0)
         decisions: list[ReviewDecision] = []
@@ -667,17 +715,17 @@ class PromotionService:
         client = self._hubspot()
         stopped: str | None = None
         try:
-            enrolling = await self._repository.list_by_status([PromotionStatus.enrolling])
-            for row in [_Row.of(item) for item in enrolling]:
-                await self._enrol(row, counts, decisions, failures, dry_run=dry_run)
-            loaded = await self._repository.list_by_status([PromotionStatus.pending_review])
-            pending = [_Row.of(item) for item in loaded]
-            statuses = await self._review_statuses(client, pending)
-            for row in pending:
+            rows: list[tuple[_Row, PromotionStatus]] = []
+            for held in (PromotionStatus.enrolling, PromotionStatus.pending_review):
+                loaded = await self._repository.list_by_status([held])
+                rows.extend((_Row.of(item), held) for item in loaded)
+            reads = await self._review_statuses(client, [row for row, _ in rows])
+            for row, held in rows:
                 counts["read"] += 1
                 await self._decide(
                     row,
-                    statuses,
+                    held,
+                    reads,
                     counts=counts,
                     decisions=decisions,
                     failures=failures,
@@ -704,20 +752,24 @@ class PromotionService:
             stopped=stopped,
         )
 
-    async def _review_statuses(
-        self, client: HubSpotClient, rows: Sequence[_Row]
-    ) -> dict[str, str | None]:
-        """Each live company's ``lpe_review_status``; a company absent from the map is gone."""
+    async def _review_statuses(self, client: HubSpotClient, rows: Sequence[_Row]) -> _Reads:
+        """Each read company's ``lpe_review_status``, and the ids HubSpot says are gone."""
         if not rows:
-            return {}
+            return _Reads(values={}, not_found=frozenset())
         ids = [row.company_id for row in rows]
-        companies = await client.batch_read(ObjectType.companies, ids, [_REVIEW_PROPERTY])
-        return {company.id: company.properties.get(_REVIEW_PROPERTY) for company in companies}
+        read = await client.batch_read_with_not_found(ObjectType.companies, ids, [_REVIEW_PROPERTY])
+        return _Reads(
+            values={
+                company.id: company.properties.get(_REVIEW_PROPERTY) for company in read.results
+            },
+            not_found=read.not_found,
+        )
 
     async def _decide(
         self,
         row: _Row,
-        statuses: dict[str, str | None],
+        held: PromotionStatus,
+        reads: _Reads,
         *,
         counts: dict[str, int],
         decisions: list[ReviewDecision],
@@ -725,17 +777,33 @@ class PromotionService:
         unrecognised: list[str],
         dry_run: bool,
     ) -> None:
+        """Act on one row's current value; ``held`` is the status it was read in."""
         company_id = row.company_id
-        if company_id not in statuses:
+        if company_id in reads.not_found:
             if not dry_run:
-                await self._move(row, PromotionStatus.withdrawn)
+                await self._move(row, held, PromotionStatus.withdrawn)
             counts["withdrawn"] += 1
             decisions.append(self._decision(row, ReviewOutcome.withdrawn))
             return
-        value = (statuses[company_id] or "").strip()
+        if company_id not in reads.values:
+            counts["failed"] += 1
+            failures.append(
+                PromotionFailure(
+                    registry_id=row.registry_id,
+                    message=f"company {company_id} was missing from HubSpot's answer without "
+                    "being reported deleted; left for the next sync",
+                )
+            )
+            logger.warning(
+                "promotion.service.review_unread",
+                registry_id=row.registry_id,
+                company_id=company_id,
+            )
+            return
+        value = (reads.values[company_id] or "").strip()
         if value == ReviewStatus.rejected.value:
             if not dry_run:
-                await self._move(row, PromotionStatus.rejected)
+                await self._move(row, held, PromotionStatus.rejected)
             counts["rejected"] += 1
             decisions.append(self._decision(row, ReviewOutcome.rejected))
             return
@@ -744,25 +812,40 @@ class PromotionService:
                 counts["enrolled"] += 1
                 decisions.append(self._decision(row, ReviewOutcome.enrolled))
                 return
-            claimed = await self._move(row, PromotionStatus.enrolling)
-            if claimed is None:
-                return  # another sync has it
-            await self._enrol(claimed, counts, decisions, failures, dry_run=False)
+            if held is PromotionStatus.pending_review:
+                claimed = await self._move(row, held, PromotionStatus.enrolling)
+                if claimed is None:
+                    return  # another sync has it
+                row = claimed
+            await self._enrol(row, counts, decisions, failures, dry_run=False)
             return
         counts["waiting"] += 1
+        if held is PromotionStatus.enrolling and not dry_run:
+            # Accepted once, then changed back before the enrolment landed: wait for a decision.
+            await self._move(row, held, PromotionStatus.pending_review, decided=False)
         if value and value != ReviewStatus.pending_review.value:
             unrecognised.append(value)
             logger.warning(
                 "promotion.service.status_unrecognised", registry_id=row.registry_id, value=value
             )
 
-    async def _move(self, row: _Row, to_status: PromotionStatus) -> _Row | None:
-        """``pending_review`` → a decision, stamped ``decided_at``; committed. ``None``: lost."""
+    async def _move(
+        self,
+        row: _Row,
+        from_status: PromotionStatus,
+        to_status: PromotionStatus,
+        *,
+        decided: bool = True,
+    ) -> _Row | None:
+        """``from_status`` → ``to_status``, stamped ``decided_at`` if ``decided``; committed.
+
+        ``None``: another sync moved the row first.
+        """
         moved = await self._repository.transition(
             row.id,
-            from_status=PromotionStatus.pending_review,
+            from_status=from_status,
             to_status=to_status,
-            decided_at=self._clock(),
+            decided_at=self._clock() if decided else None,
         )
         await self._session.commit()
         return None if moved is None else _Row.of(moved)

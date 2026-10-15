@@ -796,7 +796,7 @@ class TestNonHubSpotFailures:
 
         assert report.checked == 2
         assert [(f.hubspot_contact_id, f.code) for f in report.failures] == [
-            ("400000001", "invalid_hubspot_response")
+            ("400000001", "hubspot_response_shape_unrecognised")
         ]
         assert report.tasks_created == 1
 
