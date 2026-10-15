@@ -135,10 +135,14 @@ class RefusalReason(StrEnum):
 
     ``no_principal`` is ``missing_fields`` where the owner is the **only** gap — counted on its own
     because "no owner found" is the yield question T6 answers, and a company is never promoted
-    without its contact. Kept here, beside the error that carries it, so it has one home.
+    without its contact. ``unverified`` is neither Places-verified nor website-verified
+    (website-verification B6): such a candidate never reaches the owner node, so without its own
+    reason it would be counted ``no_principal`` and hide the real gap. Kept here, beside the error
+    that carries it, so it has one home. Declaration order is the order eligibility checks them.
     """
 
     disqualified = "disqualified"
+    unverified = "unverified"
     dead_score = "dead_score"
     no_principal = "no_principal"
     missing_fields = "missing_fields"

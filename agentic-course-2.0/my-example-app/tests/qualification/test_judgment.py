@@ -26,11 +26,18 @@ from app.qualification.judgment import (
     listing_name,
     run_judgment,
 )
-from app.qualification.prompts import SYSTEM_PROMPT, build_user_prompt
+from app.qualification.prompts import SYSTEM_PROMPT, VERDICT_PHRASES, build_user_prompt
 from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer
 from app.shared.page_reads import PageRead
 from app.shared.provenance import RetrievalMethod
-from app.sourcing.schemas import CandidateFields, HeadcountBand, PlacesEvidence, ScoreBand
+from app.sourcing.schemas import (
+    CandidateFields,
+    HeadcountBand,
+    MissKind,
+    PlacesEvidence,
+    PostalAddress,
+    ScoreBand,
+)
 from tests.manifests.replay import (
     Replay,
     StreamLine,
@@ -49,7 +56,7 @@ from tests.qualification.builders import (
     predicate,
     signal,
 )
-from tests.sourcing.builders import CENSUS_URL, RETRIEVED_AT, a_candidate
+from tests.sourcing.builders import CENSUS_URL, RETRIEVED_AT, a_candidate, a_verdict
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ROLLUP_FIXTURES = ("impact_fire", "summit_fire", "century_fire", "control_systems")
@@ -362,6 +369,26 @@ class TestIsolationAndPrompt:
         prompt = build_user_prompt(a_candidate(), [judgment()], [], places)
         assert "Places evidence (context only, never cite)" in prompt
         assert "OPERATIONAL" in prompt
+
+    @pytest.mark.parametrize("kind", list(MissKind))
+    def test_a_current_verdict_is_our_phrase_and_never_places_content(self, kind: MissKind) -> None:
+        """Website-verification B5: the stored kind, in our words; no place ID, type or name."""
+        fields = a_candidate().model_copy(update={"places_verdict": a_verdict(kind)})
+        prompt = build_user_prompt(fields, [judgment()], [])
+        assert "Places verdict (context only, never cite):" in prompt
+        assert VERDICT_PHRASES[kind] in prompt
+        assert "ChIJ" not in prompt
+        assert kind.value not in prompt
+
+    def test_a_verdict_for_an_old_address_is_left_out(self) -> None:
+        moved = PostalAddress(
+            street="900 Main St", city="Fort Worth", state="TX", postal_code="76102"
+        )
+        fields = a_candidate().model_copy(update={"places_verdict": a_verdict(address=moved)})
+        assert "Places verdict" not in build_user_prompt(fields, [judgment()], [])
+
+    def test_the_system_prompt_says_the_verdict_is_never_cited(self) -> None:
+        assert "Places verdict" in SYSTEM_PROMPT
 
     def test_the_answer_contract_is_lax(self) -> None:
         """An out-of-range score must cost one answer in the gate, not the whole paid call."""

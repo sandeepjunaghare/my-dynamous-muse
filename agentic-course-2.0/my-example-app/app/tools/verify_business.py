@@ -9,7 +9,16 @@ For every candidate of the run that no free rule removed, in ``registry_id`` ord
    matched deterministically (street number, ZIP, a shared name word; A4). A match that is not
    permanently closed stores ``business_check`` — the place ID and the census address it checked,
    and nothing else from Places (D13). What Places saw goes on ``context.places`` for
-   ``classify_rollup`` within the run, and dies with it.
+   ``classify_rollup`` within the run, and dies with it. A miss with something **at the census
+   address** records our own verdict in ``places_verdict`` — a kind (mail drop, nothing listed,
+   another business) and the place ID it rests on, never a Places name or type
+   (website-verification OQ-1/OQ-2). Nothing at the address records nothing.
+
+**Two ways to be verified** (website-verification B1, B2). Places at the current address, or a
+homepage on the business's own email domain: ``CandidateFields.is_verified()``. Places still runs
+for a website-verified candidate (B3), because a website verifies the business and only Places can
+say the door is a mail drop, which keeps it off the routes (OQ-3). A current verdict, like a
+current check, is not paid for twice within a run (B4).
 
 **Bound only where declared** (A3). Terms are accepted per declared source at ``activate``, so a
 manifest declaring no Places source — or a missing key — refuses the run before a call is made,
@@ -24,7 +33,7 @@ run's batch goes back to the pool and the next run's rows start with no check (P
 failed call or one refused write is counted and the batch goes on.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -40,12 +49,20 @@ from app.manifests.schemas import ManifestBody
 from app.qualification.service import QualificationService
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
 from app.sourcing.exceptions import SourceAuthError, SourceRequestError, SourceUnavailableError
-from app.sourcing.schemas import CandidateFields, PlaceCheck, PlacesEvidence
+from app.sourcing.schemas import (
+    CandidateFields,
+    PlaceCheck,
+    PlacesEvidence,
+    PlacesVerdict,
+    PostalAddress,
+)
 from app.sourcing.service import SourcingService
 from app.sourcing.sources import http
 from app.sourcing.sources.google_places import (
     CLOSED_PERMANENTLY,
+    PlaceResult,
     PlacesClient,
+    classify_miss,
     declared_places_source,
     match_place,
     place_url,
@@ -80,14 +97,29 @@ COUNT_KEYS: tuple[str, ...] = (
     "places_failed",
     "places_not_checkable",
     "places_skipped",
+    "places_mail_drop",
+    "places_no_listing",
+    "places_other_business",
     "website_found",
     "website_unreachable",
     "website_no_domain",
     "verify_write_refused",
+    "verify_website_only",
 )
 """Every count this stage reports, all prefixed: the runner refuses a name two stages share."""
 
 type Checked = tuple[ProvenancedValue[PlaceCheck], PlacesEvidence]
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """One candidate's Places answer: a check to store with its evidence, a verdict, or neither."""
+
+    check: Checked | None = None
+    verdict: ProvenancedValue[PlacesVerdict] | None = None
+
+
+_NOTHING = _Outcome()
 
 
 def _utcnow() -> datetime:
@@ -208,17 +240,19 @@ class VerifyBusinessStage:
                     website = await self._website(fields, shared, homepages, counts)
                     if website is not None:
                         update["website"] = website
-                checked = await self._places(context, fields, places, counts, reasons)
+                outcome = await self._places(context, fields, places, counts, reasons)
+                checked = outcome.check
                 if checked is not None:
                     update["business_check"] = checked[0]
+                if outcome.verdict is not None:
+                    update["places_verdict"] = outcome.verdict
                 if not update:
                     continue
 
+                written = fields.model_copy(update=update)
                 try:
                     await sourcing.record_candidates(
-                        context.run_id,
-                        [fields.model_copy(update=update)],
-                        stage=PipelineStage.verify_business,
+                        context.run_id, [written], stage=PipelineStage.verify_business
                     )
                 except ValidationError as exc:
                     # One refused write (a D13 guard, say) must not stop a paid batch half-way.
@@ -233,6 +267,8 @@ class VerifyBusinessStage:
                 if checked is not None:
                     # Only a stored check passes its evidence on: unverified means unread (OQ-5).
                     context.places[fields.registry_id.value] = checked[1]
+                if written.has_own_domain_website() and not written.has_verified_address():
+                    counts["verify_website_only"] += 1
 
         if places.tripped:
             reasons.append(
@@ -274,23 +310,24 @@ class VerifyBusinessStage:
         places: _PlacesRun,
         counts: dict[str, int],
         reasons: list[str],
-    ) -> Checked | None:
-        """One candidate's Places check: the check to store and the evidence to pass on, or
-        ``None`` — not bound, already verified, not checkable, past the breaker, failed, a miss
-        (OQ-2: counted, nothing recorded), or a permanently closed match."""
+    ) -> _Outcome:
+        """One candidate's Places check: the check to store and the evidence to pass on, our
+        verdict on a miss at the census address, or nothing — not bound, already checked at this
+        address, not checkable, past the breaker, failed, a miss with nothing at the address, or a
+        permanently closed match."""
         if places.client is None:
-            return None
-        if fields.has_verified_address():
+            return _NOTHING
+        if fields.has_verified_address() or fields.has_current_verdict():
             counts["places_skipped"] += 1
-            return None
+            return _NOTHING
         query = search_query(fields)
         if query is None or fields.address is None:
             counts["places_not_checkable"] += 1
-            return None
+            return _NOTHING
         if places.tripped or not self._charge(context.cost, places, context):
             counts["places_skipped"] += 1
             places.unchecked += 1
-            return None
+            return _NOTHING
 
         try:
             results = await places.client.search_text(query)
@@ -306,7 +343,7 @@ class VerifyBusinessStage:
                 source=places.source,
                 run_id=str(context.run_id),
             )
-            return None
+            return _NOTHING
         except SourceRequestError as exc:
             counts["places_failed"] += 1
             logger.warning(
@@ -314,7 +351,7 @@ class VerifyBusinessStage:
                 registry_id=fields.registry_id.value,
                 status=exc.status,
             )
-            return None
+            return _NOTHING
 
         counts["places_checked"] += 1
         match = match_place(fields, results)
@@ -325,7 +362,7 @@ class VerifyBusinessStage:
                 registry_id=fields.registry_id.value,
                 results=len(results),
             )
-            return None
+            return _Outcome(verdict=self._verdict(fields, fields.address.value, results, counts))
         if match.business_status == CLOSED_PERMANENTLY:
             # A closed business is not one to route a door to: no check, no evidence (A4).
             counts["places_closed"] += 1
@@ -334,7 +371,7 @@ class VerifyBusinessStage:
                 registry_id=fields.registry_id.value,
                 place_id=match.id,
             )
-            return None
+            return _NOTHING
 
         counts["places_verified"] += 1
         # The place ID only, never a Places name or address (D13).
@@ -352,7 +389,35 @@ class VerifyBusinessStage:
             business_status=match.business_status,
             types=match.types,
         )
-        return check, evidence
+        return _Outcome(check=(check, evidence))
+
+    def _verdict(
+        self,
+        fields: CandidateFields,
+        address: PostalAddress,
+        results: Sequence[PlaceResult],
+        counts: dict[str, int],
+    ) -> ProvenancedValue[PlacesVerdict] | None:
+        """Our verdict on a miss, cited to the place it rests on, or ``None`` (counted when kept).
+
+        Only the kind and the place ID leave the adapter, and only those are logged (D13).
+        """
+        miss = classify_miss(fields, results)
+        if miss is None:
+            return None
+        counts[f"places_{miss.kind.value}"] += 1
+        logger.info(
+            "sourcing.places.miss_recorded",
+            registry_id=fields.registry_id.value,
+            kind=miss.kind.value,
+            place_id=miss.place_id,
+        )
+        return ProvenancedValue(
+            value=PlacesVerdict(kind=miss.kind, place_id=miss.place_id, checked_address=address),
+            source_url=place_url(miss.place_id),
+            retrieved_at=self._clock(),
+            retrieval_method=RetrievalMethod.web_lookup,
+        )
 
     def _charge(self, cost: RunCost, places: _PlacesRun, context: StageContext) -> bool:
         """Charge one call against the breaker. ``False`` — and the breaker tripped — at the cap."""

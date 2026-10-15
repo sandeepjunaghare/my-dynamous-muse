@@ -26,9 +26,10 @@ class TestPromotionRefusedError:
         assert error.code == "promotion_refused"
         assert error.status_code == 422
 
-    def test_the_reasons_are_the_four_the_plan_counts(self) -> None:
+    def test_the_reasons_are_the_five_eligibility_checks_in_order(self) -> None:
         assert [reason.value for reason in RefusalReason] == [
             "disqualified",
+            "unverified",
             "dead_score",
             "no_principal",
             "missing_fields",

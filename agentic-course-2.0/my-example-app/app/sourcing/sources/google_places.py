@@ -6,8 +6,9 @@
    registry's own name and address. Nothing here enumerates businesses.
 2. *Use and discard.* A :class:`PlaceResult` lives in memory for one candidate's check. What is
    kept is the place ID (storable indefinitely) and the census address that was checked — ours,
-   not Places content. What the judgment node may see travels in memory, as
-   ``PlacesEvidence``, and dies with the run.
+   not Places content — plus, on a miss, our own kind for what sat at the address
+   (:func:`classify_miss`, never a Places name or type). What the judgment node may see travels
+   in memory, as ``PlacesEvidence``, and dies with the run.
 3. *Bound only where declared.* Terms of use are accepted per declared source at ``activate``, so
    Places is called only for a manifest that declares it (:func:`declared_places_source`).
 
@@ -28,7 +29,7 @@ import asyncio
 import re
 import time
 from collections.abc import Sequence
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -37,7 +38,7 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.manifests.schemas import ManifestBody
 from app.sourcing.exceptions import SourceAuthError, SourceRequestError
-from app.sourcing.schemas import CandidateFields, has_entity_designator
+from app.sourcing.schemas import CandidateFields, MissKind, name_words, shares_name
 from app.sourcing.sources import http
 from app.sourcing.sources.base import prefix_matcher
 
@@ -72,6 +73,17 @@ PLACES_SOURCE_PREFIXES = (
 CLOSED_PERMANENTLY = "CLOSED_PERMANENTLY"
 """A match with this status is no business to route a door to: no check is stored (A4)."""
 
+MAIL_DROP_TYPES: Final = frozenset({"post_office", "business_center", "shipping_service"})
+"""Place types that make a census address a mail drop (website-verification OQ-2). All three are
+Table A types (checked 2026-10-15). ``courier_service`` and ``coworking_space`` are left out on
+purpose: a courier's depot and a coworking space are both real doors. Generic across verticals, so
+code beside :data:`CLOSED_PERMANENTLY`, not manifest data."""
+
+ADDRESS_TYPES: Final = frozenset({"street_address", "premise", "subpremise"})
+"""Table B types Places returns on a result that is only an address (website-verification OQ-2):
+a result whose types are all of these lists nothing at the address. ``subpremise`` included: a
+suite with nothing listed is still nothing listed."""
+
 _MIN_INTERVAL_SECONDS = 0.1
 """No per-key QPS is published, so stay at a self-imposed ten a second."""
 
@@ -79,21 +91,6 @@ _AUTH_STATUSES = frozenset({400, 401, 403})
 _BAD_REQUEST = 400
 _API_KEY_INVALID = "API_KEY_INVALID"
 
-_NAME_STOP_WORDS = frozenset({"THE", "AND", "OF"})
-"""Words too common to tell two businesses apart. Nothing vertical: "FREIGHT" or "LOGISTICS" here
-would be vertical-specific code. A trade word is defused by :data:`_MIN_SHARED_WORDS` instead."""
-
-_MIN_SHARED_WORDS = 2
-"""A name of up to this many distinguishing words must share all of them; a longer one, at least
-this many. So a neighbour in one building that shares only a trade word (``LOGISTICS``) is told
-apart **when the census name has two or more distinguishing words** the neighbour lacks one of
-(PR #32 H3), and two still survive a storefront shortening a long legal name. **Known limit**
-(round-2 M3, the option stands): a name that reduces to one word (``AJ LOGISTICS LLC`` is
-``LOGISTICS``) matches any neighbour carrying it, and a longer name sharing two trade words with
-a neighbour matches it too."""
-
-_MIN_TOKEN_LENGTH = 3
-_LETTERS = re.compile(r"[^\W\d_]+")
 _LEADING_NUMBER = re.compile(r"^\s*(\d+)")
 _ZIP5 = re.compile(r"^\s*(\d{5})")
 
@@ -302,9 +299,7 @@ def _checkable(fields: CandidateFields) -> _Checkable | None:
     if zip_match is None or number_match is None:
         return None
     cited = (fields.legal_name, fields.dba_name)
-    names = tuple(
-        tokens for tokens in (_name_tokens(name.value) for name in cited if name) if tokens
-    )
+    names = tuple(tokens for tokens in (name_words(name.value) for name in cited if name) if tokens)
     if not names:
         return None
     return _Checkable(zip5=zip_match.group(1), number=number_match.group(1), names=names)
@@ -322,21 +317,10 @@ def search_query(fields: CandidateFields) -> str | None:
         return None
     # `_checkable` passed, so at least one of the two names has a distinguishing word.
     name = next(
-        name for name in (fields.dba_name, fields.legal_name) if name and _name_tokens(name.value)
+        name for name in (fields.dba_name, fields.legal_name) if name and name_words(name.value)
     )
     address = fields.address.value
     return f"{name.value}, {address.street}, {address.city}, {address.state} {address.postal_code}"
-
-
-def _name_tokens(name: str) -> frozenset[str]:
-    """Distinguishing words: upper-cased letters only, no designators, no stop words, 3+ long."""
-    return frozenset(
-        token
-        for token in _LETTERS.findall(name.upper())
-        if len(token) >= _MIN_TOKEN_LENGTH
-        and token not in _NAME_STOP_WORDS
-        and not has_entity_designator(token)
-    )
 
 
 def _contains_number(text: str, number: str) -> bool:
@@ -348,10 +332,15 @@ def _starts_with_number(text: str, number: str) -> bool:
     return re.match(rf"\s*{re.escape(number)}(?!\d)", text) is not None
 
 
-def _same_name(ours: frozenset[str], theirs: frozenset[str]) -> bool:
-    """All of a short name's distinguishing words, or :data:`_MIN_SHARED_WORDS` of a longer one."""
-    shared = len(ours & theirs)
-    return shared >= min(len(ours), _MIN_SHARED_WORDS)
+def _at_address(result: PlaceResult, checkable: _Checkable) -> bool:
+    """Whether ``result``'s address starts with the census street number and holds its ZIP.
+
+    No ``formatted_address`` is never at the address.
+    """
+    formatted = result.formatted_address or ""
+    return _contains_number(formatted, checkable.zip5) and _starts_with_number(
+        formatted, checkable.number
+    )
 
 
 def match_place(fields: CandidateFields, results: Sequence[PlaceResult]) -> PlaceResult | None:
@@ -359,25 +348,66 @@ def match_place(fields: CandidateFields, results: Sequence[PlaceResult]) -> Plac
 
     A result matches when its address **starts with** the census street number and holds the
     5-digit ZIP, **and** its name carries the legal or the DBA name's distinguishing words (see
-    :data:`_MIN_SHARED_WORDS`). A shared office building is told apart by the name, within the
-    limit that constant records for a name of one distinguishing word. A live match is preferred
-    to a permanently closed one listed ahead of it (PR #32 M2); a closed match comes back only
-    when it is the only one.
+    ``MIN_SHARED_WORDS`` in ``app.sourcing.schemas``). A shared office building is told apart by
+    the name, within the limit that constant records for a name of one distinguishing word. A live
+    match is preferred to a permanently closed one listed ahead of it (PR #32 M2); a closed match
+    comes back only when it is the only one.
     """
     checkable = _checkable(fields)
     if checkable is None:
         return None
     closed: PlaceResult | None = None
     for result in results:
-        formatted = result.formatted_address or ""
-        if not _contains_number(formatted, checkable.zip5):
+        if not _at_address(result, checkable):
             continue
-        if not _starts_with_number(formatted, checkable.number):
-            continue
-        theirs = _name_tokens(result.display_name or "")
-        if not any(_same_name(ours, theirs) for ours in checkable.names):
+        theirs = name_words(result.display_name or "")
+        if not any(shares_name(ours, theirs) for ours in checkable.names):
             continue
         if result.business_status != CLOSED_PERMANENTLY:
             return result
         closed = closed or result
     return closed
+
+
+class MissVerdict(NamedTuple):
+    """What :func:`classify_miss` read from a miss, **in memory**: our kind and the place ID."""
+
+    kind: MissKind
+    place_id: str
+
+
+def classify_miss(fields: CandidateFields, results: Sequence[PlaceResult]) -> MissVerdict | None:
+    """Our verdict on a miss at the census address, or ``None``. Pure, no model.
+
+    Call it **only after** :func:`match_place` returned ``None``: it does not look for this
+    business, it says what *else* is at the address (website-verification OQ-2). Only results at
+    the address, by :func:`match_place`'s own test, count, in Google's order, with precedence
+    ``mail_drop``, then ``no_listing``, then ``other_business``:
+
+    - a result whose types include a :data:`MAIL_DROP_TYPES` type is a mail drop, whatever its
+      status: a closed post office is still a post office;
+    - a result whose types are all :data:`ADDRESS_TYPES` is nothing listed;
+    - a business sharing **no** distinguishing word with the legal or DBA name is another business.
+      A one-word overlap stays a plain miss, which is what keeps a storefront that shortened our
+      name (Spearpoint) from being called someone else.
+
+    ``None`` for an uncheckable candidate, no results, or nothing at the address: an empty answer is
+    no evidence of anything, and there is no place ID to cite.
+    """
+    checkable = _checkable(fields)
+    if checkable is None:
+        return None
+    here = [result for result in results if _at_address(result, checkable)]
+    for result in here:
+        if MAIL_DROP_TYPES.intersection(result.types):
+            return MissVerdict(MissKind.mail_drop, result.id)
+    for result in here:
+        if result.types and ADDRESS_TYPES.issuperset(result.types):
+            return MissVerdict(MissKind.no_listing, result.id)
+    for result in here:
+        if result.types and ADDRESS_TYPES.issuperset(result.types):
+            continue
+        theirs = name_words(result.display_name or "")
+        if theirs and all(not (ours & theirs) for ours in checkable.names):
+            return MissVerdict(MissKind.other_business, result.id)
+    return None

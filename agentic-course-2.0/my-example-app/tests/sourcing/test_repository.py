@@ -183,6 +183,7 @@ class TestProvenanceRoundTrip:
             "email",
             "website",
             "business_check",
+            "places_verdict",
             "owner",
             "headcount_band",
             "priority",

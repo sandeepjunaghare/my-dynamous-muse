@@ -16,7 +16,9 @@ from app.shared.provenance import ProvenancedValue, RetrievalMethod, is_promotab
 from app.sourcing.schemas import (
     CandidateFields,
     HeadcountBand,
+    MissKind,
     PlaceCheck,
+    PlacesVerdict,
     PostalAddress,
     Principal,
     PriorityScore,
@@ -29,17 +31,23 @@ from app.sourcing.schemas import (
     SourceRow,
     SourcingBrief,
     has_entity_designator,
+    name_words,
     principal_or_none,
+    shares_name,
 )
 from tests.sourcing.builders import (
     ARLINGTON,
+    OWN_DOMAIN,
     PLACES_URL,
     QCMOBILE_URL,
     a_brief,
     a_candidate,
+    a_verdict,
     looked_up,
+    own_site,
     place_checked,
     sourced,
+    website_verified,
 )
 
 BAND = IcpBand(headcount_min=20, headcount_max=200, requires_office_function=True)
@@ -125,6 +133,7 @@ class TestCandidateFields:
             "email",
             "website",
             "business_check",
+            "places_verdict",
             "owner",
             "headcount_band",
             "priority",
@@ -140,6 +149,7 @@ class TestCandidateFields:
             email=sourced("jane@example.com"),
             website=sourced("https://example.com"),
             business_check=place_checked(),
+            places_verdict=a_verdict(),
             owner=sourced(Principal(name="Jane Doe")),
             headcount_band=sourced(
                 HeadcountBand(low=11, high=50),
@@ -646,3 +656,133 @@ class TestTheNewFieldsUnderD13:
                     HeadcountBand(low=11, high=50), PLACES_URL, RetrievalMethod.web_lookup
                 ),
             )
+
+
+MOVED = PostalAddress(street="900 Main St", city="Fort Worth", state="TX", postal_code="76102")
+
+
+class TestPlacesVerdict:
+    """Our verdict on a Places miss (website-verification OQ-1, OQ-2)."""
+
+    def test_it_holds_a_kind_a_place_id_and_our_own_address_only(self) -> None:
+        assert set(PlacesVerdict.model_fields) == {"kind", "place_id", "checked_address"}
+
+    def test_a_blank_place_id_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="place_id"):
+            PlacesVerdict(kind=MissKind.mail_drop, place_id="  ", checked_address=ARLINGTON)
+
+    def test_it_may_cite_google_maps(self) -> None:
+        """D13's allow-list holds two fields now: each keeps only a place ID."""
+        fields = a_candidate().model_copy(update={"places_verdict": a_verdict()})
+        assert CandidateFields.model_validate(fields.model_dump(mode="json")).places_verdict
+
+    def test_a_website_cited_to_google_maps_is_still_refused(self) -> None:
+        payload = a_candidate().model_dump(mode="json")
+        payload["website"] = sourced("https://acme.test", PLACES_URL).model_dump(mode="json")
+        with pytest.raises(ValidationError, match="D13"):
+            CandidateFields.model_validate(payload)
+
+    def test_a_verdict_for_the_current_address_is_current(self) -> None:
+        fields = a_candidate().model_copy(update={"places_verdict": a_verdict()})
+        assert fields.has_current_verdict()
+        assert fields.has_mail_drop_here()
+
+    def test_a_verdict_for_an_old_address_is_not(self) -> None:
+        fields = a_candidate().model_copy(update={"places_verdict": a_verdict(address=MOVED)})
+        assert not fields.has_current_verdict()
+        assert not fields.has_mail_drop_here()
+
+    @pytest.mark.parametrize("kind", [MissKind.no_listing, MissKind.other_business])
+    def test_only_a_mail_drop_is_a_mail_drop(self, kind: MissKind) -> None:
+        fields = a_candidate().model_copy(update={"places_verdict": a_verdict(kind)})
+        assert not fields.has_mail_drop_here()
+
+
+class TestWebsiteVerification:
+    """B1, B2, OQ-3: the predicates every paid step, routing and T9 ask."""
+
+    def test_a_homepage_on_the_email_domain_verifies(self) -> None:
+        fields = website_verified(a_candidate())
+        assert fields.has_own_domain_website()
+        assert fields.is_verified()
+
+    def test_the_bare_host_matches_too(self) -> None:
+        fields = website_verified(a_candidate()).model_copy(
+            update={"website": own_site(f"https://{OWN_DOMAIN}")}
+        )
+        assert fields.has_own_domain_website()
+
+    def test_a_homepage_on_another_domain_does_not(self) -> None:
+        fields = website_verified(a_candidate()).model_copy(
+            update={"website": own_site("https://www.acme.test")}
+        )
+        assert not fields.has_own_domain_website()
+        assert not fields.is_verified()
+
+    def test_a_homepage_the_judgment_node_found_does_not(self) -> None:
+        """Counting ``llm_inference`` would make verification circular for the next stage."""
+        fields = website_verified(a_candidate()).model_copy(
+            update={"website": own_site(f"https://www.{OWN_DOMAIN}", RetrievalMethod.llm_inference)}
+        )
+        assert not fields.has_own_domain_website()
+
+    def test_a_free_mail_email_does_not(self) -> None:
+        fields = website_verified(a_candidate()).model_copy(
+            update={"email": sourced("acme@gmail.com")}
+        )
+        assert not fields.has_own_domain_website()
+
+    def test_no_email_does_not(self) -> None:
+        fields = website_verified(a_candidate()).model_copy(update={"email": None})
+        assert not fields.has_own_domain_website()
+
+    def test_places_alone_verifies(self) -> None:
+        fields = a_candidate().model_copy(update={"business_check": place_checked()})
+        assert fields.is_verified()
+
+    def test_neither_does_not(self) -> None:
+        assert not a_candidate().is_verified()
+
+    def test_places_verified_is_routable(self) -> None:
+        fields = a_candidate().model_copy(update={"business_check": place_checked()})
+        assert fields.has_routable_address()
+
+    def test_website_verified_with_no_verdict_is_routable(self) -> None:
+        assert website_verified(a_candidate()).has_routable_address()
+
+    @pytest.mark.parametrize("kind", [MissKind.no_listing, MissKind.other_business])
+    def test_website_verified_with_a_door_is_routable(self, kind: MissKind) -> None:
+        fields = website_verified(a_candidate()).model_copy(
+            update={"places_verdict": a_verdict(kind)}
+        )
+        assert fields.has_routable_address()
+
+    def test_website_verified_at_a_mail_drop_is_not_routable(self) -> None:
+        fields = website_verified(a_candidate()).model_copy(update={"places_verdict": a_verdict()})
+        assert fields.is_verified()
+        assert not fields.has_routable_address()
+
+    def test_a_mail_drop_at_an_old_address_does_not_block(self) -> None:
+        fields = website_verified(a_candidate()).model_copy(
+            update={"places_verdict": a_verdict(address=MOVED)}
+        )
+        assert fields.has_routable_address()
+
+    def test_website_verified_with_no_address_is_not_routable(self) -> None:
+        fields = website_verified(a_candidate()).model_copy(update={"address": None})
+        assert not fields.has_routable_address()
+
+
+class TestNameWords:
+    """The name-word test, moved from the Places adapter so the owner gate can share it."""
+
+    def test_designators_stop_words_and_short_tokens_are_dropped(self) -> None:
+        assert name_words("The Acme Freight of TX LLC") == {"ACME", "FREIGHT"}
+
+    def test_a_short_name_shares_all_of_its_words(self) -> None:
+        assert shares_name(frozenset({"ACME"}), frozenset({"ACME", "FREIGHT"}))
+        assert not shares_name(frozenset({"ACME", "FREIGHT"}), frozenset({"ACME"}))
+
+    def test_an_empty_name_is_vacuously_shared(self) -> None:
+        """Documented, so callers that may hold an empty set guard it themselves (OQ-4)."""
+        assert shares_name(frozenset(), frozenset({"ACME"}))

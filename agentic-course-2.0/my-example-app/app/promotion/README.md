@@ -116,12 +116,13 @@ lpe promotion promote --run <id> [--dry-run]
     create company ── commit its id ── create contact (inline primary association) ── pending_review ── commit
 ```
 
-- **Eligible** (`eligibility.py`) means the six required fields are cited — `registry_id`,
-  `legal_name`, `address`, `phone`, `business_check`, `owner` — and the candidate is **qualified
+- **Eligible** (`eligibility.py`) means the five required fields are cited — `registry_id`,
+  `legal_name`, `address`, `phone`, `owner` — the candidate is **verified** (`is_verified()`: Places
+  at its address, or a homepage on its own email domain; website-verification B6), and it is **qualified
   under OQ1-D**: not suppressed (no `disqualification` for its `(vertical, registry_id)`) and not a
   cited-*dead* score. **An unscored candidate is promotable** (absent is not bad; the founder judges
   it at review — confirmed 2026-10-13). Reasons are checked in a fixed order: `disqualified`, then
-  missing fields (`no_principal` when the owner is the only gap), then `dead_score`.
+  `unverified`, then missing fields (`no_principal` when the owner is the only gap), then `dead_score`.
 - **The ledger** (`models.py`) is a state machine, one row per `(vertical, registry_id)`:
   `pending_create → pending_review → enrolling → enrolled`, terminal `rejected`, `duplicate`,
   `withdrawn`. Its unique key is what makes a re-run, or next week's run, promote nothing twice.

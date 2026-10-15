@@ -1,8 +1,10 @@
 """Whether a candidate may be promoted: qualified (OQ1-D), and carrying every required field. Pure.
 
-**The required set** (decided 2026-10-11): ``registry_id``, ``legal_name``, ``address``, ``phone``,
-``business_check`` and ``owner``. The cadence is keyed on a contact, so a company is never promoted
-without its owner; and a business Places never found is owned, not verified, so it is not promoted
+**The required set** (decided 2026-10-11; verification split out by website-verification B6):
+``registry_id``, ``legal_name``, ``address``, ``phone`` and ``owner``, **and the candidate is
+verified**: Places found it at its current address, or it answers a homepage on its own email domain
+(``CandidateFields.is_verified``). The cadence is keyed on a contact, so a company is never promoted
+without its owner; and a business neither check found is owned, not verified, so it is not promoted
 either. Everything else (``website``, ``dba_name``, ``priority``…) is optional: an absent optional
 field never refuses.
 
@@ -12,8 +14,10 @@ the founder judges the unknowns at review (confirmed again 2026-10-13, with both
 almost nothing). A candidate whose judgment call failed looks like one judged clean; T7 has no
 "judged" marker, so it can reach review, and the founder catches it there.
 
-The reasons are checked in a fixed order — ``disqualified``, then the missing fields, then
-``dead_score`` — so a candidate refused for two reasons is always counted under the same one.
+The reasons are checked in a fixed order — ``disqualified``, then ``unverified``, then the missing
+fields, then ``dead_score`` — so a candidate refused for two reasons is always counted under the
+same one. ``unverified`` comes before the owner because an unverified candidate never reaches the
+owner node: counting it ``no_principal`` would hide why.
 """
 
 from typing import Final
@@ -29,7 +33,6 @@ REQUIRED_FIELDS: Final = (
     "legal_name",
     "address",
     "phone",
-    "business_check",
     "owner",
 )
 """The fields a promoted candidate must cite, in ``CandidateFields`` declaration order."""
@@ -50,6 +53,8 @@ def check_promotable(candidate: CandidateResponse, *, suppressed: bool) -> None:
     reason: RefusalReason | None = None
     if suppressed:
         reason = RefusalReason.disqualified
+    elif not fields.is_verified():
+        reason = RefusalReason.unverified
     elif missing == ("owner",):
         reason = RefusalReason.no_principal
     elif missing:

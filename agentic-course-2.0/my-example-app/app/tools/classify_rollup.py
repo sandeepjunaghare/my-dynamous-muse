@@ -8,7 +8,9 @@ empty ``website``, and a cited headcount becomes ``headcount_band`` (T6). Nothin
 recorded, and a disqualified business keeps none of it.
 
 **Free before paid** (D8): a candidate the free predicates already removed is never sent, and
-neither is one ``verify_business`` could not verify: T9 cannot promote it (OQ-5). What Places saw
+neither is one ``verify_business`` could not verify — neither Places at its address nor a homepage
+on its own email domain (``CandidateFields.is_verified``, website-verification B1): T9 cannot
+promote it (OQ-5). What Places saw
 reaches the prompt as context through ``StageContext.places`` and is never stored (D13). **Retries
 do not pay twice** for a candidate already scored or disqualified. **A per-run call cap**
 (``max_judgment_calls_per_run``) is a breaker against a runaway loop: reaching it ends the stage
@@ -56,7 +58,7 @@ class _ClassifyRollup:
             if candidate.id in removed or fields.priority is not None:
                 skipped += 1
                 continue
-            if fields.business_check is None:
+            if not fields.is_verified():
                 unverified += 1
                 continue
             if calls >= cap:

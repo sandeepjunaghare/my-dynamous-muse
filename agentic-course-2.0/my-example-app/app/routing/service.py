@@ -1,7 +1,7 @@
 """Cluster one run's candidates into drive routes.
 
 ```
-candidates of the run ──has_verified_address?──no──▶ counted, never geocoded
+candidates of the run ──has_routable_address?──no──▶ counted, never geocoded
                                │ yes
                                ▼
                  Census Geocoder (one address at a time)
@@ -10,10 +10,14 @@ candidates of the run ──has_verified_address?──no──▶ counted, neve
         cluster_points(max_doors) ──▶ route_assignment (the run's rows replaced)
 ```
 
-**Eligibility is a verified address, among the candidates not excluded** (decided 2026-10-10;
-exclusion added by T9, OQ8-B). The stage passes the run's disqualified candidates as ``exclude``,
-so routes are built from survivors only. This slice still never reads ``qualification``: the stage
-module bridges the two, as ``search_registry`` does for sourcing.
+**Eligibility is a routable address, among the candidates not excluded** (decided 2026-10-10;
+exclusion added by T9, OQ8-B; widened by website-verification OQ-3). Routable is Places-verified
+at the current address, or website-verified with no ``mail_drop`` verdict for that address
+(``CandidateFields.has_routable_address``): a website verifies the business, not the door, so a
+known mail drop is counted ``routing_mail_drop`` and never geocoded. The stage passes the run's
+disqualified candidates as ``exclude``, so routes are built from survivors only. This slice still
+never reads ``qualification``: the stage module bridges the two, as ``search_registry`` does for
+sourcing.
 
 **One failed geocode leaves one candidate out; every geocode failing is an error.** A single
 timeout should not cost the week's routes, and re-running the stage retries it, because the stage
@@ -105,13 +109,20 @@ class RoutingService:
         excluded = frozenset(exclude)
         candidates = [candidate for candidate in everyone if candidate.id not in excluded]
         # Pair each eligible candidate with its address here, so nothing downstream has to re-check
-        # an address that ``has_verified_address`` already guaranteed (PR #19 review, L1).
+        # an address that ``has_routable_address`` already guaranteed (PR #19 review, L1).
         eligible = [
             (candidate, address.value)
             for candidate in candidates
-            if candidate.fields.has_verified_address()
+            if candidate.fields.has_routable_address()
             and (address := candidate.fields.address) is not None
         ]
+        mail_drops = sum(
+            1
+            for candidate in candidates
+            if candidate.fields.has_own_domain_website()
+            and not candidate.fields.has_routable_address()
+            and candidate.fields.has_mail_drop_here()
+        )
 
         if eligible:
             if self._geocoder is None:
@@ -137,7 +148,8 @@ class RoutingService:
         counts = {
             "routing_disqualified": len(everyone) - len(candidates),
             "routing_eligible": len(eligible),
-            "routing_unverified_address": len(candidates) - len(eligible),
+            "routing_mail_drop": mail_drops,
+            "routing_unverified_address": len(candidates) - len(eligible) - mail_drops,
             "routing_geocode_unmatched": misses.unmatched,
             "routing_geocode_ambiguous": misses.ambiguous,
             "routing_geocode_failed": misses.failed,

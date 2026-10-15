@@ -538,6 +538,7 @@ PROMOTE_COUNTS: tuple[str, ...] = (
     "created",
     "already_promoted",
     "refused_disqualified",
+    "refused_unverified",
     "refused_dead_score",
     "refused_no_principal",
     "refused_missing_fields",

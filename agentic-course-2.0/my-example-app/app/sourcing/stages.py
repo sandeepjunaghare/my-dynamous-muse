@@ -64,6 +64,8 @@ FIELD_OWNERS: Final[Mapping[str, PipelineStage]] = MappingProxyType(
         "website": PipelineStage.verify_business,
         # The Places check: the place ID only (D13).
         "business_check": PipelineStage.verify_business,
+        # Our verdict on a Places miss: a kind and the place ID only (D13).
+        "places_verdict": PipelineStage.verify_business,
         # The owner (T6): the census officer is filled by the registry stage (it may only fill);
         # the judgment node only where that is absent, and a retry of it re-decides its own answer.
         "owner": PipelineStage.resolve_owner,

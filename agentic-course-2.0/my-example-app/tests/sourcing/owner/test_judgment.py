@@ -31,7 +31,7 @@ from tests.manifests.replay import (
     web_fetch_call,
     web_fetch_result,
 )
-from tests.sourcing.builders import CENSUS_URL, a_candidate
+from tests.sourcing.builders import CENSUS_URL, a_candidate, looked_up, sourced
 
 ABOUT = "https://www.acme.test/about"
 READ_AT = datetime(2026, 10, 15, 15, 0, tzinfo=UTC)
@@ -45,6 +45,10 @@ INIT: StreamLine = {
     "permissionMode": "dontAsk",
     "cwd": "/app",
 }
+
+
+FIELDS = a_candidate().model_copy(update={"website": looked_up("https://www.acme.test")})
+"""The candidate the gate ties pages to: :data:`ABOUT` is on its own website host."""
 
 
 def _answer(
@@ -73,7 +77,7 @@ async def _resolve(stream: list[StreamLine]) -> tuple[AdmittedOwner, RunCost]:
     run = await run_owner_judgment(
         a_candidate(), cost=cost, runner=Replay(stream), clock=lambda: READ_AT
     )
-    return admit_owner(run.answer, reads=run.reads), cost
+    return admit_owner(run.answer, FIELDS, reads=run.reads), cost
 
 
 def _read(url: str = ABOUT) -> PageRead:
@@ -107,18 +111,20 @@ class TestAdmitted:
     def test_the_name_check_is_word_and_case_tolerant(self, name: str, quote: str) -> None:
         """A designator inside a word is not one; case and trailing punctuation do not matter."""
         answer = OwnerAnswer.model_validate(_answer(name, quote=quote))
-        assert admit_owner(answer, reads=[_read()]).owner is not None
+        assert admit_owner(answer, FIELDS, reads=[_read()]).owner is not None
 
     @pytest.mark.parametrize("name", ["Bryan Griggs,", "Bryan Griggs;", " Bryan Griggs: "])
     def test_trailing_list_punctuation_is_not_stored(self, name: str) -> None:
         """PR #34 review L3: T9 splits the stored name, so "Griggs," would reach HubSpot."""
-        owner = admit_owner(OwnerAnswer.model_validate(_answer(name)), reads=[_read()]).owner
+        owner = admit_owner(
+            OwnerAnswer.model_validate(_answer(name)), FIELDS, reads=[_read()]
+        ).owner
         assert owner is not None
         assert owner.value.name == "Bryan Griggs"
 
     def test_a_final_period_is_kept(self) -> None:
         answer = OwnerAnswer.model_validate(_answer("Bryan Griggs Jr.", quote="Bryan Griggs Jr."))
-        owner = admit_owner(answer, reads=[_read()]).owner
+        owner = admit_owner(answer, FIELDS, reads=[_read()]).owner
         assert owner is not None
         assert owner.value.name == "Bryan Griggs Jr."
 
@@ -148,14 +154,14 @@ class TestOmitted:
         ],
     )
     def test_each_rule_omits_with_its_reason(self, answer: JsonValue, reason: str) -> None:
-        admitted = admit_owner(OwnerAnswer.model_validate(answer), reads=[_read()])
+        admitted = admit_owner(OwnerAnswer.model_validate(answer), FIELDS, reads=[_read()])
         assert admitted.owner is None
         assert admitted.omitted is not None
         assert reason in admitted.omitted
 
     def test_a_null_name_carries_the_models_reason(self) -> None:
         answer = OwnerAnswer.model_validate(_answer(None, reason="x" * 500))
-        omitted = admit_owner(answer, reads=[]).omitted
+        omitted = admit_owner(answer, FIELDS, reads=[]).omitted
         assert omitted is not None
         assert omitted.startswith("no name offered: ")
         assert len(omitted) <= len("no name offered: ") + 200
@@ -163,14 +169,14 @@ class TestOmitted:
     def test_google_maps_is_never_admitted(self) -> None:
         maps = "https://www.google.com/maps/place/Acme"
         answer = OwnerAnswer.model_validate(_answer(url=maps))
-        omitted = admit_owner(answer, reads=[_read(maps)]).omitted
+        omitted = admit_owner(answer, FIELDS, reads=[_read(maps)]).omitted
         assert omitted is not None
         assert "Google Maps" in omitted
 
     def test_the_registry_record_is_not_a_read(self) -> None:
         """No evidence parameter: the census cannot name the owner, which is why the node runs."""
         answer = OwnerAnswer.model_validate(_answer(url=CENSUS_URL))
-        omitted = admit_owner(answer, reads=[_read()]).omitted
+        omitted = admit_owner(answer, FIELDS, reads=[_read()]).omitted
         assert omitted is not None
         assert "never successfully read" in omitted
 
@@ -200,7 +206,7 @@ class TestOmitted:
         """A refused name may be a real person's; omissions log the reason only."""
         answer = OwnerAnswer.model_validate(_answer(title="Registered Agent"))
         with capture_logs() as captured:
-            admit_owner(answer, reads=[_read()])
+            admit_owner(answer, FIELDS, reads=[_read()])
         assert captured
         assert "Griggs" not in repr(captured)
 
@@ -209,7 +215,7 @@ class TestOmitted:
         why = "Found Bryan Griggs on a directory but could not fetch it"
         answer = OwnerAnswer.model_validate(_answer(None, url=None, reason=why))
         with capture_logs() as captured:
-            admitted = admit_owner(answer, reads=[])
+            admitted = admit_owner(answer, FIELDS, reads=[])
         assert admitted.omitted == f"no name offered: {why}"
         assert captured
         assert "Griggs" not in repr(captured)
@@ -293,3 +299,70 @@ class TestIsolation:
     def test_the_answer_contract_is_lax(self) -> None:
         answer = OwnerAnswer.model_validate({"name": "A Person", "confidence": "high"})
         assert answer.citation is None
+
+
+OFF_SITE = "https://other-acme.test/team"
+
+
+class TestTheBusinessTie:
+    """PR #34 M3, website-verification OQ-4: the cited page must be about *this* business."""
+
+    def test_a_same_surname_on_an_unrelated_page_is_omitted(self) -> None:
+        answer = OwnerAnswer.model_validate(
+            _answer("Dana Reyes", title="President", url=OFF_SITE, quote="Dana Reyes, President")
+        )
+        admitted = admit_owner(answer, FIELDS, reads=[_read(OFF_SITE)])
+        assert admitted.owner is None
+        assert admitted.omitted == "the cited page is not tied to this business"
+
+    def test_the_same_quote_on_the_businesss_own_site_is_admitted(self) -> None:
+        answer = OwnerAnswer.model_validate(
+            _answer("Dana Reyes", title="President", quote="Dana Reyes, President")
+        )
+        assert admit_owner(answer, FIELDS, reads=[_read()]).owner is not None
+
+    def test_the_bare_host_of_the_own_site_counts(self) -> None:
+        bare = "https://acme.test/about"
+        answer = OwnerAnswer.model_validate(_answer(url=bare, quote="Bryan Griggs, owner"))
+        assert admit_owner(answer, FIELDS, reads=[_read(bare)]).owner is not None
+
+    def test_an_off_site_quote_naming_the_dba_is_admitted(self) -> None:
+        answer = OwnerAnswer.model_validate(
+            _answer(url=OFF_SITE, quote="Bryan Griggs, owner of Acme Freight")
+        )
+        assert admit_owner(answer, FIELDS, reads=[_read(OFF_SITE)]).owner is not None
+
+    def test_an_off_site_quote_naming_the_legal_name_is_admitted(self) -> None:
+        answer = OwnerAnswer.model_validate(
+            _answer(url=OFF_SITE, quote="Acme Logistics is run by Bryan Griggs")
+        )
+        assert admit_owner(answer, FIELDS, reads=[_read(OFF_SITE)]).owner is not None
+
+    def test_one_shared_word_off_site_is_not_enough(self) -> None:
+        answer = OwnerAnswer.model_validate(
+            _answer(url=OFF_SITE, quote="Bryan Griggs founded Acme in 2009.")
+        )
+        admitted = admit_owner(answer, FIELDS, reads=[_read(OFF_SITE)])
+        assert admitted.omitted == "the cited page is not tied to this business"
+
+    def test_without_a_website_only_the_name_ties(self) -> None:
+        bare = a_candidate()
+        answer = OwnerAnswer.model_validate(_answer(quote="Bryan Griggs founded Acme in 2009."))
+        assert admit_owner(answer, bare, reads=[_read()]).owner is None
+
+    def test_a_name_with_no_distinguishing_word_never_ties_off_site(self) -> None:
+        """``AJ LLC`` reduces to nothing; ``shares_name`` would be vacuously true: fail closed."""
+        nameless = a_candidate().model_copy(
+            update={"legal_name": sourced("AJ LLC"), "dba_name": None}
+        )
+        answer = OwnerAnswer.model_validate(_answer(url=OFF_SITE, quote="Bryan Griggs of AJ LLC"))
+        admitted = admit_owner(answer, nameless, reads=[_read(OFF_SITE)])
+        assert admitted.omitted == "the cited page is not tied to this business"
+
+    def test_the_omission_never_logs_the_name(self) -> None:
+        answer = OwnerAnswer.model_validate(
+            _answer("Dana Reyes", url=OFF_SITE, quote="Dana Reyes, President")
+        )
+        with capture_logs() as logs:
+            admit_owner(answer, FIELDS, reads=[_read(OFF_SITE)])
+        assert "Reyes" not in str(logs)

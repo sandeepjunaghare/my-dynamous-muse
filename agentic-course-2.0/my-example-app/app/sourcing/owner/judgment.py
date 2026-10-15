@@ -10,6 +10,11 @@ one person and the page that names them. The boundary guarantees copy the ``clas
   neither the title nor the quote names an agent (E10). There is no registry evidence to fall back
   on: the registry naming nobody is why the node runs. Google Maps pages are never admitted (D13).
   **Anything else is left absent and never repaired.**
+* **The page is tied to this business** (PR #34 M3, website-verification OQ-4). The page is on the
+  business's own website host (``www.`` ignored), or the quote also carries the legal or DBA name's
+  distinguishing words, by the Places matcher's rule (``shares_name``). Otherwise a same-surnamed
+  person at a same-named company elsewhere could be pinned on this one. A name with no
+  distinguishing word is never tied off its own site: fail closed.
 * **No name is ever logged.** An omission logs its fixed reason only, never the model's free text,
   which may name the person it refused; a refused name may still be a real person's.
 * **It cannot touch the machine.** ``WebSearch`` and ``WebFetch`` only; no file, shell or MCP
@@ -23,6 +28,7 @@ from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKError, Message, ResultMessage, query
 from pydantic import ValidationError
@@ -36,7 +42,13 @@ from app.shared.provenance import ProvenancedValue, RetrievalMethod
 from app.sourcing.exceptions import OwnerJudgmentError
 from app.sourcing.owner.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.sourcing.owner.schemas import AdmittedOwner, OwnerAnswer
-from app.sourcing.schemas import CandidateFields, is_google_maps, principal_or_none
+from app.sourcing.schemas import (
+    CandidateFields,
+    is_google_maps,
+    name_words,
+    principal_or_none,
+    shares_name,
+)
 
 logger = get_logger(__name__)
 
@@ -243,7 +255,30 @@ def _omit(reason: str, detail: str = "") -> AdmittedOwner:
     return AdmittedOwner(owner=None, omitted=f"{reason}: {detail}" if detail else reason)
 
 
-def admit_owner(answer: OwnerAnswer, *, reads: Sequence[PageRead]) -> AdmittedOwner:
+def _host(url: str) -> str:
+    """The lowercased host without ``www.``; empty when the URL has none."""
+    return (urlsplit(url.strip()).hostname or "").removeprefix("www.")
+
+
+def _tied(page_url: str, quote: str, fields: CandidateFields) -> bool:
+    """Whether the cited page is about *this* business (PR #34 M3, website-verification OQ-4).
+
+    On the business's own website host, the page is the business's whoever found it: an About page
+    that says "Dana founded the company" never repeats its name. Anywhere else, the quote must carry
+    the legal or DBA name's distinguishing words. An empty word set never ties (``shares_name`` is
+    vacuously true on one, so it is refused here).
+    """
+    page_host = _host(page_url)
+    if fields.website is not None and page_host and page_host == _host(fields.website.value):
+        return True
+    quoted = name_words(quote)
+    names = (name_words(cited.value) for cited in (fields.legal_name, fields.dba_name) if cited)
+    return any(ours and shares_name(ours, quoted) for ours in names)
+
+
+def admit_owner(
+    answer: OwnerAnswer, fields: CandidateFields, *, reads: Sequence[PageRead]
+) -> AdmittedOwner:
     """Keep the named person only if a page the node read names them (A10); else say why not.
 
     The checks run in order and the first that fails decides. No registry evidence is accepted:
@@ -270,6 +305,8 @@ def admit_owner(answer: OwnerAnswer, *, reads: Sequence[PageRead]) -> AdmittedOw
         return _omit("names a company or nothing, not a person (E18)")
     if not _names(citation.quote, _surname(principal.name)):
         return _omit("the quote does not contain the name")
+    if not _tied(read.url, citation.quote, fields):
+        return _omit("the cited page is not tied to this business")
     roles = f"{principal.title or ''} {citation.quote}".lower()
     if any(agent in roles for agent in AGENT_TITLES):
         return _omit("an agent is not the owner")

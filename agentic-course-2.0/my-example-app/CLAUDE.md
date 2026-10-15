@@ -33,7 +33,7 @@ app/promotion/                              # the HubSpot gateway: client, dedup
 app/promotion/service.py                    # T9: run → Company + Contact at pending_review (the ledger, dedupe, recovery); review → CadenceService.enrol
 app/sourcing/                               # sourcing_run + candidate (field-level provenance, one owner per field), the pipeline runner, the sourcing_pool backlog, `lpe sourcing run`
 app/sourcing/sources/                       # adapters bound by base_url: FMCSA census (discovery; also fills owner + email) · QCMobile (lookup) · Motus revocations (join); SoQL pushdown
-app/sourcing/sources/google_places.py       # the Places Text Search check (Pro fields only), the deterministic matcher, binding by declared source — never a source (D13)
+app/sourcing/sources/google_places.py       # the Places Text Search check (Pro fields only), the deterministic matcher, our verdict on a miss, binding by declared source — never a source (D13)
 app/sourcing/website.py                     # the census email domain → one free homepage fetch; free-mail and shared domains refused
 app/sourcing/owner/                         # the resolve_owner judgment node: a person a fetched page names, held to A10's gate, or none
 app/qualification/                          # free predicate evaluator, classify_rollup judgment node, priority score, disqualification + suppression, dry-run (T7)
@@ -41,7 +41,7 @@ app/cadence/                                # the three-touch schedule (no outco
 app/routing/                                # route_assignment, the Census Geocoder (never Places), balanced-bisection clustering (T8)
 app/tools/registry.py                       # the Stage contract (+ the run's in-memory Places channel); a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
 app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushdown, refresh the pool, take a batch best first, free evidence, free predicates (T7)
-app/tools/verify_business.py                # stage 2 of 5 (T6): website from the email domain, Places check → place ID + checked address only; refuses without a declared source/key
+app/tools/verify_business.py                # stage 2 of 5 (T6): website from the email domain (an own-domain homepage verifies too), Places check → place ID + checked address, or our verdict on a miss; refuses without a declared source/key
 app/tools/classify_rollup.py                # stage 3 of 5 (T7): reads the Places channel, skips unverified; also a cited homepage and headcount (T6)
 app/tools/resolve_owner.py                  # stage 4 of 5 (T6): census first; the node only for verified officer-less survivors; cap → degraded
 app/tools/cluster_routes.py                 # stage 5 of 5 (T8): verified addresses → drive routes of ≤ ROUTE_MAX_DOORS

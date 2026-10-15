@@ -52,11 +52,12 @@ absent, not inferred*. So a candidate with a missing phone is **storable but not
 candidate.fields.phone  # None
 is_promotable(candidate.fields.phone)  # False — HubSpot may not receive it
 candidate.fields.unprovenanced_fields()
-# ("phone", "email", "website", "business_check", "owner", "headcount_band", "priority")
+# ("phone", "email", "website", "business_check", "places_verdict", "owner", "headcount_band", "priority")
 ```
 
 T9 enforces which fields promotion requires (decided 2026-10-11: `registry_id`, `legal_name`, `address`,
-`phone`, `business_check`, `owner`). This slice only reports which fields are missing.
+`phone`, `owner`, and since website verification, `is_verified()` instead of `business_check`). This slice
+only reports which fields are missing.
 
 `registry_id` is stored twice, as the key column and as the cited `fields.registry_id`.
 `ck_candidate_registry_id_is_cited` stops the two from ever disagreeing, and refuses a row whose
@@ -77,7 +78,7 @@ built directly through the ORM can store a raw, uncited value, and that one row 
 | Field | Owner |
 |---|---|
 | `registry_id` · `legal_name` · `dba_name` · `address` · `phone` · `email` · `source_records` | `search_registry` |
-| `website` · `business_check` | `verify_business` |
+| `website` · `business_check` · `places_verdict` | `verify_business` |
 | `priority` · `headcount_band` | `classify_rollup` |
 | `owner` | `resolve_owner` (the census adapter *fills* it from `search_registry`) |
 
@@ -108,6 +109,19 @@ address* — the values are compared, never `retrieved_at`, which every registry
 so a business that moved is unverified until it is checked again. The address itself stays the census
 copy. "Verified" means Places found the business from the census name and address, not that a second
 address matched (D13, option A). A permanently closed listing stores no check.
+
+**Two ways to be verified** (website-verification B1, B2). `CandidateFields.is_verified()` is Places at the
+current address **or** `has_own_domain_website()`: a `website` cited `web_lookup` (the free fetch, never the
+judgment node's `llm_inference` homepage) whose host, without `www.`, equals the email's own domain. The paid
+stages and T9 ask `is_verified()`. Routing asks `has_routable_address()`, which is Places-verified, or
+website-verified with no current `mail_drop` verdict: a website verifies the business, not the door.
+
+**A miss can leave our verdict** (website-verification OQ-1, OQ-2). `places_verdict` (`PlacesVerdict(kind,
+place_id, checked_address)`) records what sat at the census address when Places did not match. The kinds are
+`mail_drop` (a `post_office`, `business_center` or `shipping_service`), then `no_listing` (only address types),
+then `other_business` (sharing **no** distinguishing word). It keeps the place ID and our kind, never a Places
+name, type or address, and it is the second field D13 lets cite Google Maps. Like the check, it is tied to the
+address it checked.
 
 **The D13 guard.** `CandidateFields` refuses any other field cited to Google Maps:
 `places.googleapis.com`, `maps.googleapis.com`, `maps.google.com`, `maps.app.goo.gl`, and the `/maps`
@@ -158,7 +172,11 @@ Stage 2 (`app/tools/verify_business.py`), for every candidate no free rule remov
   headers are read; and the whole check is bounded at 10 s. It never raises.
 - **The channel.** What Places saw for a stored check goes on `StageContext.places`, one dict per run
   created by the runner, for `classify_rollup` within the run (D13: use and discard). Never stored or
-  logged. A miss is counted (`places_not_found`) and nothing is recorded (OQ-2).
+  logged. A miss is counted (`places_not_found`). Only a result **at the census address** records
+  `places_verdict` (`classify_miss`, counted `places_mail_drop` / `places_no_listing` /
+  `places_other_business`). Nothing at the address records nothing. A current verdict, like a current check,
+  is not paid for twice in a run. Places still runs for a website-verified candidate (`verify_website_only`
+  counts those), because only Places can say the door is a mail drop.
 - **The refusal** (A3). Places runs only for a manifest that **declares** it (`base_url` the API or its
   docs page) — terms are accepted per source at `activate`. No declared source, no key, or a key refused
   mid-batch fails the run (its batch goes back to the pool) unless `--allow-degraded`.
@@ -176,12 +194,14 @@ candidate the judgment rules removed.
 - **Census first** (A2). `search_registry` already filled `owner` from `company_officer_1` wherever
   `principal_or_none` accepts it, cited `bulk_file`. Those candidates cost nothing here.
 - **The node only for verified, officer-less survivors.** A candidate is sent to `owner/` only when no rule
-  removed it, it has a `business_check` (an unverified candidate cannot be promoted, OQ-5), and it still has
-  no `owner`. A refused census officer (`"ACME LLC - JANE DOE"`) counts as absent, so the node runs for it.
+  removed it, it `is_verified()` (Places or an own-domain homepage; an unverified candidate cannot be
+  promoted, OQ-5), and it still has no `owner`. A refused census officer (`"ACME LLC - JANE DOE"`) counts as absent, so the node runs for it.
 - **The gate** (`owner/judgment.py`, A10). A name is kept only when, in order: one was offered; it is
   cited; the URL parses; the node verifiably fetched that page (`ReadTracker`, fail-closed); it is not
-  Google Maps; `Principal` accepts it as a person; the quote contains its last word; and the title is not
-  a registered, process or statutory agent. The registry record is never citable here. Anything else
+  Google Maps; `Principal` accepts it as a person; the quote contains its last word; **the page is tied to
+  this business** (it is on the candidate's website host, or the quote carries the legal or DBA name's
+  distinguishing words, by `shares_name`; PR #34 M3, website-verification OQ-4); and the title is not a
+  registered, process or statutory agent. The registry record is never citable here. Anything else
   leaves `owner` absent: **never guessed, never repaired.** No name is ever logged.
 - **`owner` belongs to `resolve_owner`.** A retry of it may replace its own answer; the registry may only
   fill an empty one (PR #31 L2). An owner already stored is kept, so a retry pays nothing.
@@ -336,5 +356,5 @@ editable.
 ## Cross-slice reads
 
 - **Reads** `manifests`: `ManifestService.get_active` / `get` and the `IcpBand` type. It never writes there.
-- **Read by** T7 (FKs `disqualification` → `candidate`), T8 (filters on `fields.has_verified_address()`) and T9 (FKs the
+- **Read by** T7 (FKs `disqualification` → `candidate`), T8 (filters on `fields.has_routable_address()`) and T9 (FKs the
   promotion ledger → `candidate` and gates every field on `is_promotable`).

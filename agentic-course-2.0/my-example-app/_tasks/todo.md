@@ -1788,8 +1788,25 @@ OQ-1…OQ-4 (verdict field · which types/kinds · routing website-verified · o
 all four recommendations.
 
 - [x] OQ-1…OQ-4 answered — 2026-10-15, the founder took all four recommendations
-- [ ] Phase 1: `PlacesVerdict`/`MissKind`, `places_verdict` + owner, D13 allow-list, `is_verified` / `has_own_domain_website` / `has_routable_address`, name-word test moved to `schemas.py`
-- [ ] Phase 2: `classify_miss` + fixtures; `verify_business` records the verdict, skips a current one, counts
-- [ ] Phase 3: classify/owner skips on `is_verified()`, prompt verdict line, structure pin, routing, owner page tie, T9 `unverified`
-- [ ] Phase 4: five-stage E2E case, docs (ticket, READMEs, CLAUDE.md), `/piv-validate`
-- [ ] Level 4 read-only Places rerun over run `9ca51e17` (paid run only with the founder's go-ahead)
+- [x] Phase 1: `PlacesVerdict`/`MissKind`, `places_verdict` + owner, D13 allow-list, `is_verified` / `has_own_domain_website` / `has_routable_address`, name-word test moved to `schemas.py` — pure move, the matcher's tests passed unchanged
+- [x] Phase 2: `classify_miss` + fixtures; `verify_business` records the verdict, skips a current one, counts — `_Outcome` replaces the bare `Checked | None`
+- [x] Phase 3: classify/owner skips on `is_verified()`, prompt verdict line, structure pin, routing, owner page tie, T9 `unverified` — `PROMOTE_COUNTS` needed `refused_unverified` too (not in the plan)
+- [x] Phase 4: five-stage E2E case, docs (ticket, READMEs, CLAUDE.md), validation — 1,696 passed, 4 skipped; alembic no drift
+- [ ] Level 4 read-only Places rerun over run `9ca51e17` (paid run only with the founder's go-ahead) — **not done, waits for the founder**
+
+### Review
+
+- **Worked:** writing the plan to the recommendations meant "go with the recommendations" was a complete answer,
+  and the task order held. Phase 3 was independent of Phase 2, as the plan said. Pinning the predicates on
+  `CandidateFields` kept each consumer change to one line.
+- **Didn't, at first:** the plan missed two things the code forced. `PROMOTE_COUNTS` is a fixed key list, so
+  the new refusal reason needed a key there. And OQ-4's tie broke two existing fixtures that quoted an owner
+  off-site with no business name (the E2E's BRAVO and the `resolve_owner` stage tests). Both are the tie working
+  as designed. The fixtures were updated, not the rule.
+- **A judgment call recorded as a deviation:** `other_business` needs the listing to have at least one
+  distinguishing word. An empty name set is vacuously disjoint, and a nameless business result is no evidence
+  that someone else is there.
+- **Next time:** a plan that adds a refusal reason or a count should grep for the fixed key lists
+  (`PROMOTE_COUNTS`, `COUNT_KEYS`) up front.
+- **Validation:** ruff, format, mypy, pyright clean; pytest with the DB 1,696 passed, 4 skipped (paid `live`);
+  alembic check no drift.

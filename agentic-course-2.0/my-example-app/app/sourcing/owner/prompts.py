@@ -25,8 +25,10 @@ gives one.
 2. A registered agent, a process agent or a filing service is never the owner.
 3. Never take a name from the business name alone. A company (LLC, INC, CORP…) is not a person.
 4. Cite exactly one page you fetched with WebFetch in this session, with a short quote from it \
-that contains the person's name. A search-result snippet is not a read; a URL you remember is not \
-a read. Never cite a Google Maps page. Citations to anything else are discarded automatically.
+that contains the person's name. Unless the page is on the business's own website, the quote must \
+also name the business, so it is plain the person belongs to this business and not a similarly \
+named one. A search-result snippet is not a read; a URL you remember is not a read. Never cite a \
+Google Maps page. Citations to anything else are discarded automatically.
 5. The email address is a lead (its local part is often a first name), never a citation.
 6. If you cannot cite a person, return name: null and say why in reason. An uncited name is \
 discarded; a wrong one costs more than none.

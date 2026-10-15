@@ -8,6 +8,7 @@ does not know: no Places key and no network are needed.
 import json
 from collections.abc import Sequence
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -19,9 +20,10 @@ from app.qualification.service import QualificationService
 from app.shared.provenance import RetrievalMethod
 from app.sourcing.exceptions import SourceUnavailableError
 from app.sourcing.pool import PoolRepository
-from app.sourcing.schemas import CandidateFields, CandidateResponse
+from app.sourcing.schemas import CandidateFields, CandidateResponse, MissKind, PostalAddress
 from app.sourcing.service import SourcingService
 from app.sourcing.sources.fmcsa import census_pool_record
+from app.sourcing.sources.google_places import place_url
 from app.sourcing.stages import PipelineStage
 from app.tools.registry import StageContext, StageResult, registered_stages
 from app.tools.verify_business import NO_PLACES_SOURCE, VerifyBusinessStage
@@ -33,6 +35,7 @@ from tests.sourcing.builders import (
     REGISTRY,
     a_brief,
     a_source,
+    a_verdict,
     sourced,
 )
 from tests.sourcing.conftest import (
@@ -409,6 +412,136 @@ class TestTheWebsite:
         places = MockPlaces(answers={"Alpha Freight": _found("ChIJ-alpha", "Alpha Freight")})
         result = await _run(_stage(places, web), context)
         assert result.counts["website_unreachable"] == 1
+        assert result.counts["places_verified"] == 1
+
+    async def test_a_homepage_on_the_email_domain_verifies_without_places(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Website-verification B1/B2: the second way to be verified."""
+        web = MockWeb()
+        web.html("https://alpha.test/")
+        places = MockPlaces(answers={"Alpha Freight": (200, load_fixture("places_no_match"))})
+        context, _ = await _setup(db_session, _candidate("Alpha", email="ops@alpha.test"))
+
+        result = await _run(_stage(places, web), context)
+
+        stored = (await _stored(context))["usdot:alpha"]
+        assert stored.business_check is None
+        assert stored.is_verified()
+        assert result.counts["verify_website_only"] == 1
+
+    async def test_a_places_verified_candidate_is_not_counted_website_only(
+        self, db_session: AsyncSession
+    ) -> None:
+        web = MockWeb()
+        web.html("https://alpha.test/")
+        places = MockPlaces(answers={"Alpha Freight": _found("ChIJ-alpha", "Alpha Freight")})
+        context, _ = await _setup(db_session, _candidate("Alpha", email="ops@alpha.test"))
+        result = await _run(_stage(places, web), context)
+        assert result.counts["verify_website_only"] == 0
+
+
+VERDICT_FIXTURES = {
+    "places_mail_drop": (MissKind.mail_drop, "ChIJ-usps-arlington", "United States Postal Service"),
+    "places_no_listing": (MissKind.no_listing, "ChIJ-suite-300", None),
+    "places_other_business": (MissKind.other_business, "ChIJ-napco", "Napco Bag & Film"),
+}
+
+
+@requires_db
+class TestTheVerdict:
+    """Website-verification OQ-1/OQ-2: a miss at the census address records our verdict."""
+
+    @pytest.mark.parametrize("fixture", sorted(VERDICT_FIXTURES))
+    async def test_a_miss_at_the_address_stores_our_verdict_and_no_places_content(
+        self, db_session: AsyncSession, fixture: str
+    ) -> None:
+        kind, place_id, display_name = VERDICT_FIXTURES[fixture]
+        body = load_fixture(fixture)
+        places = MockPlaces(answers={"Alpha Freight": (200, body)})
+        context, _ = await _setup(db_session, _candidate("Alpha"))
+
+        result = await _run(_stage(places, MockWeb()), context)
+
+        stored = (await _stored(context))["usdot:alpha"]
+        verdict = stored.places_verdict
+        assert verdict is not None
+        assert verdict.value.kind is kind
+        assert verdict.value.place_id == place_id
+        assert verdict.value.checked_address == ARLINGTON
+        assert verdict.source_url == place_url(place_id)
+        assert verdict.retrieval_method is RetrievalMethod.web_lookup
+        assert stored.business_check is None
+        assert context.places == {}, "a miss passes no evidence on"
+        dumped = stored.model_dump_json()
+        (listing,) = cast(list[dict[str, object]], cast(dict[str, object], body)["places"])
+        assert str(listing["formattedAddress"]) not in dumped
+        for kind_name in cast(list[str], listing["types"]):
+            assert f'"{kind_name}"' not in dumped, "a Places type is never stored"
+        if display_name is not None:
+            assert display_name not in dumped
+        assert result.counts[f"places_{kind.value}"] == 1
+        assert result.counts["places_not_found"] == 1
+
+    async def test_a_miss_at_another_number_stores_no_verdict(
+        self, db_session: AsyncSession
+    ) -> None:
+        places = MockPlaces(
+            answers={
+                "Alpha Freight": (
+                    200,
+                    {
+                        "places": [
+                            {
+                                "id": "ChIJ-far",
+                                "formattedAddress": "12100 Olympic Dr, Arlington, TX 76011, USA",
+                                "types": ["post_office"],
+                            }
+                        ]
+                    },
+                )
+            }
+        )
+        context, _ = await _setup(db_session, _candidate("Alpha"))
+        result = await _run(_stage(places, MockWeb()), context)
+        assert (await _stored(context))["usdot:alpha"].places_verdict is None
+        assert result.counts["places_not_found"] == 1
+        assert result.counts["places_mail_drop"] == 0
+
+    async def test_a_match_records_no_verdict(self, db_session: AsyncSession) -> None:
+        places = MockPlaces(answers={"Alpha Freight": _found("ChIJ-alpha", "Alpha Freight")})
+        context, _ = await _setup(db_session, _candidate("Alpha"))
+        await _run(_stage(places, MockWeb()), context)
+        assert (await _stored(context))["usdot:alpha"].places_verdict is None
+
+    async def test_a_retry_with_a_current_verdict_makes_no_places_call(
+        self, db_session: AsyncSession
+    ) -> None:
+        """B4: a verdict for this address is not paid for twice."""
+        places = MockPlaces(answers={"Alpha Freight": (200, load_fixture("places_mail_drop"))})
+        context, _ = await _setup(db_session, _candidate("Alpha"))
+        await _run(_stage(places, MockWeb()), context)
+        assert len(places.requests) == 1
+
+        retry = await _run(_stage(places, MockWeb()), context)
+
+        assert len(places.requests) == 1
+        assert retry.counts["places_skipped"] == 1
+        assert context.cost.total_calls(BillableKind.places_lookup) == 1
+
+    async def test_a_verdict_for_an_old_address_does_not_stop_a_new_check(
+        self, db_session: AsyncSession
+    ) -> None:
+        moved = PostalAddress(
+            street="900 Main St", city="Fort Worth", state="TX", postal_code="76102"
+        )
+        stale = _candidate("Alpha").model_copy(update={"places_verdict": a_verdict(address=moved)})
+        places = MockPlaces(answers={"Alpha Freight": _found("ChIJ-alpha", "Alpha Freight")})
+        context, _ = await _setup(db_session, stale)
+
+        result = await _run(_stage(places, MockWeb()), context)
+
+        assert len(places.requests) == 1
         assert result.counts["places_verified"] == 1
 
 

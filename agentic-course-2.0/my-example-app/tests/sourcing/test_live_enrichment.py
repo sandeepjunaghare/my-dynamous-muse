@@ -57,7 +57,7 @@ async def test_the_owner_node_yield_on_officerless_candidates() -> None:
     named = 0
     for fields in candidates:
         run = await run_owner_judgment(fields, cost=cost)
-        admitted = admit_owner(run.answer, reads=run.reads)
+        admitted = admit_owner(run.answer, fields, reads=run.reads)
         if admitted.owner is not None:
             named += 1
             print(f"  {fields.registry_id.value}: named, cited {admitted.owner.source_url}")

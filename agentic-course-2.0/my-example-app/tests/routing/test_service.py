@@ -13,7 +13,7 @@ from app.routing.exceptions import GeocoderResponseShapeError, GeocoderUnavailab
 from app.routing.schemas import RouteCluster
 from app.routing.service import RoutingService
 from app.sourcing.exceptions import SourcingRunNotFoundError
-from app.sourcing.schemas import CandidateFields, PostalAddress
+from app.sourcing.schemas import CandidateFields, MissKind, PostalAddress
 from app.sourcing.service import SourcingService
 from tests.conftest import requires_db
 from tests.routing.builders import (
@@ -26,7 +26,7 @@ from tests.routing.builders import (
     two_neighbourhoods,
 )
 from tests.routing.conftest import MockCensus, a_match, json_answer, load_fixture
-from tests.sourcing.builders import sourced
+from tests.sourcing.builders import a_verdict, sourced, website_verified
 
 pytestmark = requires_db
 
@@ -71,6 +71,7 @@ class TestClusterRun:
         assert result.counts == {
             "routing_disqualified": 0,
             "routing_eligible": 20,
+            "routing_mail_drop": 0,
             "routing_unverified_address": 0,
             "routing_geocode_unmatched": 0,
             "routing_geocode_ambiguous": 0,
@@ -208,6 +209,78 @@ class TestClusterRun:
     ) -> None:
         with pytest.raises(SourcingRunNotFoundError):
             await RoutingService(db_session, geocoder=census.geocoder()).cluster_run(uuid4())
+
+
+def _website_only(
+    registry_id: str, verdict: MissKind | None = None, *, old: bool = False
+) -> CandidateFields:
+    """A candidate verified by its homepage only, optionally with a Places verdict."""
+    street = street_for(registry_id)
+    address = PostalAddress(street=street, city="Dallas", state="TX", postal_code="75238")
+    checked = (
+        PostalAddress(street="900 Main St", city="Fort Worth", state="TX", postal_code="76102")
+        if old
+        else address
+    )
+    fields = website_verified(
+        CandidateFields(
+            registry_id=sourced(registry_id),
+            legal_name=sourced(f"Acme Logistics {registry_id} LLC"),
+            address=sourced(address),
+        )
+    )
+    if verdict is None:
+        return fields
+    return fields.model_copy(update={"places_verdict": a_verdict(verdict, address=checked)})
+
+
+class TestWebsiteVerified:
+    """Website-verification OQ-3: a website verifies the business; a mail drop is no door."""
+
+    async def _run(
+        self, session: AsyncSession, census: MockCensus, candidate: CandidateFields
+    ) -> dict[str, int]:
+        census.on(
+            candidate.address.value.street if candidate.address else "",
+            json_answer(200, a_match(32.87, -96.71)),
+        )
+        run_id = await a_running_run(session)
+        await record(session, run_id, [candidate])
+        result = await RoutingService(
+            session, geocoder=census.geocoder(), max_doors=12
+        ).cluster_run(run_id)
+        return result.counts
+
+    async def test_with_no_verdict_it_is_routed(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        counts = await self._run(db_session, census, _website_only("w1"))
+        assert counts["routing_clustered"] == 1
+
+    @pytest.mark.parametrize("kind", [MissKind.no_listing, MissKind.other_business])
+    async def test_with_a_door_verdict_it_is_routed(
+        self, db_session: AsyncSession, census: MockCensus, kind: MissKind
+    ) -> None:
+        counts = await self._run(db_session, census, _website_only("w2", kind))
+        assert counts["routing_clustered"] == 1
+
+    async def test_at_a_mail_drop_it_is_counted_and_never_geocoded(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        counts = await self._run(db_session, census, _website_only("w3", MissKind.mail_drop))
+        assert counts["routing_mail_drop"] == 1
+        assert counts["routing_unverified_address"] == 0
+        assert counts["routing_eligible"] == 0
+        assert census.requests == []
+
+    async def test_a_mail_drop_at_an_old_address_does_not_block(
+        self, db_session: AsyncSession, census: MockCensus
+    ) -> None:
+        counts = await self._run(
+            db_session, census, _website_only("w4", MissKind.mail_drop, old=True)
+        )
+        assert counts["routing_clustered"] == 1
+        assert counts["routing_mail_drop"] == 0
 
 
 class TestExcludedCandidates:

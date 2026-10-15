@@ -15,14 +15,16 @@ from structlog.testing import capture_logs
 from app.manifests.schemas import SourceKind
 from app.shared.provenance import RetrievalMethod
 from app.sourcing.exceptions import SourceAuthError, SourceRequestError
-from app.sourcing.schemas import CandidateFields, PostalAddress, is_google_maps
+from app.sourcing.schemas import CandidateFields, MissKind, PostalAddress, is_google_maps
 from app.sourcing.sources.fmcsa import FMCSA_ADAPTERS
 from app.sourcing.sources.google_places import (
     CLOSED_PERMANENTLY,
+    MAIL_DROP_TYPES,
     PLACES_FIELD_MASK,
     PLACES_SEARCH_URL,
     PlaceResult,
     PlacesClient,
+    classify_miss,
     declared_places_source,
     match_place,
     place_url,
@@ -380,3 +382,107 @@ class TestMatchPlace:
             update={"dba_name": sourced("Acme Freight", method=RetrievalMethod.registry_api)}
         )
         assert match_place(fields, [_result()]) is not None
+
+
+def _typed(
+    types: tuple[str, ...],
+    name: str | None = None,
+    address: str = "2100 Olympic Dr Ste 300, Arlington, TX 76011, USA",
+    place_id: str = "ChIJ-here",
+    status: str | None = None,
+) -> PlaceResult:
+    return PlaceResult(
+        id=place_id,
+        display_name=name,
+        formatted_address=address,
+        business_status=status,
+        types=types,
+    )
+
+
+class TestClassifyMiss:
+    """Website-verification OQ-2: our verdict on what sits at the census address. No model."""
+
+    @pytest.mark.parametrize("kind", sorted(MAIL_DROP_TYPES))
+    def test_each_mail_drop_type_is_a_mail_drop(self, kind: str) -> None:
+        result = _typed((kind, "establishment"), name="The UPS Store")
+        assert classify_miss(a_candidate(), [result]) == (MissKind.mail_drop, "ChIJ-here")
+
+    @pytest.mark.parametrize("kind", ["street_address", "premise", "subpremise"])
+    def test_an_address_result_is_no_listing(self, kind: str) -> None:
+        assert classify_miss(a_candidate(), [_typed((kind,))]) == (
+            MissKind.no_listing,
+            "ChIJ-here",
+        )
+
+    def test_a_business_sharing_no_word_is_another_business(self) -> None:
+        napco = _typed(("store", "establishment"), name="Napco Bag & Film")
+        assert classify_miss(a_candidate(), [napco]) == (MissKind.other_business, "ChIJ-here")
+
+    def test_a_business_sharing_one_word_is_a_plain_miss(self) -> None:
+        """Spearpoint: a storefront that shortened our name is not someone else."""
+        fields = _named("SPEARPOINT FREIGHT SERVICES LLC")
+        listing = _typed(("moving_company", "establishment"), name="Spearpoint Logistics")
+        assert match_place(fields, [listing]) is None
+        assert classify_miss(fields, [listing]) is None
+
+    def test_a_business_with_no_name_is_a_plain_miss(self) -> None:
+        assert classify_miss(a_candidate(), [_typed(("store", "establishment"))]) is None
+
+    def test_another_street_number_is_a_plain_miss(self) -> None:
+        elsewhere = _typed(("post_office",), address="12100 Olympic Dr, Arlington, TX 76011, USA")
+        assert classify_miss(a_candidate(), [elsewhere]) is None
+
+    def test_another_zip_is_a_plain_miss(self) -> None:
+        elsewhere = _typed(("post_office",), address="2100 Olympic Dr, Fort Worth, TX 76102, USA")
+        assert classify_miss(a_candidate(), [elsewhere]) is None
+
+    def test_no_formatted_address_is_never_at_the_address(self) -> None:
+        result = PlaceResult(id="ChIJ-x", types=("post_office",))
+        assert classify_miss(a_candidate(), [result]) is None
+
+    def test_no_results_is_a_plain_miss(self) -> None:
+        assert classify_miss(a_candidate(), []) is None
+
+    def test_an_uncheckable_candidate_has_no_verdict(self) -> None:
+        assert classify_miss(_at("PO BOX 1234"), [_typed(("post_office",))]) is None
+
+    def test_a_mail_drop_wins_over_a_business_listed_first(self) -> None:
+        napco = _typed(("store",), name="Napco Bag & Film", place_id="ChIJ-napco")
+        usps = _typed(("post_office",), name="USPS", place_id="ChIJ-usps")
+        assert classify_miss(a_candidate(), [napco, usps]) == (MissKind.mail_drop, "ChIJ-usps")
+
+    def test_no_listing_wins_over_another_business(self) -> None:
+        napco = _typed(("store",), name="Napco Bag & Film", place_id="ChIJ-napco")
+        suite = _typed(("subpremise",), place_id="ChIJ-suite")
+        assert classify_miss(a_candidate(), [napco, suite]) == (MissKind.no_listing, "ChIJ-suite")
+
+    def test_a_closed_post_office_is_still_a_mail_drop(self) -> None:
+        usps = _typed(("post_office",), name="USPS", status=CLOSED_PERMANENTLY)
+        assert classify_miss(a_candidate(), [usps]) == (MissKind.mail_drop, "ChIJ-here")
+
+    def test_a_courier_is_never_a_mail_drop(self) -> None:
+        courier = _typed(("courier_service", "establishment"), name="Metro Courier")
+        verdict = classify_miss(a_candidate(), [courier])
+        assert verdict is not None
+        assert verdict.kind is MissKind.other_business
+
+    def test_a_business_listing_is_never_no_listing(self) -> None:
+        """A business carries ``establishment``; it is never all address types."""
+        result = _typed(("premise", "establishment"), name="Acme")
+        assert classify_miss(a_candidate(), [result]) is None
+
+    @pytest.mark.parametrize(
+        ("fixture", "kind"),
+        [
+            ("places_mail_drop", MissKind.mail_drop),
+            ("places_no_listing", MissKind.no_listing),
+            ("places_other_business", MissKind.other_business),
+        ],
+    )
+    async def test_each_fixture_reads_as_its_kind(self, fixture: str, kind: MissKind) -> None:
+        results = await _search(MockPlaces(default=(200, load_fixture(fixture))))
+        assert match_place(a_candidate(), results) is None
+        verdict = classify_miss(a_candidate(), results)
+        assert verdict is not None
+        assert verdict.kind is kind
