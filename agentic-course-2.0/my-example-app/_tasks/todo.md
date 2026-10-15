@@ -1723,19 +1723,33 @@ sync` gets one too.
 ## T6 PR B: `resolve_owner`, the T7 node edits, the headcount band (planned 2026-10-15)
 
 Plan: `.claude/plans/t6-enrichment-pr-b.md` (the second half of `t6-enrichment.md`; OQ-1…OQ-5 and A1–A10 inherited).
-Branch `feat/t6-owner` in the main checkout; test DB on 5434; no migration. Awaiting approval.
+Branch `feat/t6-owner` in the main checkout; test DB on 5434; no migration. Approved and built 2026-10-15.
 
-- [ ] B1: `OwnerJudgmentError` in `app/sourcing/exceptions.py`
-- [ ] B2: `app/sourcing/owner/schemas.py` (`OwnerAnswer`, `AdmittedOwner`)
-- [ ] B3: `app/sourcing/owner/prompts.py` (vertical-free; cited identity + email)
-- [ ] B4: `app/sourcing/owner/judgment.py` (node mirrors T7's; `admit_owner`, A10's eight rules)
-- [ ] B5: SDK allow-list gains the owner node
-- [ ] B6: `app/tools/resolve_owner.py` (stage 4; OQ-5 skip; cap → degraded) + PR #31 L2 test
-- [ ] B7: `classify_rollup`: reads `context.places`, skips unverified, cap → degraded (Amendment 3)
-- [ ] B8: `JudgmentAnswer.website` / `.headcount`; `AdmittedJudgment` gains both
-- [ ] B9: prompt asks + admission (homepage path only; `HeadcountBand`)
-- [ ] B10: `classify_rollup` writes website (fill only) and headcount
-- [ ] B11: five-stage end-to-end test (carried from PR A)
-- [ ] B12: opt-in live eval + empty `officerless_sample.json`
-- [ ] B13: docs (CLAUDE.md map, sourcing README, tickets, adding-a-vertical)
-- [ ] B14: `/piv-validate` + nine mutation checks, then PR
+- [x] B1: `OwnerJudgmentError` in `app/sourcing/exceptions.py`
+- [x] B2: `app/sourcing/owner/schemas.py` (`OwnerAnswer`, `AdmittedOwner`)
+- [x] B3: `app/sourcing/owner/prompts.py` (vertical-free; cited identity + email)
+- [x] B4: `app/sourcing/owner/judgment.py` (node mirrors T7's; `admit_owner`, A10's eight rules)
+- [x] B5: SDK allow-list gains the owner node
+- [x] B6: `app/tools/resolve_owner.py` (stage 4; OQ-5 skip; cap → degraded) + PR #31 L2 test
+- [x] B7: `classify_rollup`: reads `context.places`, skips unverified, cap → degraded (Amendment 3)
+- [x] B8: `JudgmentAnswer.website` / `.headcount`; `AdmittedJudgment` gains both
+- [x] B9: prompt asks + admission (homepage path only; `HeadcountBand`)
+- [x] B10: `classify_rollup` writes website (fill only) and headcount
+- [x] B11: five-stage end-to-end test (carried from PR A)
+- [x] B12: opt-in live eval + empty `officerless_sample.json`
+- [x] B13: docs (CLAUDE.md map, sourcing README, tickets, adding-a-vertical)
+- [x] B14: `/piv-validate` + nine mutation checks, then PR
+
+### Review (2026-10-15)
+
+- **Worked:** the node and stage really were copies of T7's proven shape; the E2E test (the plan's riskiest
+  item) passed on its first wiring once one enum name was fixed (`places_lookup`). All nine mutation checks were
+  caught, each by the test written for it, against a clean baseline.
+- **Didn't:** a log-capture assertion for "cost recorded with `usd=None`" was order-dependent (structlog caches
+  the `core.cost` logger on first use), so it passed alone and failed in the full suite. Replaced by a typed
+  `RunCost` spy. My first mutation run also grepped the wrong summary line (`-x` prints "stopping after 1
+  failures", not "failed"); rerun with a baseline and the failing test named.
+- **Improve:** `RunCost` exposes totals only, so "an entry was recorded" is only testable by spying; worth a
+  small read API if a fourth node appears. The three *Decide* items in the T6 ticket (Spearpoint, mail drop,
+  unscored) were outside this plan and are left open, not answered.
+
