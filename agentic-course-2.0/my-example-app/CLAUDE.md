@@ -17,10 +17,10 @@ five stages (registry search, business verification, route clustering) never nee
 place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
-**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), T13 from Wave 4, T5, T7 and T8 from Wave 5, and
-the first half of Wave 6's T6 (`verify_business`), and T9: the service boots, validates clean, the provenance
+**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), T13 from Wave 4, T5, T7 and T8 from Wave 5, T6
+from Wave 6 (`verify_business`, `resolve_owner`), and T9: the service boots, validates clean, the provenance
 primitive exists, and seven slices are built — `manifests/` with its authoring agent and dry-run gate,
-`promotion/` (the gateway, the `promotion` ledger, promote and review sync), `sourcing/` with the pipeline runner, backlog, FMCSA and Places adapters and the website check,
+`promotion/` (the gateway, the `promotion` ledger, promote and review sync), `sourcing/` with the pipeline runner, backlog, FMCSA and Places adapters, the website check and the owner node,
 the `cadence/` state machine with adoption, `qualification/` with the `classify_rollup` stage, and `routing/`
 with its stage, `cluster_routes`.
 ```
@@ -35,13 +35,15 @@ app/sourcing/                               # sourcing_run + candidate (field-le
 app/sourcing/sources/                       # adapters bound by base_url: FMCSA census (discovery; also fills owner + email) · QCMobile (lookup) · Motus revocations (join); SoQL pushdown
 app/sourcing/sources/google_places.py       # the Places Text Search check (Pro fields only), the deterministic matcher, binding by declared source — never a source (D13)
 app/sourcing/website.py                     # the census email domain → one free homepage fetch; free-mail and shared domains refused
+app/sourcing/owner/                         # the resolve_owner judgment node: a person a fetched page names, held to A10's gate, or none
 app/qualification/                          # free predicate evaluator, classify_rollup judgment node, priority score, disqualification + suppression, dry-run (T7)
 app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, adoption (T13), routes + CLI
 app/routing/                                # route_assignment, the Census Geocoder (never Places), balanced-bisection clustering (T8)
 app/tools/registry.py                       # the Stage contract (+ the run's in-memory Places channel); a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
 app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushdown, refresh the pool, take a batch best first, free evidence, free predicates (T7)
 app/tools/verify_business.py                # stage 2 of 5 (T6): website from the email domain, Places check → place ID + checked address only; refuses without a declared source/key
-app/tools/classify_rollup.py                # stage 3 of 5 (T7)
+app/tools/classify_rollup.py                # stage 3 of 5 (T7): reads the Places channel, skips unverified; also a cited homepage and headcount (T6)
+app/tools/resolve_owner.py                  # stage 4 of 5 (T6): census first; the node only for verified officer-less survivors; cap → degraded
 app/tools/cluster_routes.py                 # stage 5 of 5 (T8): verified addresses → drive routes of ≤ ROUTE_MAX_DOORS
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
 alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification · 0009 run-scoped candidate FKs · 0010 promotion
@@ -51,16 +53,10 @@ docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missin
 docs/tickets/local-prospect-engine.md       # the MVP sliced into tickets, with waves and gates
 tooling/mcp/codebase_search.py              # codebase-search MCP server, wired in .mcp.json
 ```
-**Planned** — decided, not built. **This folder (`my-example-app/`) is the root**: the service is built here
-under `app/`, not as a slice inside a `base-*` project. (Git's toplevel is the parent `my-dynamous-muse`;
-this folder is tracked inside it.) Slices map 1:1 to the decided data model and tool set; confirm names as
-each one lands. `core/` and `shared/` above are their built counterparts — the rules on them still hold:
-infra that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
-```
-app/
-  sourcing/owner/  # the resolve_owner judgment node (T6, PR B)
-  tools/           # the remaining stage module, resolve_owner (stage 4; T6, PR B) — the other four are built
-```
+**This folder (`my-example-app/`) is the root**: the service is built here under `app/`, not as a slice
+inside a `base-*` project. (Git's toplevel is the parent `my-dynamous-muse`; this folder is tracked inside
+it.) Slices map 1:1 to the decided data model and tool set. The rules on `core/` and `shared/` hold: infra
+that predates any feature, and only what 3+ slices need, duplicating until the third consumer.
 `cadence/` is a domain, not promotion's back half: our HubSpot tier has no sequences (see *Ground rules*), and
 adoption gives it a consumer with nothing to do with sourcing. It depends only on `core/` and the HubSpot
 client, so it builds in parallel with the whole sourcing line.

@@ -27,7 +27,7 @@ from app.manifests.schemas import (
 from app.sourcing.schemas import CandidateResponse, SourcingRunResponse
 from app.sourcing.service import SourcingService
 from tests.manifests.builders import a_vertical, cited
-from tests.sourcing.builders import REGISTRY, a_brief, a_candidate
+from tests.sourcing.builders import REGISTRY, a_brief, a_candidate, place_checked
 
 DFW_COUNTIES = ("085", "113", "121", "139", "221", "231", "251", "257", "367", "397", "439")
 """The 11 counties of OMB's CBSA 19100, as FIPS codes — freight v3's ``outside_dfw_metro`` set."""
@@ -139,13 +139,23 @@ async def an_active_manifest_with(session: AsyncSession, body: ManifestBody) -> 
 
 
 async def a_run_with(
-    session: AsyncSession, body: ManifestBody, *registry_ids: str
+    session: AsyncSession, body: ManifestBody, *registry_ids: str, verified: bool = False
 ) -> tuple[ManifestResponse, SourcingRunResponse, list[CandidateResponse]]:
-    """An active manifest, a running run under it, and one recorded candidate per registry id."""
+    """An active manifest, a running run under it, and one recorded candidate per registry id.
+
+    ``verified`` gives each candidate a ``business_check``, as ``verify_business`` would: the
+    judgment and owner stages skip a candidate without one (OQ-5).
+    """
     manifest = await an_active_manifest_with(session, body)
     service = SourcingService(session)
     run = await service.start_run(a_brief(manifest.vertical))
+    check = place_checked() if verified else None
     candidates = await service.record_candidates(
-        run.id, [a_candidate(registry_id) for registry_id in registry_ids], stage=REGISTRY
+        run.id,
+        [
+            a_candidate(registry_id).model_copy(update={"business_check": check})
+            for registry_id in registry_ids
+        ],
+        stage=REGISTRY,
     )
     return manifest, run, candidates

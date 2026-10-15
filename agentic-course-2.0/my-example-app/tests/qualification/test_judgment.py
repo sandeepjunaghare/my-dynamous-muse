@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import JsonValue
+from structlog.testing import capture_logs
 
 from app.core.config import get_settings
 from app.core.cost import BillableKind, RunCost
@@ -22,12 +23,14 @@ from app.qualification.judgment import (
     admit_judgment,
     build_options,
     evidence_reads,
+    listing_name,
     run_judgment,
 )
-from app.qualification.prompts import build_user_prompt
+from app.qualification.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer
+from app.shared.page_reads import PageRead
 from app.shared.provenance import RetrievalMethod
-from app.sourcing.schemas import CandidateFields, PlacesEvidence, ScoreBand
+from app.sourcing.schemas import CandidateFields, HeadcountBand, PlacesEvidence, ScoreBand
 from tests.manifests.replay import (
     Replay,
     StreamLine,
@@ -221,6 +224,63 @@ class TestTheCitationGate:
         assert admitted.fired == ()
 
 
+class TestThePlacesListingNameIsNeverStored:
+    """D13 (PR #34 review M1): the listing name is prompt context; stored text may not repeat it."""
+
+    LISTED = "napco bag & film"
+
+    @staticmethod
+    def _admit(
+        rules: list[dict[str, JsonValue]], signals: list[dict[str, JsonValue]] | None = None
+    ) -> AdmittedJudgment:
+        answer = JudgmentAnswer.model_validate(_answer(rules, signals))
+        reads = [PageRead(url=ABOUT, read_at=READ_AT)]
+        return admit_judgment(
+            answer, BODY, reads=reads, listed=TestThePlacesListingNameIsNeverStored.LISTED
+        )
+
+    def test_a_fired_rule_whose_reason_repeats_it_is_dropped(self) -> None:
+        rule = _rule(ROLLUP_RULE, True) | {"reason": "Maps lists it as NAPCO Bag &  Film"}
+        with capture_logs() as captured:
+            admitted = self._admit([rule])
+        assert captured
+        assert admitted.fired == ()
+        assert [o.reason for o in admitted.omitted] == [
+            "repeats the Places listing name, which may not be stored (D13)"
+        ]
+        assert "napco" not in repr(captured).casefold()
+
+    def test_a_signal_whose_quote_repeats_it_is_dropped(self) -> None:
+        cited = _signal("inspection_backlog", 4)
+        quoted: dict[str, JsonValue] = {
+            **cited,
+            "citation": {"url": ABOUT, "quote": "Napco Bag & Film, Dallas"},
+        }
+        admitted = self._admit([], [quoted, _signal("field_software", 5)])
+        assert [s.signal_id for s in admitted.signals] == ["field_software"]
+        assert admitted.priority is None
+
+    def test_an_answer_that_does_not_repeat_it_is_kept(self) -> None:
+        admitted = self._admit([_rule(ROLLUP_RULE, True)])
+        assert [r.rule_id for r in admitted.fired] == [ROLLUP_RULE]
+
+    @pytest.mark.parametrize(
+        ("places", "expected"),
+        [
+            (None, None),
+            (PlacesEvidence(), None),
+            (PlacesEvidence(display_name="  "), None),
+            (PlacesEvidence(display_name="ACME  FREIGHT"), None),  # the census DBA: a cited fact
+            (PlacesEvidence(display_name="Acme Logistics"), None),  # within the legal name
+            (PlacesEvidence(display_name="Napco Bag & Film"), "napco bag & film"),
+        ],
+    )
+    def test_only_a_name_the_registry_does_not_give_is_held_back(
+        self, places: PlacesEvidence | None, expected: str | None
+    ) -> None:
+        assert listing_name(places, a_candidate()) == expected
+
+
 class TestPriority:
     async def test_cited_answers_on_both_axes_give_a_cited_score(self) -> None:
         signals = [_signal("inspection_backlog", 4), _signal("field_software", 5)]
@@ -307,3 +367,88 @@ class TestIsolationAndPrompt:
         """An out-of-range score must cost one answer in the gate, not the whole paid call."""
         answer = JudgmentAnswer.model_validate({"signals": [_signal("x", 42)]})
         assert answer.signals[0].axis_score == 42
+
+
+HOME = "https://www.acmefire.test/"
+
+
+def _extras(
+    *,
+    website: str | None = None,
+    headcount: tuple[int, int | None] | None = None,
+    headcount_url: str | None = HOME,
+) -> JsonValue:
+    answer: dict[str, JsonValue] = {"rules": [], "signals": []}
+    if website is not None:
+        answer["website"] = {"url": website, "quote": "Welcome"}
+    if headcount is not None:
+        citation: JsonValue = (
+            None if headcount_url is None else {"url": headcount_url, "quote": "our team"}
+        )
+        answer["headcount"] = {"low": headcount[0], "high": headcount[1], "citation": citation}
+    return answer
+
+
+class TestWebsiteAndHeadcount:
+    async def test_a_cited_homepage_is_admitted_as_its_origin(self) -> None:
+        stream = [INIT, *_fetched(HOME), result_line(_extras(website=HOME))]
+        admitted, _ = await _judge(stream)
+        assert admitted.website is not None
+        assert admitted.website.value == "https://www.acmefire.test"
+        assert admitted.website.source_url == HOME
+        assert admitted.website.retrieved_at == READ_AT
+        assert admitted.website.retrieval_method is RetrievalMethod.llm_inference
+
+    async def test_an_about_page_is_not_a_homepage(self) -> None:
+        admitted, _ = await _judge([INIT, *_fetched(), result_line(_extras(website=ABOUT))])
+        assert admitted.website is None
+        assert "not a homepage" in admitted.omitted[0].reason
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.acmefire.test/",  # unfetched: the stream reads ABOUT only
+            "https://www.google.com/maps/",
+            CENSUS_URL,  # registry evidence never backs the website
+        ],
+    )
+    async def test_an_unread_or_forbidden_homepage_is_omitted(self, url: str) -> None:
+        fetched = _fetched("https://www.google.com/maps/") if "maps" in url else _fetched()
+        admitted, _ = await _judge([INIT, *fetched, result_line(_extras(website=url))])
+        assert admitted.website is None
+        assert admitted.omitted[0].label == "website"
+
+    async def test_a_cited_headcount_is_admitted(self) -> None:
+        stream = [INIT, *_fetched(HOME), result_line(_extras(headcount=(11, 50)))]
+        admitted, _ = await _judge(stream)
+        assert admitted.headcount_band is not None
+        assert admitted.headcount_band.value == HeadcountBand(low=11, high=50)
+        assert admitted.headcount_band.source_url == HOME
+
+    @pytest.mark.parametrize(
+        ("band", "url", "reason"),
+        [
+            ((50, 11), HOME, "headcount band 50-11 is invalid"),
+            ((0, 5), HOME, "headcount band 0-5 is invalid"),
+            ((11, 50), None, "no citation offered"),
+        ],
+    )
+    async def test_a_bad_or_uncited_headcount_is_omitted(
+        self, band: tuple[int, int | None], url: str | None, reason: str
+    ) -> None:
+        answer = _extras(headcount=band, headcount_url=url)
+        admitted, _ = await _judge([INIT, *_fetched(HOME), result_line(answer)])
+        assert admitted.headcount_band is None
+        assert admitted.omitted[0].reason == reason
+
+    def test_an_open_ended_band_is_valid(self) -> None:
+        assert HeadcountBand(low=50, high=None).label == "50+"
+
+    def test_old_answers_without_either_key_still_validate(self) -> None:
+        answer = JudgmentAnswer.model_validate({"rules": [], "signals": []})
+        assert (answer.website, answer.headcount) == (None, None)
+
+    def test_the_prompt_asks_for_both(self) -> None:
+        assert "website:" in SYSTEM_PROMPT
+        assert "headcount:" in SYSTEM_PROMPT
+        assert "Never estimate" in " ".join(SYSTEM_PROMPT.split())

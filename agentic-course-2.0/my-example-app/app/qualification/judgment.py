@@ -16,8 +16,11 @@ shape this copies deliberately:
 * **It cannot touch the machine.** ``WebSearch`` and ``WebFetch`` only; no file, shell or MCP
   tools; no filesystem settings loaded; ``dontAsk`` refuses everything else.
 * **It always records what the call cost** — on failure too, the moment the result arrives.
-* **Places content is used and discarded** (D13). It reaches the prompt as context and is never
-  part of the answer or a citation. Until T6 builds the channel it is always ``None``.
+* **Places content is used and discarded** (D13). It reaches the prompt as context, from
+  ``verify_business`` through the run's in-memory channel, and is never part of the answer or a
+  citation.
+* **A cited homepage and headcount come for free** (T6). The same reads may show the business's
+  own homepage and a stated headcount; each is kept only when cited to a page the node read.
 * **It never writes.** The stage decides what is recorded.
 """
 
@@ -25,6 +28,7 @@ from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKError, Message, ResultMessage, query
 from pydantic import ValidationError
@@ -40,6 +44,7 @@ from app.qualification.schemas import (
     AdmittedRule,
     AdmittedSignal,
     Citation,
+    HeadcountAnswer,
     JudgmentAnswer,
     OmittedAnswer,
 )
@@ -47,7 +52,13 @@ from app.qualification.scoring import score
 from app.shared.agent_reads import ReadTracker
 from app.shared.page_reads import PageRead, normalize_url
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
-from app.sourcing.schemas import CandidateFields, PlacesEvidence, PriorityScore, is_google_maps
+from app.sourcing.schemas import (
+    CandidateFields,
+    HeadcountBand,
+    PlacesEvidence,
+    PriorityScore,
+    is_google_maps,
+)
 
 logger = get_logger(__name__)
 
@@ -235,6 +246,25 @@ def evidence_reads(candidate: CandidateFields) -> tuple[PageRead, ...]:
     )
 
 
+def _folded(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def listing_name(places: PlacesEvidence | None, candidate: CandidateFields) -> str | None:
+    """The Places listing name as only Places knows it, for the gate to keep out of storage (D13).
+
+    ``None`` when there is no listing name, or when it is contained in one of the candidate's own
+    cited names: text repeating the registry's name is a cited registry fact, not Places content.
+    """
+    if places is None or places.display_name is None or not places.display_name.strip():
+        return None
+    listed = _folded(places.display_name)
+    own = (field.value for field in (candidate.legal_name, candidate.dba_name) if field is not None)
+    if any(listed in _folded(name) for name in own):
+        return None
+    return listed
+
+
 def _index(reads: Iterable[PageRead]) -> dict[str, PageRead]:
     """The first read of each page, keyed for comparison; an unparseable URL backs nothing."""
     indexed: dict[str, PageRead] = {}
@@ -256,21 +286,30 @@ class _Gate:
       answer, but it cannot show that a business is a national rollup; and a judgment that fires is
       a permanent suppression. So evidence never backs a fired judgment rule.
 
-    A Google Maps page is never admitted: its content may not be stored (D13, review M2).
+    A Google Maps page is never admitted: its content may not be stored (D13, review M2). Nor is
+    stored text that repeats the Places listing name, which reached the prompt as context only
+    (D13, PR #34 review M1).
     """
 
-    def __init__(self, reads: Iterable[PageRead], evidence: Iterable[PageRead] = ()) -> None:
+    def __init__(
+        self,
+        reads: Iterable[PageRead],
+        evidence: Iterable[PageRead] = (),
+        listed: str | None = None,
+    ) -> None:
         self._reads = _index(reads)
         self._evidence = _index(evidence)
+        self._listed = listed
         self.omitted: list[OmittedAnswer] = []
 
     def omit(self, label: str, reason: str) -> None:
         self.omitted.append(OmittedAnswer(label=label, reason=reason))
         logger.info(f"{LOG_PREFIX}.answer_omitted", answer=label, reason=reason)
 
-    def admit(
-        self, label: str, citation: Citation | None, text: str, *, allow_evidence: bool
-    ) -> ProvenancedValue[str] | None:
+    def read_for(
+        self, label: str, citation: Citation | None, *, allow_evidence: bool
+    ) -> PageRead | None:
+        """The read a citation rests on, or ``None`` with the omission recorded."""
         if citation is None:
             self.omit(label, "no citation offered")
             return None
@@ -295,6 +334,18 @@ class _Gate:
         if is_google_maps(read.url):
             self.omit(label, f"cites Google Maps ({read.url}), whose content may not be stored")
             return None
+        return read
+
+    def admit(
+        self, label: str, citation: Citation | None, text: str, *, allow_evidence: bool
+    ) -> ProvenancedValue[str] | None:
+        read = self.read_for(label, citation, allow_evidence=allow_evidence)
+        if read is None or citation is None:
+            return None
+        if self._listed is not None and self._listed in _folded(f"{text} {citation.quote}"):
+            # The name itself is never logged: it is Places content too.
+            self.omit(label, "repeats the Places listing name, which may not be stored (D13)")
+            return None
         quote = citation.quote.strip()
         return ProvenancedValue(
             value=f'{text.strip()} — "{quote}"' if quote else text.strip(),
@@ -310,15 +361,17 @@ def admit_judgment(
     *,
     reads: Sequence[PageRead],
     evidence: Sequence[PageRead] = (),
+    listed: str | None = None,
 ) -> AdmittedJudgment:
     """Keep only the answers a citation holds up; compute the priority from what survives.
 
     A rule id that is not one of this manifest's *judgment* rules is dropped — the model cannot
     invent a disqualifier, nor re-decide a free predicate. A fired rule must cite a page the node
     read in this call; one citing nothing, an unread page, the registry record or Google Maps is
-    dropped, so it never disqualifies. ``fired: false`` is not stored at all.
+    dropped, so it never disqualifies. ``fired: false`` is not stored at all. ``listed`` is
+    :func:`listing_name`'s result: an answer repeating it is dropped rather than stored.
     """
-    gate = _Gate(reads, evidence)
+    gate = _Gate(reads, evidence, listed)
     judgment_ids = {
         c.value.id for c in body.disqualifier_rules if c.value.kind is RuleKind.judgment
     }
@@ -367,12 +420,59 @@ def admit_judgment(
                 )
             )
 
+    website = _admit_website(gate, answer.website)
+    headcount_band = _admit_headcount(gate, answer.headcount)
     return AdmittedJudgment(
         fired=tuple(fired),
         signals=tuple(signals),
         priority=_cited_priority(body, signals),
         omitted=tuple(gate.omitted),
+        website=website,
+        headcount_band=headcount_band,
     )
+
+
+def _cited_to[T](value: T, read: PageRead) -> ProvenancedValue[T]:
+    return ProvenancedValue(
+        value=value,
+        source_url=read.url,
+        retrieved_at=read.read_at,
+        retrieval_method=RetrievalMethod.llm_inference,
+    )
+
+
+def _admit_website(gate: _Gate, citation: Citation | None) -> ProvenancedValue[str] | None:
+    """The homepage origin, kept only when the node read that homepage itself (OQ-1 b).
+
+    A listing or about page is not the business's homepage, so its path must be the root. Never
+    from the registry record or from Places evidence, which is context and never a read.
+    """
+    if citation is None:
+        return None
+    read = gate.read_for("website", citation, allow_evidence=False)
+    if read is None:
+        return None
+    parts = urlsplit(read.url)
+    if parts.path not in ("", "/") or not parts.hostname:
+        gate.omit("website", f"cites {read.url}, which is not a homepage")
+        return None
+    port = f":{parts.port}" if parts.port else ""
+    return _cited_to(f"{parts.scheme}://{parts.hostname}{port}", read)
+
+
+def _admit_headcount(
+    gate: _Gate, headcount: HeadcountAnswer | None
+) -> ProvenancedValue[HeadcountBand] | None:
+    """A stated headcount band, cited to the page stating it (OQ-3 a). Never estimated (M8)."""
+    if headcount is None:
+        return None
+    try:
+        band = HeadcountBand(low=headcount.low, high=headcount.high)
+    except ValidationError:
+        gate.omit("headcount", f"headcount band {headcount.low}-{headcount.high} is invalid")
+        return None
+    read = gate.read_for("headcount", headcount.citation, allow_evidence=False)
+    return None if read is None else _cited_to(band, read)
 
 
 def _cited_priority(

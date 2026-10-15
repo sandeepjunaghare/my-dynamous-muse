@@ -1719,3 +1719,63 @@ while writing the fix.
 the same rows. The cadence sync has a lock. T10's launchd wiring is the place to decide whether `lpe promotion
 sync` gets one too.
 
+
+## T6 PR B: `resolve_owner`, the T7 node edits, the headcount band (planned 2026-10-15)
+
+Plan: `.claude/plans/t6-enrichment-pr-b.md` (the second half of `t6-enrichment.md`; OQ-1…OQ-5 and A1–A10 inherited).
+Branch `feat/t6-owner` in the main checkout; test DB on 5434; no migration. Approved and built 2026-10-15.
+
+- [x] B1: `OwnerJudgmentError` in `app/sourcing/exceptions.py`
+- [x] B2: `app/sourcing/owner/schemas.py` (`OwnerAnswer`, `AdmittedOwner`)
+- [x] B3: `app/sourcing/owner/prompts.py` (vertical-free; cited identity + email)
+- [x] B4: `app/sourcing/owner/judgment.py` (node mirrors T7's; `admit_owner`, A10's eight rules)
+- [x] B5: SDK allow-list gains the owner node
+- [x] B6: `app/tools/resolve_owner.py` (stage 4; OQ-5 skip; cap → degraded) + PR #31 L2 test
+- [x] B7: `classify_rollup`: reads `context.places`, skips unverified, cap → degraded (Amendment 3)
+- [x] B8: `JudgmentAnswer.website` / `.headcount`; `AdmittedJudgment` gains both
+- [x] B9: prompt asks + admission (homepage path only; `HeadcountBand`)
+- [x] B10: `classify_rollup` writes website (fill only) and headcount
+- [x] B11: five-stage end-to-end test (carried from PR A)
+- [x] B12: opt-in live eval + empty `officerless_sample.json`
+- [x] B13: docs (CLAUDE.md map, sourcing README, tickets, adding-a-vertical)
+- [x] B14: `/piv-validate` + nine mutation checks, then PR
+
+### Review (2026-10-15)
+
+- **Worked:** the node and stage really were copies of T7's proven shape; the E2E test (the plan's riskiest
+  item) passed on its first wiring once one enum name was fixed (`places_lookup`). All nine mutation checks were
+  caught, each by the test written for it, against a clean baseline.
+- **Didn't:** a log-capture assertion for "cost recorded with `usd=None`" was order-dependent (structlog caches
+  the `core.cost` logger on first use), so it passed alone and failed in the full suite. Replaced by a typed
+  `RunCost` spy. My first mutation run also grepped the wrong summary line (`-x` prints "stopping after 1
+  failures", not "failed"); rerun with a baseline and the failing test named.
+- **Improve:** `RunCost` exposes totals only, so "an entry was recorded" is only testable by spying; worth a
+  small read API if a fourth node appears. The three *Decide* items in the T6 ticket (Spearpoint, mail drop,
+  unscored) were outside this plan and are left open, not answered.
+
+
+## PR #34 review fixes: M1, M2, L1–L3 (2026-10-15)
+
+Review: `.claude/code-reviews/pr-34-review.md`. Scope chosen by the owner: M1 + M2 + L1–L3; M1 refuses (fail
+closed) rather than redacts. M3 → the website-verification follow-up ticket; L4–L6 logged as deferred.
+
+- [x] M1: `admit_judgment` refuses a rule reason / signal answer (or its quote) that repeats the Places listing
+  name, unless that name is one of the candidate's own cited names; stage passes it; unit + stage tests
+- [x] M2: `admit_owner` logs a fixed omission reason; the model's free text stays on `omitted` only; log test
+- [x] L1: surname matched on word boundaries, suffixes (`jr`, `sr`, `ii`…) skipped; tests
+- [x] L2: agent titles also matched in the quote, plus "agent for service of process"; tests
+- [x] L3: trailing `,;:` stripped from the name before it is stored; test asserts the stored value
+- [x] Log M3, L4–L6 as deferred: M3 on the website-verification follow-up in the T6 ticket; L4–L6 → issue #35
+- [x] `/piv-validate`, commit, push
+
+### Review (2026-10-15)
+
+- **Worked:** each fix was small and lived where the reviewer said. Five mutation checks, one per finding, each
+  undid a fix and was caught by the test written for it; files restored and diffed afterwards.
+- **M1 nuance the review missed:** a Places name usually *is* the business's own name, which the census already
+  gives cited. Refusing any text containing it would have dropped most valid verdicts, so `listing_name` holds
+  back only a listing name not contained in the legal or DBA name.
+- **Didn't:** one fix script broke on an apostrophe inside a Python heredoc and silently changed nothing; caught
+  only because ruff still failed. Edit is the safer tool for prose edits.
+- **Validation:** ruff, format, mypy, pyright clean; pytest with the DB 1,607 passed, 4 skipped (paid `live`);
+  alembic check no drift.

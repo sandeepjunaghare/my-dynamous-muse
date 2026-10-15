@@ -31,6 +31,9 @@ cluster routes. Two of those five need judgment and call the Agent SDK with stru
 adding a manifest entry, not a sixth stage and not a stage per source. If a new source seems to need its own
 stage, that is a signal the manifest schema is missing a field; extend the schema rather than the pipeline.
 
+**The owner node is generic**, so a vertical needs no owner code: its registry adapter maps its own officer
+column through `principal_or_none`, and `resolve_owner` asks the node only where that gives no citable person.
+
 **Free before paid.** The registry pull and the free disqualifier rules run first; the Google
 Places check is billed per request. Filtering first costs a little recall and saves most of the spend, and paid
 calls are capped per run (500 Places calls) as a circuit breaker, not a budget target.

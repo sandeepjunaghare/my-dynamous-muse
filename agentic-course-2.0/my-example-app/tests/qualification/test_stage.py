@@ -9,14 +9,13 @@ from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cost import RunCost
-from app.core.exceptions import CostLimitExceededError
 from app.manifests.schemas import ManifestBody, ManifestResponse, RuleOperator, ScoreAxis
 from app.qualification import judgment
 from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer, RecordSet
 from app.qualification.service import QualificationService
 from app.shared.page_reads import PageRead
 from app.shared.provenance import RetrievalMethod
-from app.sourcing.schemas import SourcingRunResponse
+from app.sourcing.schemas import HeadcountBand, PlacesEvidence, SourcingRunResponse
 from app.sourcing.service import SourcingService
 from app.sourcing.stages import PipelineStage
 from app.tools.classify_rollup import STAGE
@@ -34,6 +33,7 @@ from tests.qualification.builders import (
 from tests.qualification.builders import (
     judgment as a_judgment_rule,
 )
+from tests.sourcing.builders import VERIFY, a_candidate, looked_up
 
 ABOUT = "https://www.acme.test/about"
 BODY = a_body_with(
@@ -123,7 +123,7 @@ async def _setup(
     session: AsyncSession, body: ManifestBody = BODY
 ) -> tuple[ManifestResponse, SourcingRunResponse]:
     """Three candidates; 900 is removed by the free predicate before any judgment."""
-    manifest, run, candidates = await a_run_with(session, body, "900", "901", "902")
+    manifest, run, candidates = await a_run_with(session, body, "900", "901", "902", verified=True)
     records: RecordSet = {"fmcsa": census_row(carship="C")}
     await QualificationService(session).disqualify_by_predicates(
         candidates[0], run, manifest, records
@@ -157,6 +157,10 @@ class TestTheStage:
             "scored": 1,
             "not_scored": 0,
             "judgment_skipped": 1,
+            "judgment_unverified_skipped": 0,
+            "judgment_capped": 0,
+            "judgment_website_filled": 0,
+            "judgment_headcount_filled": 0,
         }
 
         candidates = {
@@ -193,19 +197,82 @@ class TestTheStage:
         assert result.counts["judgment_failed"] == 1
         assert result.counts["scored"] == 1
 
-    async def test_the_call_cap_is_a_circuit_breaker(
+    async def test_the_call_cap_ends_the_stage_degraded(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Amendment 3: a breaker, never a raise; a raise would fail a run already paid for."""
         monkeypatch.setenv("MAX_JUDGMENT_CALLS_PER_RUN", "1")
         runner = _ByRegistryId({"901": ROLLUP, "902": LOCAL})
         monkeypatch.setattr(judgment, "sdk_runner", runner)
         manifest, run = await _setup(db_session)
 
-        with pytest.raises(CostLimitExceededError) as exc_info:
-            await STAGE.run(await _context(db_session, manifest, run))
+        result = await STAGE.run(await _context(db_session, manifest, run))
 
         assert len(runner.prompts) == 1
-        assert exc_info.value.cap == 1
+        assert result.counts["judgment_capped"] == 1
+        assert result.degraded_reason == "judgment cap of 1 calls reached; 1 candidate(s) unjudged"
+
+    async def test_places_evidence_reaches_the_prompt(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = _ByRegistryId({"901": LOCAL, "902": LOCAL})
+        monkeypatch.setattr(judgment, "sdk_runner", runner)
+        manifest, run = await _setup(db_session)
+        context = await _context(db_session, manifest, run)
+        context.places["901"] = PlacesEvidence(display_name="Acme Freight Dallas")
+
+        await STAGE.run(context)
+
+        prompt_901 = next(p for p in runner.prompts if "registry id: 901 " in p)
+        prompt_902 = next(p for p in runner.prompts if "registry id: 902 " in p)
+        assert "Places evidence" in prompt_901
+        assert "Acme Freight Dallas" in prompt_901
+        assert "Places evidence" not in prompt_902
+
+    async def test_a_verdict_repeating_the_listing_name_is_never_stored(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """D13 (PR #34 review M1): Places context reaches the prompt, never a disqualification."""
+        echoed = _stream(
+            {
+                "rules": [
+                    {
+                        "rule_id": ROLLUP_RULE,
+                        "fired": True,
+                        "reason": "Maps lists it as Napco Bag & Film, a national platform",
+                        "citation": {"url": ABOUT, "quote": "a national platform"},
+                    }
+                ],
+                "signals": [],
+            }
+        )
+        monkeypatch.setattr(judgment, "sdk_runner", _ByRegistryId({"901": echoed, "902": LOCAL}))
+        manifest, run = await _setup(db_session)
+        context = await _context(db_session, manifest, run)
+        context.places["901"] = PlacesEvidence(display_name="NAPCO Bag & Film")
+
+        result = await STAGE.run(context)
+
+        assert result.counts["judgment_disqualified"] == 0
+        candidates = {
+            c.registry_id: c for c in await SourcingService(db_session).list_candidates(run.id)
+        }
+        assert await QualificationService(db_session).list_for_candidate(candidates["901"].id) == []
+        assert "napco" not in candidates["901"].fields.model_dump_json().casefold()
+
+    async def test_an_unverified_candidate_is_never_sent(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OQ-5: T9 cannot promote it, so it is not paid for."""
+        runner = _ByRegistryId({"911": LOCAL})
+        monkeypatch.setattr(judgment, "sdk_runner", runner)
+        manifest, run, _ = await a_run_with(db_session, BODY, "911")
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        assert runner.prompts == []
+        assert result.counts["judgment_unverified_skipped"] == 1
+        assert result.counts["classified"] == 0
 
     async def test_a_manifest_with_nothing_to_judge_makes_no_call(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -251,8 +318,9 @@ class TestReviewFixes:
             *,
             reads: Sequence[PageRead],
             evidence: Sequence[PageRead] = (),
+            listed: str | None = None,
         ) -> AdmittedJudgment:
-            admitted = real_admit(answer, body, reads=reads, evidence=evidence)
+            admitted = real_admit(answer, body, reads=reads, evidence=evidence, listed=listed)
             if admitted.priority is None:
                 return admitted
             return replace(
@@ -268,3 +336,89 @@ class TestReviewFixes:
 
         assert len(runner.prompts) == 2
         assert (result.counts["judgment_failed"], result.counts["scored"]) == (2, 0)
+
+
+HOME = "https://www.acme.test/"
+
+
+def _with_extras(*, fired: bool) -> list[StreamLine]:
+    """A homepage read backing everything: signals, the website, and an 11-50 headcount."""
+    rule_citation: JsonValue = {"url": HOME, "quote": "a national platform"} if fired else None
+    answer: JsonValue = {
+        "rules": [
+            {"rule_id": ROLLUP_RULE, "fired": fired, "reason": "r", "citation": rule_citation}
+        ],
+        "signals": [
+            {
+                "signal_id": sid,
+                "answer": "yes",
+                "axis_score": 4,
+                "citation": {"url": HOME, "quote": "q"},
+            }
+            for sid in ("backlog", "software")
+        ],
+        "website": {"url": HOME, "quote": "Welcome to Acme"},
+        "headcount": {"low": 11, "high": 50, "citation": {"url": HOME, "quote": "11-50 staff"}},
+    }
+    return [web_fetch_call("t1", HOME), web_fetch_result("t1", HOME), result_line(answer)]
+
+
+@requires_db
+class TestWebsiteAndHeadcount:
+    async def test_a_cited_homepage_and_headcount_are_stored(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        extras = _with_extras(fired=False)
+        monkeypatch.setattr(judgment, "sdk_runner", _ByRegistryId({"901": extras, "902": LOCAL}))
+        manifest, run = await _setup(db_session)
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        fields = {
+            c.registry_id: c.fields
+            for c in await SourcingService(db_session).list_candidates(run.id)
+        }["901"]
+        assert fields.website is not None
+        assert fields.website.value == "https://www.acme.test"
+        assert fields.website.retrieval_method is RetrievalMethod.llm_inference
+        assert fields.headcount_band is not None
+        assert fields.headcount_band.value == HeadcountBand(low=11, high=50)
+        assert fields.priority is not None
+        assert result.counts["judgment_website_filled"] == 1
+        assert result.counts["judgment_headcount_filled"] == 1
+        assert result.counts["scored"] == 2
+
+    async def test_verify_business_website_is_never_replaced(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        extras = _with_extras(fired=False)
+        monkeypatch.setattr(judgment, "sdk_runner", _ByRegistryId({"901": extras, "902": LOCAL}))
+        manifest, run = await _setup(db_session)
+        sourcing = SourcingService(db_session)
+        verified = a_candidate("901").model_copy(update={"website": looked_up("https://acme.test")})
+        await sourcing.record_candidates(run.id, [verified], stage=VERIFY)
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        fields = {c.registry_id: c.fields for c in await sourcing.list_candidates(run.id)}["901"]
+        assert fields.website is not None
+        assert fields.website.value == "https://acme.test"
+        assert fields.website.retrieval_method is RetrievalMethod.web_lookup
+        assert result.counts["judgment_website_filled"] == 0
+        assert fields.headcount_band is not None
+
+    async def test_a_disqualified_candidate_stores_neither(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        extras = _with_extras(fired=True)
+        monkeypatch.setattr(judgment, "sdk_runner", _ByRegistryId({"901": extras, "902": LOCAL}))
+        manifest, run = await _setup(db_session)
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        fields = {
+            c.registry_id: c.fields
+            for c in await SourcingService(db_session).list_candidates(run.id)
+        }["901"]
+        assert (fields.website, fields.headcount_band, fields.priority) == (None, None, None)
+        assert result.counts["judgment_disqualified"] == 1

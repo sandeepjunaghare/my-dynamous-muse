@@ -3,22 +3,22 @@
 For each candidate of the run that no rule has already removed, the judgment node decides every
 judgment rule in the manifest and answers its qualifying signals in one call (D12). Fired rules
 that carry a citation become ``disqualification`` rows; cited signal answers become the candidate's
-``priority``, written as this stage (it owns that field). Nothing uncited is recorded.
+``priority``, written as this stage (it owns that field). The same call's cited homepage fills an
+empty ``website``, and a cited headcount becomes ``headcount_band`` (T6). Nothing uncited is
+recorded, and a disqualified business keeps none of it.
 
-**Free before paid** (D8): a candidate the free predicates already removed is never sent. **Retries
-do not pay twice** for a candidate already scored or disqualified. **A per-run call cap** is the
-circuit breaker (``max_judgment_calls_per_run``); hitting it raises ``CostLimitExceededError`` and
-the runner (T5) decides the run is degraded. One failed call is counted and the batch goes on —
-one bad SDK run must not sink a paid batch.
-
-Places evidence is ``None`` here until T6 builds the in-run channel that carries it (D13).
+**Free before paid** (D8): a candidate the free predicates already removed is never sent, and
+neither is one ``verify_business`` could not verify: T9 cannot promote it (OQ-5). What Places saw
+reaches the prompt as context through ``StageContext.places`` and is never stored (D13). **Retries
+do not pay twice** for a candidate already scored or disqualified. **A per-run call cap**
+(``max_judgment_calls_per_run``) is a breaker against a runaway loop: reaching it ends the stage
+**degraded**, never raising, so a paid batch is not handed back (Amendment 3). One failed call is
+counted and the batch goes on — one bad SDK run must not sink a paid batch.
 """
 
 from pydantic import ValidationError
 
 from app.core.config import get_settings
-from app.core.cost import BillableKind
-from app.core.exceptions import CostLimitExceededError
 from app.core.logging import get_logger
 from app.manifests.schemas import RuleKind
 from app.qualification import judgment
@@ -50,23 +50,22 @@ class _ClassifyRollup:
         removed = await qualification.disqualified_candidate_ids(run.id)
 
         calls = classified = disqualified = failed = scored = skipped = 0
+        unverified = capped = website_filled = headcount_filled = 0
         for candidate in await sourcing.list_candidates(run.id):
-            if candidate.id in removed or candidate.fields.priority is not None:
+            fields = candidate.fields
+            if candidate.id in removed or fields.priority is not None:
                 skipped += 1
                 continue
+            if fields.business_check is None:
+                unverified += 1
+                continue
             if calls >= cap:
-                logger.warning(
-                    "qualification.stage.cap_reached", run_id=str(run.id), cap=cap, calls=calls
-                )
-                raise CostLimitExceededError(
-                    f"per-run cap of {cap} judgment calls reached",
-                    kind=BillableKind.anthropic_tokens.value,
-                    cap=cap,
-                    recorded=calls,
-                )
+                capped += 1
+                continue
             calls += 1
+            places = context.places.get(fields.registry_id.value)
             try:
-                judged = await judgment.run_judgment(candidate.fields, body, cost=context.cost)
+                judged = await judgment.run_judgment(fields, body, cost=context.cost, places=places)
             except JudgmentNodeError as exc:
                 failed += 1
                 logger.warning(
@@ -82,19 +81,27 @@ class _ClassifyRollup:
                 judged.answer,
                 body,
                 reads=judged.reads,
-                evidence=judgment.evidence_reads(candidate.fields),
+                evidence=judgment.evidence_reads(fields),
+                listed=judgment.listing_name(places, fields),
             )
             if await qualification.record_judgment(candidate, run, context.manifest, admitted):
-                # A rejected business keeps no priority: a "live" score on a rollup's row is a
+                # A rejected business keeps nothing: a "live" score on a rollup's row is a
                 # rejection nobody can see from the candidate (PR #18 review, L5).
                 disqualified += 1
                 continue
-            if admitted.priority is None:
+            update: dict[str, object] = {}
+            if admitted.priority is not None:
+                update["priority"] = admitted.priority
+            if admitted.website is not None and fields.website is None:
+                update["website"] = admitted.website
+            if admitted.headcount_band is not None:
+                update["headcount_band"] = admitted.headcount_band
+            if not update:
                 continue
             try:
                 await sourcing.record_candidates(
                     run.id,
-                    [candidate.fields.model_copy(update={"priority": admitted.priority})],
+                    [fields.model_copy(update=update)],
                     stage=PipelineStage.classify_rollup,
                 )
             except ValidationError as exc:
@@ -108,7 +115,9 @@ class _ClassifyRollup:
                     errors=exc.error_count(),
                 )
                 continue
-            scored += 1
+            scored += "priority" in update
+            website_filled += "website" in update
+            headcount_filled += "headcount_band" in update
 
         counts = {
             "classified": classified,
@@ -117,9 +126,17 @@ class _ClassifyRollup:
             "scored": scored,
             "not_scored": classified - scored - disqualified,
             "judgment_skipped": skipped,
+            "judgment_unverified_skipped": unverified,
+            "judgment_capped": capped,
+            "judgment_website_filled": website_filled,
+            "judgment_headcount_filled": headcount_filled,
         }
+        reason = None
+        if capped:
+            reason = f"judgment cap of {cap} calls reached; {capped} candidate(s) unjudged"
+            logger.warning("qualification.stage.cap_reached", run_id=str(run.id), cap=cap)
         logger.info("qualification.stage.stage_completed", run_id=str(run.id), **counts)
-        return StageResult(counts=counts)
+        return StageResult(counts=counts, degraded_reason=reason)
 
 
 STAGE = _ClassifyRollup()
