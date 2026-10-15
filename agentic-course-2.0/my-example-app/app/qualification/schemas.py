@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.manifests.schemas import RuleKind, ScoreAxis
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
-from app.sourcing.schemas import PriorityScore
+from app.sourcing.schemas import HeadcountBand, PriorityScore
 
 type SourceRecord = Mapping[str, str | None]
 """One source's raw fields for one business, as the source published them: text or absent."""
@@ -105,13 +105,24 @@ class SignalAnswer(BaseModel):
     citation: Citation | None = None
 
 
+class HeadcountAnswer(BaseModel):
+    """How many people a page says work there: ``high`` absent is open-ended (``50+``)."""
+
+    low: int
+    high: int | None = None
+    citation: Citation | None = None
+
+
 class JudgmentAnswer(BaseModel):
-    """One call's verdict on every judgment rule and every qualifying signal (D12)."""
+    """One call's verdict on every judgment rule and every qualifying signal (D12), plus what the
+    same reads showed for free: the business's own homepage and a stated headcount (T6)."""
 
     model_config = ConfigDict(extra="ignore")
 
     rules: list[RuleAnswer] = []
     signals: list[SignalAnswer] = []
+    website: Citation | None = None
+    headcount: HeadcountAnswer | None = None
 
 
 # --- What survives the citation gate --------------------------------------------------------------
@@ -151,6 +162,11 @@ class AdmittedJudgment:
     signals: tuple[AdmittedSignal, ...]
     priority: ProvenancedValue[PriorityScore] | None
     omitted: tuple[OmittedAnswer, ...]
+    website: ProvenancedValue[str] | None = None
+    """The homepage origin, cited to the read of that homepage (T6, OQ-1 b)."""
+
+    headcount_band: ProvenancedValue[HeadcountBand] | None = None
+    """A stated headcount, cited to the page stating it (T6, OQ-3 a; M8)."""
 
 
 class DisqualificationResponse(BaseModel):
