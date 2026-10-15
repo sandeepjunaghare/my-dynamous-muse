@@ -1779,3 +1779,17 @@ closed) rather than redacts. M3 → the website-verification follow-up ticket; L
   only because ruff still failed. Edit is the safer tool for prose edits.
 - **Validation:** ruff, format, mypy, pyright clean; pytest with the DB 1,607 passed, 4 skipped (paid `live`);
   alembic check no drift.
+
+
+## T6 follow-up: website verification, the Places verdict, the owner page tie (planned 2026-10-15)
+
+Plan: `.claude/plans/t6-website-verification.md`. Implements the founder's (b) + (c) of 2026-10-15 and PR #34 M3.
+OQ-1…OQ-4 (verdict field · which types/kinds · routing website-verified · owner page tie) decided 2026-10-15:
+all four recommendations.
+
+- [x] OQ-1…OQ-4 answered — 2026-10-15, the founder took all four recommendations
+- [ ] Phase 1: `PlacesVerdict`/`MissKind`, `places_verdict` + owner, D13 allow-list, `is_verified` / `has_own_domain_website` / `has_routable_address`, name-word test moved to `schemas.py`
+- [ ] Phase 2: `classify_miss` + fixtures; `verify_business` records the verdict, skips a current one, counts
+- [ ] Phase 3: classify/owner skips on `is_verified()`, prompt verdict line, structure pin, routing, owner page tie, T9 `unverified`
+- [ ] Phase 4: five-stage E2E case, docs (ticket, READMEs, CLAUDE.md), `/piv-validate`
+- [ ] Level 4 read-only Places rerun over run `9ca51e17` (paid run only with the founder's go-ahead)
