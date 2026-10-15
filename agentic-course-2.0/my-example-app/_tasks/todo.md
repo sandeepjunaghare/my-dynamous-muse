@@ -1719,3 +1719,23 @@ while writing the fix.
 the same rows. The cadence sync has a lock. T10's launchd wiring is the place to decide whether `lpe promotion
 sync` gets one too.
 
+
+## T6 PR B: `resolve_owner`, the T7 node edits, the headcount band (planned 2026-10-15)
+
+Plan: `.claude/plans/t6-enrichment-pr-b.md` (the second half of `t6-enrichment.md`; OQ-1…OQ-5 and A1–A10 inherited).
+Branch `feat/t6-owner` in the main checkout; test DB on 5434; no migration. Awaiting approval.
+
+- [ ] B1: `OwnerJudgmentError` in `app/sourcing/exceptions.py`
+- [ ] B2: `app/sourcing/owner/schemas.py` (`OwnerAnswer`, `AdmittedOwner`)
+- [ ] B3: `app/sourcing/owner/prompts.py` (vertical-free; cited identity + email)
+- [ ] B4: `app/sourcing/owner/judgment.py` (node mirrors T7's; `admit_owner`, A10's eight rules)
+- [ ] B5: SDK allow-list gains the owner node
+- [ ] B6: `app/tools/resolve_owner.py` (stage 4; OQ-5 skip; cap → degraded) + PR #31 L2 test
+- [ ] B7: `classify_rollup`: reads `context.places`, skips unverified, cap → degraded (Amendment 3)
+- [ ] B8: `JudgmentAnswer.website` / `.headcount`; `AdmittedJudgment` gains both
+- [ ] B9: prompt asks + admission (homepage path only; `HeadcountBand`)
+- [ ] B10: `classify_rollup` writes website (fill only) and headcount
+- [ ] B11: five-stage end-to-end test (carried from PR A)
+- [ ] B12: opt-in live eval + empty `officerless_sample.json`
+- [ ] B13: docs (CLAUDE.md map, sourcing README, tickets, adding-a-vertical)
+- [ ] B14: `/piv-validate` + nine mutation checks, then PR
