@@ -229,6 +229,37 @@ class TestTheStage:
         assert "Acme Freight Dallas" in prompt_901
         assert "Places evidence" not in prompt_902
 
+    async def test_a_verdict_repeating_the_listing_name_is_never_stored(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """D13 (PR #34 review M1): Places context reaches the prompt, never a disqualification."""
+        echoed = _stream(
+            {
+                "rules": [
+                    {
+                        "rule_id": ROLLUP_RULE,
+                        "fired": True,
+                        "reason": "Maps lists it as Napco Bag & Film, a national platform",
+                        "citation": {"url": ABOUT, "quote": "a national platform"},
+                    }
+                ],
+                "signals": [],
+            }
+        )
+        monkeypatch.setattr(judgment, "sdk_runner", _ByRegistryId({"901": echoed, "902": LOCAL}))
+        manifest, run = await _setup(db_session)
+        context = await _context(db_session, manifest, run)
+        context.places["901"] = PlacesEvidence(display_name="NAPCO Bag & Film")
+
+        result = await STAGE.run(context)
+
+        assert result.counts["judgment_disqualified"] == 0
+        candidates = {
+            c.registry_id: c for c in await SourcingService(db_session).list_candidates(run.id)
+        }
+        assert await QualificationService(db_session).list_for_candidate(candidates["901"].id) == []
+        assert "napco" not in candidates["901"].fields.model_dump_json().casefold()
+
     async def test_an_unverified_candidate_is_never_sent(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -287,8 +318,9 @@ class TestReviewFixes:
             *,
             reads: Sequence[PageRead],
             evidence: Sequence[PageRead] = (),
+            listed: str | None = None,
         ) -> AdmittedJudgment:
-            admitted = real_admit(answer, body, reads=reads, evidence=evidence)
+            admitted = real_admit(answer, body, reads=reads, evidence=evidence, listed=listed)
             if admitted.priority is None:
                 return admitted
             return replace(

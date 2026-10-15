@@ -246,6 +246,25 @@ def evidence_reads(candidate: CandidateFields) -> tuple[PageRead, ...]:
     )
 
 
+def _folded(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def listing_name(places: PlacesEvidence | None, candidate: CandidateFields) -> str | None:
+    """The Places listing name as only Places knows it, for the gate to keep out of storage (D13).
+
+    ``None`` when there is no listing name, or when it is contained in one of the candidate's own
+    cited names: text repeating the registry's name is a cited registry fact, not Places content.
+    """
+    if places is None or places.display_name is None or not places.display_name.strip():
+        return None
+    listed = _folded(places.display_name)
+    own = (field.value for field in (candidate.legal_name, candidate.dba_name) if field is not None)
+    if any(listed in _folded(name) for name in own):
+        return None
+    return listed
+
+
 def _index(reads: Iterable[PageRead]) -> dict[str, PageRead]:
     """The first read of each page, keyed for comparison; an unparseable URL backs nothing."""
     indexed: dict[str, PageRead] = {}
@@ -267,12 +286,20 @@ class _Gate:
       answer, but it cannot show that a business is a national rollup; and a judgment that fires is
       a permanent suppression. So evidence never backs a fired judgment rule.
 
-    A Google Maps page is never admitted: its content may not be stored (D13, review M2).
+    A Google Maps page is never admitted: its content may not be stored (D13, review M2). Nor is
+    stored text that repeats the Places listing name, which reached the prompt as context only
+    (D13, PR #34 review M1).
     """
 
-    def __init__(self, reads: Iterable[PageRead], evidence: Iterable[PageRead] = ()) -> None:
+    def __init__(
+        self,
+        reads: Iterable[PageRead],
+        evidence: Iterable[PageRead] = (),
+        listed: str | None = None,
+    ) -> None:
         self._reads = _index(reads)
         self._evidence = _index(evidence)
+        self._listed = listed
         self.omitted: list[OmittedAnswer] = []
 
     def omit(self, label: str, reason: str) -> None:
@@ -315,6 +342,10 @@ class _Gate:
         read = self.read_for(label, citation, allow_evidence=allow_evidence)
         if read is None or citation is None:
             return None
+        if self._listed is not None and self._listed in _folded(f"{text} {citation.quote}"):
+            # The name itself is never logged: it is Places content too.
+            self.omit(label, "repeats the Places listing name, which may not be stored (D13)")
+            return None
         quote = citation.quote.strip()
         return ProvenancedValue(
             value=f'{text.strip()} — "{quote}"' if quote else text.strip(),
@@ -330,15 +361,17 @@ def admit_judgment(
     *,
     reads: Sequence[PageRead],
     evidence: Sequence[PageRead] = (),
+    listed: str | None = None,
 ) -> AdmittedJudgment:
     """Keep only the answers a citation holds up; compute the priority from what survives.
 
     A rule id that is not one of this manifest's *judgment* rules is dropped — the model cannot
     invent a disqualifier, nor re-decide a free predicate. A fired rule must cite a page the node
     read in this call; one citing nothing, an unread page, the registry record or Google Maps is
-    dropped, so it never disqualifies. ``fired: false`` is not stored at all.
+    dropped, so it never disqualifies. ``fired: false`` is not stored at all. ``listed`` is
+    :func:`listing_name`'s result: an answer repeating it is dropped rather than stored.
     """
-    gate = _Gate(reads, evidence)
+    gate = _Gate(reads, evidence, listed)
     judgment_ids = {
         c.value.id for c in body.disqualifier_rules if c.value.kind is RuleKind.judgment
     }

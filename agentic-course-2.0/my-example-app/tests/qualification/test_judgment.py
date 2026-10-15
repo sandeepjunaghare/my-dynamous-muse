@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import JsonValue
+from structlog.testing import capture_logs
 
 from app.core.config import get_settings
 from app.core.cost import BillableKind, RunCost
@@ -22,10 +23,12 @@ from app.qualification.judgment import (
     admit_judgment,
     build_options,
     evidence_reads,
+    listing_name,
     run_judgment,
 )
 from app.qualification.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer
+from app.shared.page_reads import PageRead
 from app.shared.provenance import RetrievalMethod
 from app.sourcing.schemas import CandidateFields, HeadcountBand, PlacesEvidence, ScoreBand
 from tests.manifests.replay import (
@@ -219,6 +222,63 @@ class TestTheCitationGate:
         rules = [_rule(ROLLUP_RULE, False), _rule(ROLLUP_RULE, True)]
         admitted, _ = await _judge([INIT, *_fetched(), result_line(_answer(rules))])
         assert admitted.fired == ()
+
+
+class TestThePlacesListingNameIsNeverStored:
+    """D13 (PR #34 review M1): the listing name is prompt context; stored text may not repeat it."""
+
+    LISTED = "napco bag & film"
+
+    @staticmethod
+    def _admit(
+        rules: list[dict[str, JsonValue]], signals: list[dict[str, JsonValue]] | None = None
+    ) -> AdmittedJudgment:
+        answer = JudgmentAnswer.model_validate(_answer(rules, signals))
+        reads = [PageRead(url=ABOUT, read_at=READ_AT)]
+        return admit_judgment(
+            answer, BODY, reads=reads, listed=TestThePlacesListingNameIsNeverStored.LISTED
+        )
+
+    def test_a_fired_rule_whose_reason_repeats_it_is_dropped(self) -> None:
+        rule = _rule(ROLLUP_RULE, True) | {"reason": "Maps lists it as NAPCO Bag &  Film"}
+        with capture_logs() as captured:
+            admitted = self._admit([rule])
+        assert captured
+        assert admitted.fired == ()
+        assert [o.reason for o in admitted.omitted] == [
+            "repeats the Places listing name, which may not be stored (D13)"
+        ]
+        assert "napco" not in repr(captured).casefold()
+
+    def test_a_signal_whose_quote_repeats_it_is_dropped(self) -> None:
+        cited = _signal("inspection_backlog", 4)
+        quoted: dict[str, JsonValue] = {
+            **cited,
+            "citation": {"url": ABOUT, "quote": "Napco Bag & Film, Dallas"},
+        }
+        admitted = self._admit([], [quoted, _signal("field_software", 5)])
+        assert [s.signal_id for s in admitted.signals] == ["field_software"]
+        assert admitted.priority is None
+
+    def test_an_answer_that_does_not_repeat_it_is_kept(self) -> None:
+        admitted = self._admit([_rule(ROLLUP_RULE, True)])
+        assert [r.rule_id for r in admitted.fired] == [ROLLUP_RULE]
+
+    @pytest.mark.parametrize(
+        ("places", "expected"),
+        [
+            (None, None),
+            (PlacesEvidence(), None),
+            (PlacesEvidence(display_name="  "), None),
+            (PlacesEvidence(display_name="ACME  FREIGHT"), None),  # the census DBA: a cited fact
+            (PlacesEvidence(display_name="Acme Logistics"), None),  # within the legal name
+            (PlacesEvidence(display_name="Napco Bag & Film"), "napco bag & film"),
+        ],
+    )
+    def test_only_a_name_the_registry_does_not_give_is_held_back(
+        self, places: PlacesEvidence | None, expected: str | None
+    ) -> None:
+        assert listing_name(places, a_candidate()) == expected
 
 
 class TestPriority:

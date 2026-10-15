@@ -63,13 +63,9 @@ class _ClassifyRollup:
                 capped += 1
                 continue
             calls += 1
+            places = context.places.get(fields.registry_id.value)
             try:
-                judged = await judgment.run_judgment(
-                    fields,
-                    body,
-                    cost=context.cost,
-                    places=context.places.get(fields.registry_id.value),
-                )
+                judged = await judgment.run_judgment(fields, body, cost=context.cost, places=places)
             except JudgmentNodeError as exc:
                 failed += 1
                 logger.warning(
@@ -82,7 +78,11 @@ class _ClassifyRollup:
 
             classified += 1
             admitted = judgment.admit_judgment(
-                judged.answer, body, reads=judged.reads, evidence=judgment.evidence_reads(fields)
+                judged.answer,
+                body,
+                reads=judged.reads,
+                evidence=judgment.evidence_reads(fields),
+                listed=judgment.listing_name(places, fields),
             )
             if await qualification.record_judgment(candidate, run, context.manifest, admitted):
                 # A rejected business keeps nothing: a "live" score on a rollup's row is a
