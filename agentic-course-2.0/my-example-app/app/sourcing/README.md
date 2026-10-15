@@ -168,6 +168,34 @@ Stage 2 (`app/tools/verify_business.py`), for every candidate no free rule remov
   nothing for a candidate already verified; a failed call or a refused write is counted and the batch
   goes on.
 
+## Owner resolution (T6): `resolve_owner`
+
+Stage 4 (`app/tools/resolve_owner.py`), after `classify_rollup`, so the owner node never pays for a
+candidate the judgment rules removed.
+
+- **Census first** (A2). `search_registry` already filled `owner` from `company_officer_1` wherever
+  `principal_or_none` accepts it, cited `bulk_file`. Those candidates cost nothing here.
+- **The node only for verified, officer-less survivors.** A candidate is sent to `owner/` only when no rule
+  removed it, it has a `business_check` (an unverified candidate cannot be promoted, OQ-5), and it still has
+  no `owner`. A refused census officer (`"ACME LLC - JANE DOE"`) counts as absent, so the node runs for it.
+- **The gate** (`owner/judgment.py`, A10). A name is kept only when, in order: one was offered; it is
+  cited; the URL parses; the node verifiably fetched that page (`ReadTracker`, fail-closed); it is not
+  Google Maps; `Principal` accepts it as a person; the quote contains its last word; and the title is not
+  a registered, process or statutory agent. The registry record is never citable here. Anything else
+  leaves `owner` absent: **never guessed, never repaired.** No name is ever logged.
+- **`owner` belongs to `resolve_owner`.** A retry of it may replace its own answer; the registry may only
+  fill an empty one (PR #31 L2). An owner already stored is kept, so a retry pays nothing.
+- **The cap is degraded, not raised.** `MAX_OWNER_CALLS_PER_RUN` (500) is a breaker; reaching it counts the
+  rest `owner_capped` and finishes the stage `degraded`. A failed call is counted and the batch goes on.
+- **Counts:** `owner_from_registry`, `owner_kept`, `owner_resolved`, `owner_absent`, `owner_failed`,
+  `owner_write_refused`, `owner_skipped_disqualified`, `owner_unverified_skipped`, `owner_capped`,
+  `owner_calls`.
+
+`classify_rollup` (stage 3) gained the matching edits in the same PR: it reads the Places channel, skips an
+unverified candidate (`judgment_unverified_skipped`), ends degraded at its cap (`judgment_capped`), and keeps a
+cited homepage origin as `website` (fill only, never replacing `verify_business`'s) and a cited
+`headcount_band` (`judgment_website_filled`, `judgment_headcount_filled`).
+
 ## The run: a deterministic pipeline (T5)
 
 ```

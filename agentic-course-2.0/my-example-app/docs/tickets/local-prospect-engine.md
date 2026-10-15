@@ -202,6 +202,23 @@ Open questions all went with the recommendations (OQ-1 b, OQ-2 a, OQ-3 a, OQ-4 a
   website and headcount answers out, unverified skipped, its cap ending the stage degraded rather than the run
   failed), the PR #31 L2 ownership test, and the opt-in live eval.
 
+**Built, PR B — `resolve_owner` and the `classify_rollup` edits (2026-10-15; plan
+`.claude/plans/t6-enrichment-pr-b.md`).** T6 is complete.
+- **`resolve_owner`** (stage 4): census first; the owner node (`app/sourcing/owner/`) only for a survivor with a
+  `business_check` and no `owner`. A name is kept only through A10's eight rules, cited `llm_inference` to a page
+  the node verifiably read; anything else stays absent. The cap (`MAX_OWNER_CALLS_PER_RUN`) ends the stage
+  degraded. PR #31 L2's DB-tier ownership test is in `tests/tools/test_resolve_owner.py`.
+- **`classify_rollup`** reads `StageContext.places`, skips unverified candidates (OQ-5), ends degraded at its cap
+  instead of failing the run (Amendment 3), and stores a cited homepage origin (fill only) and `headcount_band`.
+- A five-stage end-to-end test (`tests/sourcing/test_end_to_end.py`) and an opt-in live eval
+  (`tests/sourcing/test_live_enrichment.py`, fixture committed empty) were added. No migration.
+- **T10 hand-over:** the Friday report should surface `owner_absent`, `owner_unverified_skipped`,
+  `judgment_unverified_skipped`, `judgment_capped` and `owner_capped`.
+- **Follow-ups:** the HubSpot mapping of `headcount_band`; a shared citation gate (three copies now: T12, T7, T6);
+  the Texas Comptroller filing-source spike; passing a refused census officer string to the node as a hint (PB-3).
+- **Still open, not decided by PR B:** the three *Decide* items below (the Spearpoint false miss, a mail-drop or
+  no-listing verdict, candidates with no score).
+
 **First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
 printed, nothing stored) showed what Places returned. It found 4 correct misses, 1 correct hit, and 1 false miss.
