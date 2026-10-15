@@ -206,8 +206,9 @@ class SyncFailure(BaseModel):
     """A prospect the sync could not process. Whatever it had not committed is rolled back, and it
     is picked up again on the next sync.
 
-    ``code`` is the HubSpot gateway's code for a HubSpot failure, ``invalid_hubspot_response``
-    when a body failed validation, and ``database_error`` for a database failure.
+    ``code`` is the HubSpot gateway's code for a HubSpot failure (an unreadable body is the
+    gateway's ``hubspot_response_shape_unrecognised``), ``invalid_hubspot_response`` when a body the
+    gateway accepted then failed validation here, and ``database_error`` for a database failure.
     """
 
     hubspot_contact_id: str

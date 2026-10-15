@@ -23,6 +23,7 @@ from app.cadence import models as cadence_models
 from app.core.config import get_settings
 from app.core.database import Base
 from app.manifests import models as manifest_models
+from app.promotion import models as promotion_models
 from app.qualification import models as qualification_models
 from app.routing import models as routing_models
 from app.sourcing import models as sourcing_models
@@ -38,6 +39,7 @@ _REGISTERED_MODELS = (
     cadence_models.CadenceState,
     qualification_models.Disqualification,
     routing_models.RouteAssignment,
+    promotion_models.Promotion,
 )
 
 config = context.config

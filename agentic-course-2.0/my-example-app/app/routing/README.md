@@ -9,15 +9,18 @@ The stage module is `app/tools/cluster_routes.py`, and the work lives here.
 
 ## Who gets routed
 
-**Only candidates with a verified address**, by `CandidateFields.has_verified_address()`: the census
-address **and** a `business_check`. A candidate without one is counted and never geocoded, because a
-door placed from a guess sends a founder to the wrong street.
+**Only candidates that were not disqualified and have a verified address.**
 
-> **Follow-up for T9/T10.** T8 routes every candidate with a verified address, disqualified or not.
-> T7's `disqualification` table was built in parallel, so this slice does not read it (decided
-> 2026-10-10). Before routes reach a founder, T9/T10 must narrow them to candidates that qualified.
-> They must also decide whether routing re-runs after that. Re-running is cheap, because the stage
-> replaces its rows. This is now in T9's and T10's acceptance criteria in the tickets doc.
+- **Not disqualified** (T9, OQ8-B). The stage reads the run's disqualified candidates
+  (`QualificationService.disqualified_candidate_ids`) and passes them to
+  `RoutingService.cluster_run(..., exclude=...)`. Qualification runs before this stage, so every
+  disqualification of the run is recorded by then. They are counted `routing_disqualified` and never
+  geocoded, so routes are built from survivors and balanced over them. `routing/` still never imports
+  `qualification/`; the stage module bridges the two. Unscored candidates are routed (they are
+  promotable). Whether routing re-runs if qualification ever changes after stage 5 stays T10's.
+- **A verified address**, by `CandidateFields.has_verified_address()`: the census address **and** a
+  `business_check`. A candidate without one is counted and never geocoded, because a door placed
+  from a guess sends a founder to the wrong street.
 
 ## Where the coordinates come from (D13)
 
@@ -65,6 +68,7 @@ candidate field (`app/sourcing/stages.py`).
 ## Counts it reports
 
 The stage reports these to `sourcing_run.counts`, every key every time:
+- `routing_disqualified` (counted once: never also as unverified)
 - `routing_eligible`, `routing_unverified_address`
 - `routing_geocode_unmatched`, `routing_geocode_ambiguous`, `routing_geocode_failed`
 - `routing_clustered`, `routing_clusters`

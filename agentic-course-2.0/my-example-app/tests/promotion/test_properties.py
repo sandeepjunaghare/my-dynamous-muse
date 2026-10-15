@@ -1,4 +1,4 @@
-"""Provisioning the five custom properties, idempotently.
+"""Provisioning the six custom properties, idempotently.
 
 None of them existed in portal 244766495 when this was written. Review happens in HubSpot, so a
 record that cannot show where it came from cannot be reviewed.
@@ -10,7 +10,7 @@ from structlog.testing import capture_logs
 
 from app.promotion.client import API_VERSION
 from app.promotion.properties import PROVISIONING_PLAN, ensure_properties
-from app.promotion.schemas import ObjectType
+from app.promotion.schemas import ObjectType, ReviewStatus
 from tests.promotion.conftest import (
     MockPortal,
     Route,
@@ -65,7 +65,7 @@ class TestFirstRun:
 
         await ensure_properties(client)
 
-        assert len(_property_posts(portal)) == len(PROVISIONING_PLAN) == 8
+        assert len(_property_posts(portal)) == len(PROVISIONING_PLAN) == 9
         await client.aclose()
 
     async def test_properties_land_on_the_right_object_types(self) -> None:
@@ -76,7 +76,7 @@ class TestFirstRun:
         await ensure_properties(client)
 
         posts = _property_posts(portal)
-        assert posts.count(f"/crm/properties/{API_VERSION}/companies") == 5
+        assert posts.count(f"/crm/properties/{API_VERSION}/companies") == 6
         assert posts.count(f"/crm/properties/{API_VERSION}/contacts") == 3
         await client.aclose()
 
@@ -140,7 +140,7 @@ class TestFirstRun:
 
 class TestSecondRun:
     async def test_a_second_pass_writes_nothing(self) -> None:
-        """Safe on every deploy. Eight reads, zero writes."""
+        """Safe on every deploy. Nine reads, zero writes."""
         portal = MockPortal(FULLY_PROVISIONED)
         client = make_client(portal)
 
@@ -149,7 +149,7 @@ class TestSecondRun:
 
         assert portal.count("POST") == 0
         events = [entry["event"] for entry in captured]
-        assert events.count("promotion.hubspot.property_present") == 8
+        assert events.count("promotion.hubspot.property_present") == 9
         assert events.count("promotion.hubspot.property_created") == 0
         assert events.count("promotion.hubspot.group_present") == 2
         await client.aclose()
@@ -175,7 +175,7 @@ class TestConflictsAndDrift:
             await ensure_properties(client)
 
         events = [entry["event"] for entry in captured]
-        assert events.count("promotion.hubspot.property_present") == 8
+        assert events.count("promotion.hubspot.property_present") == 9
         assert events.count("promotion.hubspot.property_created") == 0
         await client.aclose()
 
@@ -204,7 +204,7 @@ class TestConflictsAndDrift:
 
 
 class TestProvisioningPlan:
-    def test_the_plan_covers_the_five_properties_the_ticket_names(self) -> None:
+    def test_the_plan_covers_the_ticket_five_and_the_review_status(self) -> None:
         names = {definition.name for _, definition in PROVISIONING_PLAN}
         assert names == {
             "lpe_source_url",
@@ -212,6 +212,7 @@ class TestProvisioningPlan:
             "lpe_vertical",
             "lpe_priority_score",
             "lpe_route_cluster",
+            "lpe_review_status",
         }
 
     def test_scoring_and_routing_are_company_only(self) -> None:
@@ -222,3 +223,49 @@ class TestProvisioningPlan:
         }
         assert "lpe_priority_score" not in contact_names
         assert "lpe_route_cluster" not in contact_names
+
+    def test_review_status_is_company_only(self) -> None:
+        """OQ2: the company list view is the review surface; a second permanent name is unwanted."""
+        placements = [
+            object_type
+            for object_type, definition in PROVISIONING_PLAN
+            if definition.name == "lpe_review_status"
+        ]
+        assert placements == [ObjectType.companies]
+
+
+class TestReviewStatus:
+    async def test_it_is_a_select_with_three_options_in_order(self) -> None:
+        """OQ2-A. The option values are what `lpe promotion sync` reads back, so they are exact."""
+        portal = MockPortal(EMPTY_PORTAL)
+        client = make_client(portal)
+
+        await ensure_properties(client)
+
+        (body,) = [b for b in _property_bodies(portal) if b.get("name") == "lpe_review_status"]
+        assert body["type"] == "enumeration"
+        assert body["fieldType"] == "select"
+        assert body["groupName"] == "lpe"
+        assert body["options"] == [
+            {"label": "Pending review", "value": "pending_review", "displayOrder": 0},
+            {"label": "Accepted", "value": "accepted", "displayOrder": 1},
+            {"label": "Rejected", "value": "rejected", "displayOrder": 2},
+        ]
+        await client.aclose()
+
+    async def test_a_string_property_body_carries_no_options_key(self) -> None:
+        """`exclude_none`: the five T3 properties are created exactly as before."""
+        portal = MockPortal(EMPTY_PORTAL)
+        client = make_client(portal)
+
+        await ensure_properties(client)
+
+        others = [b for b in _property_bodies(portal) if b.get("name") != "lpe_review_status"]
+        assert others
+        assert all("options" not in body for body in others)
+        await client.aclose()
+
+    def test_the_option_values_are_the_review_status_enum(self) -> None:
+        (definition,) = [d for _, d in PROVISIONING_PLAN if d.name == "lpe_review_status"]
+        assert definition.options is not None
+        assert [option.value for option in definition.options] == [s.value for s in ReviewStatus]

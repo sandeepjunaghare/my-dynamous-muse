@@ -1581,3 +1581,141 @@ behaviour it relied on was run on the PR head and held.
 
 **Review:** 1,309 passed, 2 skipped (DB tier on 5436); all checks clean. The star-import cases fail with the new
 condition disabled.
+
+---
+
+# T9 — Promotion slice: planned (2026-10-12)
+
+**Plan:** `.claude/plans/t9-promotion.md` · **Branch / worktree:** `feat/t9-promotion` (worktrees/t9), off `main` @ `752a994`
+· migration `0010_promotion` → `0009_candidate_run_scoped_fks` (re-point and renumber after T6 merges, per
+`conventions.md` § merge). **Awaiting human answers to the plan's eight Open Questions before `/piv-implement`.**
+
+**Found while planning (read-only, 2026-10-11):**
+- No `pending review` stage exists in the portal. `hs_lead_status` is already used by the founders (10 contacts:
+  `NEW`, `CONNECTED`), so reusing it would collide. Recommended: a new `lpe_review_status` enum on COMPANY (one-way door).
+- Census `company_officer_1` (3,000 TX brokers): always given-name first; 73.5% split confidently, 26.5% ambiguous
+  (middle name vs compound surname vs a glued title), 1 single word. ALL CAPS in 99%.
+- `find_task_by_key` avoids search for recovery (index lag); companies have no association to walk, so company
+  recovery searches by `lpe_source_url` behind a 10-minute age guard. Contacts recover through the association walk.
+
+- [ ] Human answers OQ1–OQ8 (qualified rule · where pending review lives · what "accept" is · name split · dedupe hit ·
+      engine-metadata carve-out · CLI vs route · routes with disqualified doors)
+- [ ] `/piv-implement` the plan, then `/piv-validate` on the database tier (port 5434), report, PR, review
+- [ ] Human-gated: provision `lpe_review_status`, live `promote --dry-run`, first real promote, accept/reject in HubSpot,
+      `sync`, add `lpe promotion sync` to the 07:00 launchd job, `alembic upgrade head` on dev
+- [ ] Follow-ups: map T6's headcount band; a T7 "judged" marker would let promotion exclude never-judged candidates
+
+## Review (planning)
+
+**Worked.** Measuring the officer-name shapes on live census data before designing the split: the plan's options now
+carry percentages instead of guesses. Checking the portal settled that `pending review` must be new, not reused.
+**Watch.** OQ6 widens the gate's documented carve-out (engine metadata); it is an epic-level wording change, so it is
+the human's call. Under OQ5-A the `manual_hubspot_entry` criterion has nothing to act on yet, and the plan says so.
+
+# T9 part 1: T6-independent tasks (2026-10-12)
+
+**Plan:** `.claude/plans/t9-promotion.md` (all OQs decided to the recommendations) · **Branch:** `feat/t9-promotion`
+(worktrees/t9) · test DB `lpe-test-pg-t9` on **5437**. Scope: the tasks that do not read T6 PR A's `CandidateFields`
+changes. Tasks 7, 8, 11-13 and the task 16 docs that describe them wait for the rebase onto T6 PR A (AMENDMENTS 2).
+Baseline before starting: 1,127 passed, 2 skipped.
+
+- [x] Task 1: `hubspot_portal_id`, `hubspot_ui_domain` in config + `.env.example` (plus a guard: every
+      `.env.example` key is a `Settings` field)
+- [x] Tasks 2-5: `ReviewStatus`, `PropertyOption`, `RecordMeta`, associations on `ObjectWriteRequest`; `lpe_review_status`
+      provisioning; `create_contact(company_id=)` + meta merge; `PromotionRefusedError`, `RunNotPromotableError`,
+      `PromotionStateError`, `RefusalReason`
+- [x] Task 6: `names.py` (OQ4 split)
+- [x] Task 9: `Promotion` model + `0010_promotion` + `env.py`
+- [x] Task 10: `PromotionRepository` (claim, dedupe lookup, CAS transition)
+- [x] Task 14: `cluster_routes` excludes the run's disqualified candidates (OQ8-B)
+- [x] Tests for each; ruff, format, mypy, pyright, pytest (DB tier on 5437), `alembic check`
+- [x] Atomic commits; plan AMENDMENTS note
+- [ ] Rebase onto T6 PR A, then Tasks 7, 8, 11-13, the `FakeCrm` + service/CLI tests, Task 16 docs
+
+**Review:** 1,229 passed, 2 skipped (was 1,127): +102 tests. ruff, format, mypy, pyright clean; `alembic check` clean;
+one head (`0010_promotion`); downgrade to `0009` and back clean. Every ledger CHECK was neutralised in turn and each
+was caught by its test. **Worked:** writing the client, names and routing tests first; they failed for the right
+reason before the code existed. **Didn't:** the ledger's constraint tests came after the model and migration, so they
+were proven by the mutation pass instead; a first blunt mutation (renaming the unique key) broke `claim` everywhere
+and proved nothing. **Improve:** at rebase, re-run the routing tests: the new ones build candidates through
+`a_verified_candidate`, whose `place_checked` call T6 PR A changes (`place_checked(address)`); the builder is T6's
+to update, but the reorder may move `has_verified_address`. Textual conflicts are likeliest in `.env.example` /
+`config.py` (if T6 touches the integrations block), `_tasks/todo.md` and the plan.
+
+---
+
+# T9 part 2: the T6-dependent tasks (2026-10-13)
+
+**Plan:** `.claude/plans/t9-promotion.md` · **Branch:** `feat/t9-promotion` (worktrees/t9), rebased onto main
+`3682736` · test DB `lpe-test-pg-t9` on **5437** · dev Supabase already at `0010_promotion`. Confirmed by the
+human 2026-10-13: unscored candidates stay promotable (OQ1-D). Baseline: 1,411 passed, 2 skipped.
+
+- [x] Task 7: `eligibility.py` (required set, OQ1-D; `manifest_has_signals` dropped as the plan says under D)
+- [x] Task 8: `mapping.py` (company/contact writes, `record_url`); no 8b (OQ5-A)
+- [x] Task 11: `PromotionService.promote_run` (claim, ledger + portal dedupe, creates, recovery)
+- [x] Task 12: `PromotionService.sync_reviews` (accept → `CadenceService.enrol`, reject, withdrawn)
+- [x] Task 13: `lpe promotion promote | sync`, registered in `app/cli.py`
+- [x] Task 15: `FakeCrm`, `test_eligibility`, `test_mapping`, `test_promote`, `test_review_sync`, `test_cli`
+- [x] Task 16: docs (promotion README, provenance/exception docstrings, hubspot-integration, CLAUDE.md, tickets)
+- [x] Validate: ruff, format, mypy, pyright, full pytest on 5437, `alembic check`; mutation checks (a)-(g)
+- [x] Report `.claude/reports/t9-promotion-report.md`; commit; nothing written to the live portal
+
+**Review:** 1,503 passed, 2 skipped (was 1,411): +92 tests. ruff, format, mypy, pyright clean; `alembic check`
+clean. 9 of 9 mutations caught. **Worked:** a dry run that is the real pass minus the writes, asserted directly
+(`dry.counts == real.counts`), on both promote and sync; running the real `CadenceService.enrol` against the same
+fake as promotion, so the hand-off is tested end to end. **Didn't:** one mutation (enrol a rejected company) was
+unreachable as first written — the `rejected` branch runs first — and passed for the wrong reason until rewritten;
+a test matched "the first company create" by path suffix and caught a property create instead. **Improve:** the
+sandbox blocks writes to a worktree outside the session directory, so every edit there needs the editor tools or an
+unsandboxed command; start such sessions in the worktree. Nothing was written to the live portal.
+
+## PR #33 review fixes (2026-10-14)
+
+Scope (owner): all findings, M1–M4 and L1–L7. M1 (owner): reuse `updated_at`, stamped by a
+`pending_create → pending_create` transition before every company create; no migration. M2 (owner): a retried
+`enrolling` row follows the current value — `accepted` enrols, `rejected` → rejected, not found → withdrawn,
+anything else → back to `pending_review`. L7 (owner): synced decisions are final; the README says so.
+
+- [x] M1: stamp and commit before every company create; the recovery guard reads `updated_at`; test two lost creates.
+- [x] M2: `enrolling` rows join the batch read; `_move` takes `from_status`; test accepted → 5xx → rejected.
+- [x] M3: the batch read reports explicit not-found ids; only those withdraw; any other absence stays and is counted.
+- [x] M4: test a lost enrol race followed by a second accepted row.
+- [x] L1: the client raises `HubSpotResponseShapeError` on an unreadable body. The cadence's per-prospect
+  failure code for one is now the gateway's `hubspot_response_shape_unrecognised`; one cadence test updated.
+- [x] L2: a blank `HUBSPOT_UI_DOMAIN` falls back to the default.
+- [x] L3: a dry run records keys only for would-create / would-fail.
+- [x] L4: test that a refused contact payload creates nothing.
+- [x] L5: test the lost-claim branch.
+- [x] L6: `_mark_duplicate` honours the compare-and-set.
+- [x] L7: README: decisions are final once synced.
+
+**Review:** 1,518 passed, 2 skipped (DB tier on 5434); ruff, format, mypy, pyright and `alembic check` clean; no
+migration. 15 new tests: 12 failed first for the reason each finding gave. The other 3 (L4, L5 and M4) pin
+behaviour that was already right but untested.
+**Worked:** writing every test before any fix showed which findings were real defects and which were coverage gaps.
+**Didn't:** the first M1 design compared the app clock with the database's `now()`. In tests that is the
+transaction's start time, so the guard could never fire. The stamp now carries the caller's clock (`touched_at`).
+The first README draft told a reader to delete a ledger row by hand, which CLAUDE.md forbids; it was reworded.
+**Improve:** the cadence's own `batch_read` callers still treat every absence as "deleted" (task gone → re-create).
+They now have `batch_read_with_not_found` available. Whether they should use it is a T11 question, not this PR's.
+
+
+## PR #33 round-2 review and its Lows (2026-10-15)
+
+Scope (owner): all Lows, L1–L5. L2 (owner): document `decided_at` as when a sync last acted on a decision;
+`transition` keeps never clearing a column.
+
+- [x] L1: README: recovery waits 10 minutes after the last create attempt.
+- [x] L2: `decided_at` docstring and README: the latest decision a sync acted on.
+- [x] L3: `_decide` skips the count and the decision when its move loses the compare-and-set; test a lost reject.
+- [x] L4: dry-run test with two `enrolling` rows, one flipped to rejected and one to blank.
+- [x] L5: the cadence's `invalid_hubspot_response` message names a validation failure, not HubSpot's body.
+
+**Review:** 1,520 passed, 2 skipped (DB tier on 5434); ruff, format, mypy, pyright and `alembic check` clean. The
+L3 test failed first; the L4 test passed first, since the branch was right but untested.
+**Worked:** a reviewer with a fresh context caught the README line M1 left stale, which the round-1 fix pass missed
+while writing the fix.
+**Improve:** promotion sync has no run lock, so L3 only stops double reporting; two syncs can still both read
+the same rows. The cadence sync has a lock. T10's launchd wiring is the place to decide whether `lpe promotion
+sync` gets one too.
+

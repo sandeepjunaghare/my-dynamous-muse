@@ -13,7 +13,16 @@ assessment). Anything a person reads or edits lives there and only there — no 
 field without provenance cannot be written to HubSpot. That is the structural fix for E18 (a company name
 sitting in a first-name field is exactly a field nobody could cite) and what turns M6 and M8 into something
 enforced rather than hoped for. Custom properties carry what the human needs to trust the record: source URL,
-sourced-at, vertical, priority score, route cluster — none of which exist in the portal yet.
+sourced-at, vertical, priority score, route cluster, review status — created by the first real
+`lpe promotion promote`, never by hand or through the connector. Four of them are **engine metadata**, not
+claims about the prospect, and pass in the closed `RecordMeta` beside the gate (T9, OQ6-A): vertical, review
+status, route cluster and the record owner. The score is gated: it is a judgment about the business.
+
+**Review lives on the company, in `lpe_review_status`** (T9): `pending_review` at create, then the founder
+sets `accepted` or `rejected`, singly or in bulk from the company list view. `lpe promotion sync` reads it back
+— accepted → `CadenceService.enrol` (the cadence creates the first task; promotion never does), rejected →
+recorded and left alone. The decision is a HubSpot fact we read, never one we mirror. Not `hs_lead_status`:
+the founders already use it.
 
 **Before any create, dedupe on domain and phone** — the portal already holds 3,118 contacts and 1,040
 companies of mixed provenance. Access is a private app token scoped to contacts/companies/deals/tasks
@@ -40,7 +49,8 @@ adopted into the machine with `lpe cadence adopt`, from a roster a person writes
 creates cadence tasks and schedule rows only — **no prospect field write and no `candidate`** — so the
 write-gate, which governs field writes and not task creation, has nothing to check. Honest provenance for
 these records (`retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` =
-the record's create date) applies at the first field write, which is T9's. Evidence is read from the contact
+the record's create date) applies at the first field write to such a record. T9 makes none: a promoted
+candidate that matches an existing company is flagged `duplicate` and nothing is written to it (OQ5-A). Evidence is read from the contact
 only, as the sync reads it; old hand tasks are listed for a person to close, never written. Details:
 `app/cadence/README.md` → *Adoption*.
 

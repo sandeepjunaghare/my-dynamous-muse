@@ -23,6 +23,7 @@ contradict themselves on ``hs_task_status``.
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -96,6 +97,49 @@ class TaskStatus(StrEnum):
     deferred = "DEFERRED"
 
 
+class ReviewStatus(StrEnum):
+    """Where a promoted company stands in the founder's review (OQ2-A: ``lpe_review_status``).
+
+    The values are the HubSpot option values, exactly. **The founder moves it**, by single or bulk
+    edit in the company list view; the engine writes only :attr:`pending_review`, once, at create,
+    and reads the decision back with ``lpe promotion sync`` (OQ3-A).
+    """
+
+    pending_review = "pending_review"
+    accepted = "accepted"
+    rejected = "rejected"
+
+
+class PromotionStatus(StrEnum):
+    """Where one business stands in the ``promotion`` ledger — a state machine, not a log.
+
+    ``pending_create → pending_review → enrolling → enrolled``, with terminal ``rejected``,
+    ``duplicate`` and ``withdrawn``. Each non-terminal state is a HubSpot round trip that can be
+    interrupted, so a later pass knows exactly which call to finish.
+    """
+
+    pending_create = "pending_create"
+    """Claimed; the company and/or contact create has not been confirmed yet."""
+
+    pending_review = "pending_review"
+    """Company and contact exist in HubSpot at ``lpe_review_status = pending_review``."""
+
+    enrolling = "enrolling"
+    """The founder accepted it; the hand-off to the cadence is in flight."""
+
+    enrolled = "enrolled"
+    """In the cadence — promotion's job is done."""
+
+    rejected = "rejected"
+    """The founder rejected it at review. Its HubSpot records are left as they are."""
+
+    duplicate = "duplicate"
+    """Already in HubSpot, or the same business as another ledger row: nothing was created."""
+
+    withdrawn = "withdrawn"
+    """The company was deleted or archived in HubSpot before a decision was read."""
+
+
 class HubSpotObject(BaseModel):
     """Any CRM record coming back from HubSpot.
 
@@ -133,11 +177,24 @@ class PropertyGroupDefinition(BaseModel):
     display_order: int = Field(default=-1, serialization_alias="displayOrder")
 
 
+class PropertyOption(BaseModel):
+    """One option of an enumeration property we create."""
+
+    model_config = _REQUEST_CONFIG
+
+    label: str
+    value: str
+    display_order: int = Field(serialization_alias="displayOrder")
+
+
 class PropertyDefinition(BaseModel):
     """A property we create.
 
     ``group_name`` serializes to ``groupName`` and carries the group's **name**, not its id — a
     distinction HubSpot's error message for getting it wrong does not make clear.
+
+    ``options`` is for an enumeration only. ``None`` is dropped by ``exclude_none``, so a string
+    property's body is unchanged by the field existing.
     """
 
     model_config = _REQUEST_CONFIG
@@ -148,6 +205,7 @@ class PropertyDefinition(BaseModel):
     field_type: str = Field(serialization_alias="fieldType")
     group_name: str = Field(serialization_alias="groupName")
     description: str | None = None
+    options: list[PropertyOption] | None = None
 
 
 class SearchFilter(BaseModel):
@@ -209,14 +267,6 @@ class HubSpotErrorBody(BaseModel):
     correlation_id: str | None = Field(default=None, validation_alias="correlationId")
 
 
-class ObjectWriteRequest(BaseModel):
-    """The body of a company or contact create/update: a flat map of rendered property values."""
-
-    model_config = _REQUEST_CONFIG
-
-    properties: dict[str, str]
-
-
 class AssociationTarget(BaseModel):
     """The record an association points at."""
 
@@ -243,6 +293,63 @@ class Association(BaseModel):
 
     to: AssociationTarget
     types: list[AssociationType]
+
+
+class ObjectWriteRequest(BaseModel):
+    """The body of a company or contact create/update: a flat map of rendered property values.
+
+    ``associations`` is ``None``, not ``[]``, when there are none, so ``exclude_none`` leaves a
+    plain create's body exactly as it was before contacts gained an inline company association.
+    """
+
+    model_config = _REQUEST_CONFIG
+
+    properties: dict[str, str]
+    associations: list[Association] | None = None
+
+
+class RecordMeta(BaseModel):
+    """**The OQ6 carve-out:** engine metadata, written ungated beside the gated prospect fields.
+
+    The write-gate exists so that no claim about a prospect reaches HubSpot without a citation.
+    These four are not claims about the prospect; they are facts about our process, and there is no
+    honest URL to cite for any of them:
+
+    * ``lpe_vertical`` — which manifest the record was sourced under;
+    * ``lpe_review_status`` — workflow state the founder moves (OQ2);
+    * ``lpe_route_cluster`` — our routing's own label, such as ``A · 75238``;
+    * ``hubspot_owner_id`` — who works the record.
+
+    Citing them anyway would attach a citation that does not support the value, which is the small
+    lie the primitive exists to prevent. **The set is closed**: a typed model of exactly four
+    fields, not a ``dict[str, str]``, so it cannot become a side door for a prospect field, and
+    widening it is a visible diff that a test pins. The client renders the prospect fields through
+    the gate first and merges these after; a key claimed by both halves is refused. Same reasoning
+    as :class:`TaskCreate` being ungated.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    vertical: str
+    review_status: ReviewStatus | None = None
+    route_cluster: str | None = None
+    owner_id: str | None = None
+
+    def to_properties(self, object_type: ObjectType) -> dict[str, str]:
+        """Render to HubSpot property names for one object type; absent values are omitted.
+
+        Review status and route exist on COMPANY only. Sending either on a contact would be a 400,
+        so they are never rendered there.
+        """
+        properties = {"lpe_vertical": self.vertical}
+        if object_type is ObjectType.companies:
+            if self.review_status is not None:
+                properties["lpe_review_status"] = self.review_status.value
+            if self.route_cluster is not None:
+                properties["lpe_route_cluster"] = self.route_cluster
+        if self.owner_id is not None:
+            properties["hubspot_owner_id"] = self.owner_id
+        return properties
 
 
 class TaskCreateRequest(BaseModel):
@@ -318,17 +425,49 @@ class BatchReadRequest(BaseModel):
     inputs: list[BatchReadInput]
 
 
-class BatchReadResponse(BaseModel):
-    """A batch read's results.
+NOT_FOUND_CATEGORY = "OBJECT_NOT_FOUND"
+"""The 207 error category HubSpot gives an id that does not exist, or was archived."""
 
-    An id that does not exist — or was archived — is simply **absent** from ``results`` (HubSpot
-    answers 207 and lists it under ``errors``, which is ignored here). The caller decides what an
-    absent record means; for a cadence task it means a human deleted it.
+
+class BatchReadErrorContext(BaseModel):
+    """What a batch read's error was about; for a not-found, the ids."""
+
+    model_config = _RESPONSE_CONFIG
+
+    ids: list[str] = Field(default_factory=list[str])
+
+
+class BatchReadError(BaseModel):
+    """One entry of a 207's ``errors``."""
+
+    model_config = _RESPONSE_CONFIG
+
+    category: str | None = None
+    context: BatchReadErrorContext | None = None
+
+
+class BatchReadResponse(BaseModel):
+    """A batch read's results, and the errors of a 207.
+
+    An id that does not exist — or was archived — is **absent** from ``results``, and HubSpot lists
+    it under ``errors`` as ``OBJECT_NOT_FOUND``. Most callers read only ``results`` and decide what
+    an absence means (for a cadence task, that a human deleted it). One that must not mistake a
+    failed read for a deletion asks for :meth:`not_found_ids`.
     """
 
     model_config = _RESPONSE_CONFIG
 
     results: list[HubSpotObject] = Field(default_factory=list[HubSpotObject])
+    errors: list[BatchReadError] = Field(default_factory=list[BatchReadError])
+
+    def not_found_ids(self) -> set[str]:
+        """The ids HubSpot said explicitly do not exist."""
+        return {
+            object_id
+            for error in self.errors
+            if error.category == NOT_FOUND_CATEGORY and error.context is not None
+            for object_id in error.context.ids
+        }
 
 
 class AssociatedObject(BaseModel):
@@ -388,3 +527,127 @@ class AssociationsPage(BaseModel):
         if self.paging is None or self.paging.next is None:
             return None
         return self.paging.next.after
+
+
+# -- what promotion reports (T9). Ours, not HubSpot's: frozen, and never sent anywhere. --------
+
+_REPORT_CONFIG = ConfigDict(frozen=True)
+
+PROMOTE_COUNTS: tuple[str, ...] = (
+    "considered",
+    "created",
+    "already_promoted",
+    "refused_disqualified",
+    "refused_dead_score",
+    "refused_no_principal",
+    "refused_missing_fields",
+    "duplicate_in_hubspot",
+    "duplicate_in_ledger",
+    "recovered",
+    "recovery_deferred",
+    "recovery_pending",
+    "failed",
+    "name_ambiguous",
+)
+"""Every key a promote report carries, every time — zeros included, so a missing key is a bug."""
+
+REVIEW_COUNTS: tuple[str, ...] = ("read", "enrolled", "rejected", "withdrawn", "waiting", "failed")
+"""Every key a review sync report carries, every time."""
+
+
+class PromotedProspect(BaseModel):
+    """One business created in HubSpot at ``pending_review`` — or, in a dry run, that would be."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    legal_name: str
+    company_id: str | None
+    contact_id: str | None
+    company_url: str | None
+    contact_url: str | None
+    route_label: str | None
+    first_name: str | None
+    last_name: str
+    name_ambiguous: bool
+    recovered: bool = False
+    """Finished by the recovery of an earlier, interrupted pass rather than created afresh."""
+
+
+class DuplicateProspect(BaseModel):
+    """A business that was not created because it already exists — in HubSpot or the ledger."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    legal_name: str
+    matched_company_id: str | None = None
+    """The existing HubSpot company it matched; nothing was written to it (OQ5-A)."""
+    matched_company_url: str | None = None
+    duplicate_of: str | None = None
+    """The registry id of the ledger row it duplicates, when the match was the ledger's."""
+
+
+class PromotionFailure(BaseModel):
+    """A candidate whose promotion failed. Its ledger row, if any, is left for the next pass."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    message: str
+
+
+class PromotionReport(BaseModel):
+    """What one ``promote`` pass did, or — with ``dry_run`` — would do."""
+
+    model_config = _REPORT_CONFIG
+
+    run_id: UUID
+    vertical: str
+    dry_run: bool
+    counts: dict[str, int]
+    created: tuple[PromotedProspect, ...]
+    duplicates: tuple[DuplicateProspect, ...]
+    failures: tuple[PromotionFailure, ...]
+    missing_field_tally: dict[str, int]
+    """For ``refused_missing_fields``: how often each required field was the one absent."""
+    stopped: str | None = None
+    """Why the pass stopped early (an auth failure, the daily quota), or ``None``."""
+
+
+class ReviewOutcome(StrEnum):
+    """What a review sync did with one company."""
+
+    enrolled = "enrolled"
+    rejected = "rejected"
+    withdrawn = "withdrawn"
+
+
+class ReviewDecision(BaseModel):
+    """One founder decision a sync acted on — or, in a dry run, would act on."""
+
+    model_config = _REPORT_CONFIG
+
+    registry_id: str
+    outcome: ReviewOutcome
+    company_id: str
+    contact_id: str
+    company_url: str | None
+    first_due_at: datetime | None = None
+    """When the first cadence touch is due, for an enrolment; ``None`` in a dry run."""
+    orphan_task_id: str | None = None
+    """A task another enrolment left open, for the person to close (``AlreadyEnrolledError``)."""
+
+
+class ReviewSyncReport(BaseModel):
+    """What one ``promotion sync`` did, or — with ``dry_run`` — would do."""
+
+    model_config = _REPORT_CONFIG
+
+    dry_run: bool
+    counts: dict[str, int]
+    decisions: tuple[ReviewDecision, ...]
+    failures: tuple[PromotionFailure, ...]
+    unrecognised: tuple[str, ...]
+    """Review-status values nobody taught the engine — a person may have added an option."""
+    stopped: str | None = None

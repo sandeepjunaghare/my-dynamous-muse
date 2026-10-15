@@ -10,8 +10,10 @@ candidates of the run ──has_verified_address?──no──▶ counted, neve
         cluster_points(max_doors) ──▶ route_assignment (the run's rows replaced)
 ```
 
-**Eligibility is a verified address, and only that** (decided 2026-10-10). Leaving out candidates
-T7 disqualified is T9/T10's to add once both exist; this slice does not read ``qualification``.
+**Eligibility is a verified address, among the candidates not excluded** (decided 2026-10-10;
+exclusion added by T9, OQ8-B). The stage passes the run's disqualified candidates as ``exclude``,
+so routes are built from survivors only. This slice still never reads ``qualification``: the stage
+module bridges the two, as ``search_registry`` does for sourcing.
 
 **One failed geocode leaves one candidate out; every geocode failing is an error.** A single
 timeout should not cost the week's routes, and re-running the stage retries it, because the stage
@@ -23,6 +25,7 @@ Routing writes only its own table. It never writes ``candidate``: ``cluster_rout
 candidate field (``app/sourcing/stages.py``).
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -84,15 +87,23 @@ class RoutingService:
         self._geocoder = geocoder
         self._max_doors = max_doors if max_doors is not None else get_settings().route_max_doors
 
-    async def cluster_run(self, run_id: UUID) -> RoutingResult:
+    async def cluster_run(
+        self, run_id: UUID, *, exclude: Collection[UUID] = frozenset()
+    ) -> RoutingResult:
         """Geocode the run's verified addresses, cluster them, and replace the run's assignments.
+
+        Candidates in ``exclude`` (the run's disqualified ones, OQ8-B) are left out before the
+        address check and counted ``routing_disqualified`` — once, never also as unverified. An id
+        from outside the run counts for nothing.
 
         Raises ``SourcingRunNotFoundError`` for an unknown run. When every eligible geocode failed,
         for any mix of reasons, re-raises the last ``GeocoderUnavailableError`` or
         ``GeocoderResponseShapeError`` *before* touching the run's assignments, so a failed re-run
         leaves the earlier routes in place (PR #19 review, M1).
         """
-        candidates = await SourcingService(self._session).list_candidates(run_id)
+        everyone = await SourcingService(self._session).list_candidates(run_id)
+        excluded = frozenset(exclude)
+        candidates = [candidate for candidate in everyone if candidate.id not in excluded]
         # Pair each eligible candidate with its address here, so nothing downstream has to re-check
         # an address that ``has_verified_address`` already guaranteed (PR #19 review, L1).
         eligible = [
@@ -124,6 +135,7 @@ class RoutingService:
         await self._session.commit()
 
         counts = {
+            "routing_disqualified": len(everyone) - len(candidates),
             "routing_eligible": len(eligible),
             "routing_unverified_address": len(candidates) - len(eligible),
             "routing_geocode_unmatched": misses.unmatched,
