@@ -100,12 +100,27 @@ class TestAdmitted:
             ("Bryan Griggs", "bryan griggs, founder"),
             ("Bryan Griggs,", "Meet Bryan Griggs."),
             ("Cher", "Founded by Cher."),
+            ("Bryan Griggs Jr.", "Bryan Griggs runs Acme."),
+            ("Mary-Kate O'Neil", "Owner: Mary-Kate O'Neil"),
         ],
     )
     def test_the_name_check_is_word_and_case_tolerant(self, name: str, quote: str) -> None:
         """A designator inside a word is not one; case and trailing punctuation do not matter."""
         answer = OwnerAnswer.model_validate(_answer(name, quote=quote))
         assert admit_owner(answer, reads=[_read()]).owner is not None
+
+    @pytest.mark.parametrize("name", ["Bryan Griggs,", "Bryan Griggs;", " Bryan Griggs: "])
+    def test_trailing_list_punctuation_is_not_stored(self, name: str) -> None:
+        """PR #34 review L3: T9 splits the stored name, so "Griggs," would reach HubSpot."""
+        owner = admit_owner(OwnerAnswer.model_validate(_answer(name)), reads=[_read()]).owner
+        assert owner is not None
+        assert owner.value.name == "Bryan Griggs"
+
+    def test_a_final_period_is_kept(self) -> None:
+        answer = OwnerAnswer.model_validate(_answer("Bryan Griggs Jr.", quote="Bryan Griggs Jr."))
+        owner = admit_owner(answer, reads=[_read()]).owner
+        assert owner is not None
+        assert owner.value.name == "Bryan Griggs Jr."
 
 
 class TestOmitted:
@@ -122,6 +137,14 @@ class TestOmitted:
             (_answer(title="Registered Agent"), "an agent is not the owner"),
             (_answer(title="Owner / Registered Agent"), "an agent is not the owner"),
             (_answer(title="statutory agent"), "an agent is not the owner"),
+            (_answer(title="Agent for Service of Process"), "an agent is not the owner"),
+            (
+                _answer(title="Owner", quote="Registered Agent: Bryan Griggs"),
+                "an agent is not the owner",
+            ),
+            (_answer("Nicole Cole", quote="Nicole founded Acme."), "does not contain the name"),
+            (_answer("Al Lee", quote="Our Leeds office opened."), "does not contain the name"),
+            (_answer(",", reason=""), "no name offered"),
         ],
     )
     def test_each_rule_omits_with_its_reason(self, answer: JsonValue, reason: str) -> None:
@@ -178,6 +201,16 @@ class TestOmitted:
         answer = OwnerAnswer.model_validate(_answer(title="Registered Agent"))
         with capture_logs() as captured:
             admit_owner(answer, reads=[_read()])
+        assert captured
+        assert "Griggs" not in repr(captured)
+
+    def test_the_models_reason_is_kept_but_never_logged(self) -> None:
+        """PR #34 review M2: the reason a name was not offered may itself name the person."""
+        why = "Found Bryan Griggs on a directory but could not fetch it"
+        answer = OwnerAnswer.model_validate(_answer(None, url=None, reason=why))
+        with capture_logs() as captured:
+            admitted = admit_owner(answer, reads=[])
+        assert admitted.omitted == f"no name offered: {why}"
         assert captured
         assert "Griggs" not in repr(captured)
 

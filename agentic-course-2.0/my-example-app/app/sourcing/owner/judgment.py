@@ -6,18 +6,19 @@ one person and the page that names them. The boundary guarantees copy the ``clas
 
 * **A name is held to what was read** (A10). It survives only if its citation is a page a
   ``WebFetch`` verifiably fetched in this call (``app/shared/agent_reads.py``, fail-closed), the
-  quote on it contains the name, the name is a person and not a company (E18), and the title is not
-  an agent's (E10). There is no registry evidence to fall back on: the registry naming nobody is
-  why the node runs. Google Maps pages are never admitted (D13). **Anything else is left absent and
-  never repaired.**
-* **No name is ever logged.** An omission logs its reason; a refused name may still be a real
-  person's.
+  quote on it contains the surname as a word, the name is a person and not a company (E18), and
+  neither the title nor the quote names an agent (E10). There is no registry evidence to fall back
+  on: the registry naming nobody is why the node runs. Google Maps pages are never admitted (D13).
+  **Anything else is left absent and never repaired.**
+* **No name is ever logged.** An omission logs its fixed reason only, never the model's free text,
+  which may name the person it refused; a refused name may still be a real person's.
 * **It cannot touch the machine.** ``WebSearch`` and ``WebFetch`` only; no file, shell or MCP
   tools; no filesystem settings loaded; ``dontAsk`` refuses everything else.
 * **It always records what the call cost**, on failure too, the moment the result arrives.
 * **It never writes.** The stage decides what is recorded.
 """
 
+import re
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -44,10 +45,18 @@ OWNER_TOOLS = ("WebSearch", "WebFetch")
 
 LOG_PREFIX = "sourcing.owner"
 
-AGENT_TITLES = ("registered agent", "process agent", "statutory agent")
-"""Titles that name a filing role, not an owner (E10: the 74-row file of BOC-3 process agents).
-Matched as substrings, so ``"Owner / Registered Agent"`` is refused too: refusing a real owner
-costs less than sending a founder to the door for a filing agent (PB-4)."""
+AGENT_TITLES = (
+    "registered agent",
+    "process agent",
+    "statutory agent",
+    "agent for service of process",
+)
+"""Phrases that name a filing role, not an owner (E10: the 74-row file of BOC-3 process agents).
+Matched as substrings of the title *and* the quote, so ``"Owner / Registered Agent"`` is refused
+too: refusing a real owner costs less than sending a founder to a filing agent's door (PB-4)."""
+
+NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
+"""Generational suffixes, skipped when finding the surname the quote must contain."""
 
 REASON_LIMIT = 200
 """How much of the model's own ``reason`` an omission keeps."""
@@ -215,14 +224,23 @@ def _index(reads: Iterable[PageRead]) -> dict[str, PageRead]:
     return indexed
 
 
-def _last_token(name: str) -> str:
-    """The surname, roughly: the last word, lowercased, without trailing punctuation."""
-    return name.split()[-1].rstrip(".,;:!?").lower()
+def _surname(name: str) -> str:
+    """The surname, roughly: the last word that is not a suffix, lowercased, unpunctuated."""
+    tokens = [token.strip(".,;:!?").lower() for token in name.split()]
+    words = [token for token in tokens if token]
+    named = [token for token in words if token not in NAME_SUFFIXES] or words
+    return named[-1]
 
 
-def _omit(reason: str) -> AdmittedOwner:
+def _names(quote: str, surname: str) -> bool:
+    """Whether the quote contains the surname as a whole word: "Cole" is not in "Nicole"."""
+    return re.search(rf"(?<!\w){re.escape(surname)}(?!\w)", quote.lower()) is not None
+
+
+def _omit(reason: str, detail: str = "") -> AdmittedOwner:
+    """Log the fixed ``reason`` only; ``detail`` is the model's own text and may name a person."""
     logger.info(f"{LOG_PREFIX}.answer_omitted", reason=reason)
-    return AdmittedOwner(owner=None, omitted=reason)
+    return AdmittedOwner(owner=None, omitted=f"{reason}: {detail}" if detail else reason)
 
 
 def admit_owner(answer: OwnerAnswer, *, reads: Sequence[PageRead]) -> AdmittedOwner:
@@ -231,9 +249,10 @@ def admit_owner(answer: OwnerAnswer, *, reads: Sequence[PageRead]) -> AdmittedOw
     The checks run in order and the first that fails decides. No registry evidence is accepted:
     the census naming nobody citable is the reason this node was called.
     """
-    if answer.name is None or not answer.name.strip():
-        why = answer.reason.strip()[:REASON_LIMIT]
-        return _omit(f"no name offered: {why}" if why else "no name offered")
+    # Trailing list punctuation is not part of a name; a final "." may be ("Jr.", an initial).
+    name = (answer.name or "").strip().rstrip(",;:").strip()
+    if not name.strip(".,;:!?"):
+        return _omit("no name offered", answer.reason.strip()[:REASON_LIMIT])
     citation = answer.citation
     if citation is None:
         return _omit("no citation offered")
@@ -246,13 +265,13 @@ def admit_owner(answer: OwnerAnswer, *, reads: Sequence[PageRead]) -> AdmittedOw
         return _omit("cites a page the node never successfully read")
     if is_google_maps(read.url):
         return _omit("cites Google Maps, whose content may not be stored")
-    principal = principal_or_none(answer.name, answer.title)
+    principal = principal_or_none(name, answer.title)
     if principal is None:
         return _omit("names a company or nothing, not a person (E18)")
-    if _last_token(principal.name) not in citation.quote.lower():
+    if not _names(citation.quote, _surname(principal.name)):
         return _omit("the quote does not contain the name")
-    title = (principal.title or "").lower()
-    if any(agent in title for agent in AGENT_TITLES):
+    roles = f"{principal.title or ''} {citation.quote}".lower()
+    if any(agent in roles for agent in AGENT_TITLES):
         return _omit("an agent is not the owner")
     return AdmittedOwner(
         owner=ProvenancedValue(
