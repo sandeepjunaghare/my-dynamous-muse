@@ -216,8 +216,28 @@ Open questions all went with the recommendations (OQ-1 b, OQ-2 a, OQ-3 a, OQ-4 a
   `judgment_unverified_skipped`, `judgment_capped` and `owner_capped`.
 - **Follow-ups:** the HubSpot mapping of `headcount_band`; a shared citation gate (three copies now: T12, T7, T6);
   the Texas Comptroller filing-source spike; passing a refused census officer string to the node as a hint (PB-3).
-- **Still open, not decided by PR B:** the three *Decide* items below (the Spearpoint false miss, a mail-drop or
-  no-listing verdict, candidates with no score).
+- **Still open, not decided by PR B:** the Spearpoint false miss and candidates with no score (*Decide* items
+  below). The mail-drop / no-listing item is decided next.
+
+**Live runs after PR B (2026-10-15; freight v9).** Runs `c383b8ea` ($0.10) and `9ca51e17` ($0.16) both completed;
+Places verified **0 of 8** survivors, so neither node was called. Across every live run with Places, **1 of 18**
+survivors verified. A read-only rerun of `9ca51e17`'s five searches (nothing stored) showed all five were **correct
+misses**: Google had no listing for the business at its census address. Two suites are another business's
+(`DBT FREIGHT` → "Napco Bag & Film", `OPTIMAL DELIVERY PARTNER` → "ValidGrad"), two returned the bare address or
+suite (`ISLA LOGISTICS` `street_address`, `ARK FREIGHT` `subpremise`), and `UNISHIPPERS 1759` matched by name only, to
+an office 70 miles away. The matcher is right; small DFW brokers mostly have no storefront on Google, so under OQ-5
+almost nothing is promotable. DBT and Ark both have a homepage on their own email domain.
+
+**Decided 2026-10-15 (founder): (b) and (c), as a follow-up ticket after PR B.**
+- **(b) A fetched homepage on the business's own email domain also verifies it** (the `website` `verify_business`
+  already stores, cited `web_lookup`). This reopens OQ-5 (the judgment and owner nodes run for it) and changes T9's
+  eligibility (today it requires `business_check`). Places stays a check, never a source (D13 unchanged).
+- **(c) Places' "nothing listed here" answer is recorded as our verdict**, with no Places name or address kept:
+  a mail drop, no listing at the address, or another business at the suite. It is evidence for
+  `self_employed_shell` and routing, and a rerun doesn't pay to ask again.
+- **Open for that ticket's plan:** whether a website-verified business with a no-listing verdict is still routed
+  (a virtual suite is no door to knock); which `types` count as a mail drop; whether the verdict lives on
+  `PlaceCheck` or in a new field (either way the D13 structure guard changes); and whether `subpremise` counts.
 
 **First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
