@@ -202,10 +202,10 @@ class TestRefusals:
             "considered": 4,
             "refused_disqualified": 1,
             "refused_no_principal": 1,
-            "refused_missing_fields": 1,
+            "refused_unverified": 1,
             "refused_dead_score": 1,
         }
-        assert report.missing_field_tally == {"business_check": 1}
+        assert report.missing_field_tally == {}
         assert crm.writes() == 0
         assert await _ledger(db_session, scenario.vertical) == {}
 

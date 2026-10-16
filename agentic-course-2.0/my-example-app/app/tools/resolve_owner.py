@@ -5,8 +5,9 @@
 (``app/sourcing/owner/``) runs only for a candidate that:
 
 * no rule removed — free predicates, and the judgment rules ``classify_rollup`` just fired;
-* has a ``business_check`` — an unverified candidate cannot be promoted (OQ-5), so it is not paid
-  for;
+* is verified — Places at its address, or a homepage on its own email domain
+  (``CandidateFields.is_verified``, website-verification B1). An unverified candidate cannot be
+  promoted (OQ-5), so it is not paid for;
 * still has no ``owner``.
 
 What the node names is kept only through its gate (A10), cited ``llm_inference`` to the page it
@@ -68,7 +69,7 @@ class _ResolveOwner:
                 from_registry = fields.owner.retrieval_method is RetrievalMethod.bulk_file
                 counts["owner_from_registry" if from_registry else "owner_kept"] += 1
                 continue
-            if fields.business_check is None:
+            if not fields.is_verified():
                 counts["owner_unverified_skipped"] += 1
                 continue
             if counts["owner_calls"] >= cap:
@@ -88,7 +89,7 @@ class _ResolveOwner:
                 )
                 continue
 
-            admitted = judgment.admit_owner(resolved.answer, reads=resolved.reads)
+            admitted = judgment.admit_owner(resolved.answer, fields, reads=resolved.reads)
             if admitted.owner is None:
                 counts["owner_absent"] += 1
                 continue

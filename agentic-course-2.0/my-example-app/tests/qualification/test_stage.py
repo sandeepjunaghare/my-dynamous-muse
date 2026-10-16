@@ -14,7 +14,7 @@ from app.qualification import judgment
 from app.qualification.schemas import AdmittedJudgment, JudgmentAnswer, RecordSet
 from app.qualification.service import QualificationService
 from app.shared.page_reads import PageRead
-from app.shared.provenance import RetrievalMethod
+from app.shared.provenance import ProvenancedValue, RetrievalMethod
 from app.sourcing.schemas import HeadcountBand, PlacesEvidence, SourcingRunResponse
 from app.sourcing.service import SourcingService
 from app.sourcing.stages import PipelineStage
@@ -33,7 +33,7 @@ from tests.qualification.builders import (
 from tests.qualification.builders import (
     judgment as a_judgment_rule,
 )
-from tests.sourcing.builders import VERIFY, a_candidate, looked_up
+from tests.sourcing.builders import VERIFY, a_candidate, looked_up, own_site, website_verified
 
 ABOUT = "https://www.acme.test/about"
 BODY = a_body_with(
@@ -273,6 +273,48 @@ class TestTheStage:
         assert runner.prompts == []
         assert result.counts["judgment_unverified_skipped"] == 1
         assert result.counts["classified"] == 0
+
+    async def test_a_website_verified_candidate_is_judged(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Website-verification B1: a homepage on its own email domain verifies it."""
+        runner = _ByRegistryId({"912": LOCAL})
+        monkeypatch.setattr(judgment, "sdk_runner", runner)
+        manifest, run, _ = await a_run_with(db_session, BODY, "912")
+        await SourcingService(db_session).record_candidates(
+            run.id, [website_verified(a_candidate("912"))], stage=VERIFY
+        )
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        assert len(runner.prompts) == 1
+        assert result.counts["judgment_unverified_skipped"] == 0
+        assert result.counts["classified"] == 1
+
+    @pytest.mark.parametrize(
+        "website",
+        [
+            own_site("https://www.acme.test"),
+            own_site("https://www.acmefreight.test", RetrievalMethod.llm_inference),
+        ],
+        ids=["another_domain", "llm_inference"],
+    )
+    async def test_a_website_that_does_not_verify_is_never_sent(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        website: ProvenancedValue[str],
+    ) -> None:
+        runner = _ByRegistryId({"913": LOCAL})
+        monkeypatch.setattr(judgment, "sdk_runner", runner)
+        manifest, run, _ = await a_run_with(db_session, BODY, "913")
+        fields = website_verified(a_candidate("913")).model_copy(update={"website": website})
+        await SourcingService(db_session).record_candidates(run.id, [fields], stage=VERIFY)
+
+        result = await STAGE.run(await _context(db_session, manifest, run))
+
+        assert runner.prompts == []
+        assert result.counts["judgment_unverified_skipped"] == 1
 
     async def test_a_manifest_with_nothing_to_judge_makes_no_call(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch

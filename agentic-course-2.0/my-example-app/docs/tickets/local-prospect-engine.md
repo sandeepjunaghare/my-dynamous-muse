@@ -243,6 +243,36 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
   reach the owner node, which raises the stakes. Candidate fix: require a core token of the legal name or DBA in
   the quote, or check the quote against a hash of the fetched text (T7 deferred #23).
 
+**Built 2026-10-15: the website-verification follow-up** (`feat/t6-website-verification`; plan
+`.claude/plans/t6-website-verification.md`, its four OQs decided as recommended).
+- **OQ-1 → a new field.** `places_verdict` (`PlacesVerdict`: `kind`, `place_id`, `checked_address`), owned by
+  `verify_business`, cited to the place it names. It is the second field D13 lets cite Google Maps, with its shape
+  pinned beside `PlaceCheck`'s. `business_check` still means only "Places found it".
+- **OQ-2 → three kinds, from results at the census address only** (the matcher's own street-number and ZIP test).
+  The precedence is `mail_drop` (`post_office`, `business_center`, `shipping_service`, at our unit and building: PR #36 M1, round-2 R1), then `no_listing` (types
+  all `street_address` / `premise` / `subpremise`), then `other_business` (shares **no** distinguishing word, so
+  Spearpoint stays a plain miss). Nothing at the address is still just `places_not_found`. A current verdict is
+  not paid for twice in a run.
+- **Verified** is `CandidateFields.is_verified()`: Places at the current address, **or** a `web_lookup` homepage
+  whose host (without `www.`) is the email's own domain. `classify_rollup`, `resolve_owner` and T9 all ask it.
+  Places still runs for website-verified candidates, because only Places can say the door is a mail drop.
+- **OQ-3 → routed unless a mail drop.** Routing uses `has_routable_address()`: Places-verified, or
+  website-verified with no current `mail_drop` verdict. `no_listing` and `other_business` stay routable.
+- **OQ-4 → the owner page tie (closes PR #34 M3).** `admit_owner` takes the candidate. The cited page must be on
+  its website host, or the quote must carry at least two of the legal or DBA name's distinguishing words other than the person's own
+  (`shares_name`, moved to `app/sourcing/schemas.py`; PR #36 M2). A name with fewer never ties off its own site. The owner prompt
+  now asks for an off-site quote that names the business.
+- **The classify prompt** gets a `Places verdict (context only, never cite)` line, in our own words, when the
+  verdict is for the current address.
+- **T9:** `business_check` has left `REQUIRED_FIELDS`. A new `RefusalReason.unverified` is checked after
+  `disqualified` and before the owner, so an unverified candidate is no longer miscounted `no_principal`.
+- **New counts for T10:** `places_mail_drop`, `places_no_listing` and `places_other_business` (each also counted
+  in `places_not_found`), `verify_website_only`, `routing_mail_drop`, and the promote report's
+  `refused_unverified`. `judgment_unverified_skipped` and `owner_unverified_skipped` keep their names and now mean
+  "neither Places- nor website-verified".
+- **Not done:** the Level 4 read-only Places rerun over run `9ca51e17`'s five misses, and a paid batch. Both wait
+  for the founder.
+
 **First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
 printed, nothing stored) showed what Places returned. It found 4 correct misses, 1 correct hit, and 1 false miss.
@@ -473,6 +503,10 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
   `app.promotion.service`, never from the package. The Friday report reads accept/reject (M6) from the
   `promotion` ledger. Routes already exclude disqualified candidates (T9, OQ8-B); re-routing if qualification
   changes after stage 5 stays here.
+- **Website verification** *(T6 follow-up, 2026-10-15)*. The Friday report should show how a run was verified, not
+  only how many: `places_verified`, `verify_website_only`, `places_{mail_drop,no_listing,other_business}`,
+  `routing_mail_drop`, and promotion's `refused_unverified`. T9's gate no longer requires `business_check`: it
+  refuses `unverified` instead (Places or an own-domain homepage).
 - **Before the first real run (Spike 1 checkpoint, 2026-10-09):** read M5 on the T13-adopted prospects. If touches still are not getting done with the machine running, fix that before the run adds volume. This is a human check, not a code gate.
 
 **Per-ticket context:** PRD §6 steps 1–8 · M7 · architecture → *Scheduling: boring on purpose*, *Cost* ·

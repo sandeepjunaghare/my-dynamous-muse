@@ -28,6 +28,22 @@ class TestEmailDomain:
     def test_free_mail_is_no_website(self, email: str) -> None:
         assert email_domain(email) is None
 
+    @pytest.mark.parametrize(
+        "email",
+        ["a@earthlink.net", "b@windstream.net", "c@swbell.net", "d@juno.com", "e@yahoo.co.uk"],
+    )
+    def test_an_isp_mailbox_is_no_website(self, email: str) -> None:
+        """PR #36 M3: the ISP's homepage answers like a business's, so it would verify."""
+        assert email_domain(email) is None
+
+    @pytest.mark.parametrize("email", ["a@tx.rr.com", "b@dfw.rr.com", "c@mail.comcast.net"])
+    def test_a_providers_subdomain_is_free_mail_too(self, email: str) -> None:
+        assert email_domain(email) is None
+
+    def test_a_business_ending_like_a_provider_is_still_a_business(self) -> None:
+        """Only whole labels count: ``starr.com`` is not ``rr.com``."""
+        assert email_domain("ops@starr.com") == "starr.com"
+
     @pytest.mark.parametrize("email", ["n/a", "@acme.com", "a@", "a@b@acme.com", "a@localhost"])
     def test_a_malformed_address_is_no_domain(self, email: str) -> None:
         assert email_domain(email) is None

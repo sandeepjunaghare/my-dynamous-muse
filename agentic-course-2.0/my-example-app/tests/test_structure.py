@@ -395,6 +395,14 @@ class TestPlacesIsACheckNeverASource:
 
         assert set(PlaceCheck.model_fields) == {"place_id", "checked_address"}
 
+    def test_a_stored_verdict_holds_a_kind_the_place_id_and_our_own_address_only(self) -> None:
+        """``places_verdict`` is the second stored Places artefact (website-verification OQ-1): our
+        kind, the place ID and the census address. A Places name, type or address on it would
+        store content D13 forbids."""
+        from app.sourcing.schemas import PlacesVerdict
+
+        assert set(PlacesVerdict.model_fields) == {"kind", "place_id", "checked_address"}
+
     def test_the_field_mask_is_pro_tier_only(self) -> None:
         from app.sourcing.sources.google_places import PLACES_FIELD_MASK
 

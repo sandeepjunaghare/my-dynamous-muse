@@ -8,16 +8,16 @@ until a citation exists. An uncited raw value would be the exact thing the primi
 make unrepresentable.
 
 **D13: Google Places is a check, never a source.** Its terms forbid storing Places content, so the
-only thing a candidate keeps from Places is the place ID, in ``business_check``. Every other field
-refuses a Google Maps citation, so copying Places content into a candidate fails validation rather
-than reaching HubSpot.
+only thing a candidate keeps from Places is a place ID: in ``business_check`` on a match, or in
+``places_verdict`` beside our own reading of a miss. Every other field refuses a Google Maps
+citation, so copying Places content into a candidate fails validation rather than reaching HubSpot.
 """
 
 import re
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Self, cast
+from typing import Annotated, Final, Self, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -32,7 +32,8 @@ from pydantic import (
 
 from app.core.cost import BillableKind, RunCost
 from app.manifests.schemas import SLUG_PATTERN, IcpBand
-from app.shared.provenance import ProvenancedValue
+from app.shared.provenance import ProvenancedValue, RetrievalMethod
+from app.sourcing.website import email_domain
 
 
 class RunStatus(StrEnum):
@@ -130,6 +131,48 @@ class PlaceCheck(BaseModel):
         return value.strip()
 
 
+class MissKind(StrEnum):
+    """What a Places miss at the census address says about that address (website-verification OQ-2).
+
+    Our reading of the result, never Google's words: the kind is ours, so storing it is allowed.
+    """
+
+    mail_drop = "mail_drop"
+    """A post office, business centre or shipping store sits at the address: a door that isn't
+    there. Kept off the routes (website-verification OQ-3)."""
+
+    no_listing = "no_listing"
+    """Only the address itself is listed: nothing is listed at the address."""
+
+    other_business = "other_business"
+    """Another business, sharing no distinguishing word with ours, is listed at the address."""
+
+
+class PlacesVerdict(BaseModel):
+    """**Our** verdict on a Places miss: a kind, the place ID it rests on, and the address checked.
+
+    Recorded only when the check found no match but did find something at the census address
+    (website-verification OQ-1). The place ID may be stored indefinitely (D13); the kind is ours;
+    the address is our registry's. No Places name, address or type is kept.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: MissKind
+    place_id: str = Field(min_length=1)
+
+    checked_address: PostalAddress
+    """The census address the check was run against, as on :class:`PlaceCheck`: a later address
+    change makes the verdict stale rather than wrong."""
+
+    @field_validator("place_id")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("place_id must not be blank")
+        return value.strip()
+
+
 _NOT_AFTER_A_LETTER = r"(?<![^\W\d_])"
 _NOT_BEFORE_A_LETTER = r"(?![^\W\d_])"
 r"""Word edges by *letter*, Unicode-aware: ``[^\W\d_]`` is any letter, accented ones included."""
@@ -150,6 +193,47 @@ widen it only with a check of what is already stored. CO, LC and PC are left out
 def has_entity_designator(name: str) -> bool:
     """Whether ``name`` carries a legal-entity designator as a whole word (LLC, INC, CORP…)."""
     return _ENTITY_DESIGNATOR.search(name) is not None
+
+
+_NAME_STOP_WORDS = frozenset({"THE", "AND", "OF"})
+"""Words too common to tell two businesses apart. Nothing vertical: "FREIGHT" or "LOGISTICS" here
+would be vertical-specific code. A trade word is defused by :data:`MIN_SHARED_WORDS` instead."""
+
+MIN_SHARED_WORDS = 2
+"""A name of up to this many distinguishing words must share all of them; a longer one, at least
+this many. So a neighbour in one building that shares only a trade word (``LOGISTICS``) is told
+apart **when the census name has two or more distinguishing words** the neighbour lacks one of
+(PR #32 H3), and two still survive a storefront shortening a long legal name. **Known limit**
+(round-2 M3, the option stands): a name that reduces to one word (``AJ LOGISTICS LLC`` is
+``LOGISTICS``) matches any neighbour carrying it, and a longer name sharing two trade words with
+a neighbour matches it too.
+
+Shared by the Places matcher and the owner gate's page tie (website-verification OQ-4), which is
+why it lives here rather than in the Places adapter, which only ``verify_business`` may import."""
+
+_MIN_TOKEN_LENGTH = 3
+_LETTERS = re.compile(r"[^\W\d_]+")
+
+
+def name_words(name: str) -> frozenset[str]:
+    """Distinguishing words: upper-cased letters only, no designators, no stop words, 3+ long."""
+    return frozenset(
+        token
+        for token in _LETTERS.findall(name.upper())
+        if len(token) >= _MIN_TOKEN_LENGTH
+        and token not in _NAME_STOP_WORDS
+        and not has_entity_designator(token)
+    )
+
+
+def shares_name(ours: frozenset[str], theirs: frozenset[str]) -> bool:
+    """All of a short name's distinguishing words, or :data:`MIN_SHARED_WORDS` of a longer one.
+
+    Vacuously true when ``ours`` is empty; a caller with a name that may have no distinguishing
+    word must refuse that case itself.
+    """
+    shared = len(ours & theirs)
+    return shared >= min(len(ours), MIN_SHARED_WORDS)
 
 
 class Principal(BaseModel):
@@ -323,6 +407,10 @@ class SourceRecord(BaseModel):
     rows: tuple[SourceRow, ...]
 
 
+_PLACES_ARTEFACTS: Final = frozenset({"business_check", "places_verdict"})
+"""The only ``CandidateFields`` members allowed to cite Google Maps: each holds a place ID and
+nothing of Places' content (D13)."""
+
 _GOOGLE_MAPS_HOSTS = frozenset(
     {"places.googleapis.com", "maps.googleapis.com", "maps.google.com", "maps.app.goo.gl"}
 )
@@ -397,6 +485,11 @@ class CandidateFields(BaseModel):
     """The Google Places check of this record (T6): the place ID, cited to Places. Absent means
     never checked, or checked and not found."""
 
+    places_verdict: ProvenancedValue[PlacesVerdict] | None = None
+    """What a Places miss told us (website-verification OQ-1): our kind and the place ID it rests
+    on, cited to that place. Recorded only on a miss with something at the census address; absent
+    when the check matched, was never run, or found nothing there."""
+
     owner: ProvenancedValue[Principal] | None = None
     """The owner or principal (T6, ``resolve_owner``). The census ``company_officer_1`` first, cited
     ``bulk_file``; the judgment node only where that is absent, cited ``llm_inference`` to the page
@@ -455,16 +548,18 @@ class CandidateFields(BaseModel):
 
     @model_validator(mode="after")
     def _no_places_content(self) -> Self:
-        """D13: only ``business_check`` may cite Google Maps; any other field doing so is copied
-        Places content, which the Maps Platform Terms §3.2.3(a) forbid us to store."""
+        """D13: only ``business_check`` and ``places_verdict`` may cite Google Maps; any other
+        field doing so is copied Places content, which the Maps Platform Terms §3.2.3(a) forbid us
+        to store."""
         for name in type(self).model_fields:
-            if name == "business_check":
+            if name in _PLACES_ARTEFACTS:
                 continue
             for cited in self._citations(name):
                 if is_google_maps(cited.source_url):
                     raise ValueError(
                         f"{name} is cited to Google Maps ({cited.source_url}); Places content "
-                        "cannot be stored (D13). Keep only the place ID, in business_check"
+                        "cannot be stored (D13). Keep only the place ID, in business_check or "
+                        "places_verdict"
                     )
         return self
 
@@ -504,6 +599,62 @@ class CandidateFields(BaseModel):
             self.address is not None
             and self.business_check is not None
             and self.business_check.value.checked_address == self.address.value
+        )
+
+    def has_own_domain_website(self) -> bool:
+        """Whether the website is the homepage ``verify_business`` fetched on the email's domain.
+
+        Website-verification B2: cited ``web_lookup`` (the free fetch, not the ``llm_inference``
+        homepage ``classify_rollup`` may fill, which would make verification circular), and its host
+        without ``www.`` equal to the email's domain. Values are compared, never a stage name. A
+        free-mail email has no domain, so it never verifies.
+        """
+        if self.website is None or self.email is None:
+            return False
+        if self.website.retrieval_method is not RetrievalMethod.web_lookup:
+            return False
+        domain = email_domain(self.email.value)
+        if domain is None:
+            return False
+        host = (urlsplit(self.website.value).hostname or "").removeprefix("www.")
+        return host == domain
+
+    def is_verified(self) -> bool:
+        """Places found the business at its current address, or it answers on its own domain.
+
+        Website-verification B1: the one test every paid-step skip and T9's gate use.
+        """
+        return self.has_verified_address() or self.has_own_domain_website()
+
+    def has_current_verdict(self) -> bool:
+        """Whether a Places verdict exists for the *current* address (website-verification B4)."""
+        return (
+            self.address is not None
+            and self.places_verdict is not None
+            and self.places_verdict.value.checked_address == self.address.value
+        )
+
+    def has_mail_drop_here(self) -> bool:
+        """Whether the current address's verdict is a mail drop: a door that isn't there."""
+        return (
+            self.has_current_verdict()
+            and self.places_verdict is not None
+            and self.places_verdict.value.kind is MissKind.mail_drop
+        )
+
+    def has_routable_address(self) -> bool:
+        """Whether T8 may put this candidate on a route (website-verification OQ-3).
+
+        Places-verified at this address, or website-verified with no mail-drop verdict for it. A
+        website verifies the business, not the door, so a known mail drop stays off the routes;
+        ``no_listing`` and ``other_business`` stay routable.
+        """
+        if self.has_verified_address():
+            return True
+        return (
+            self.address is not None
+            and self.has_own_domain_website()
+            and not self.has_mail_drop_here()
         )
 
     def unprovenanced_fields(self) -> tuple[str, ...]:

@@ -10,6 +10,13 @@ mocked: FMCSA (census, QCMobile, revocations), Places and the Census Geocoder by
 * **CHARLIE** — no officer, and Places finds nothing: unverified, so neither node pays (OQ-5);
 * **DELTA** — QCMobile says not allowed to operate: removed by a free predicate, before anything
   paid.
+
+A second run covers website verification (website-verification OQ-1…OQ-4): two businesses Places
+has no listing for, each answering a homepage on its own email domain.
+
+* **ECHO** — nothing listed at its address: verified, judged, owned, and routed;
+* **FOXTROT** — a post office at its address: verified and judged, the verdict reaches the prompt as
+  our phrase, and it is kept off the routes.
 """
 
 from collections.abc import AsyncIterator, Mapping
@@ -24,11 +31,12 @@ import app.routing.service as routing_service
 from app.core.cost import BillableKind
 from app.manifests.schemas import ManifestBody, SourceKind
 from app.qualification import judgment
+from app.qualification.prompts import VERDICT_PHRASES
 from app.routing.geocoder import CensusGeocoder
 from app.shared.provenance import RetrievalMethod
 from app.sourcing.owner import judgment as owner_judgment
 from app.sourcing.pipeline import SourcingPipeline
-from app.sourcing.schemas import CandidateFields, RunStatus
+from app.sourcing.schemas import CandidateFields, MissKind, RunStatus
 from app.sourcing.service import SourcingService
 from app.tools import resolve_owner, verify_business
 from app.tools.classify_rollup import STAGE as CLASSIFY_ROLLUP
@@ -135,7 +143,7 @@ GRIGGS_ANSWER: JsonValue = {
     "name": "Bryan Griggs",
     "title": "President",
     "reason": "",
-    "citation": {"url": ABOUT, "quote": "Bryan Griggs, President"},
+    "citation": {"url": ABOUT, "quote": "Bryan Griggs, President of Bravo Logistics"},
 }
 GRIGGS: list[StreamLine] = [
     web_fetch_call("t1", ABOUT),
@@ -235,3 +243,111 @@ async def test_four_candidates_through_all_five_stages(
     # D13: no Places content in any stored row.
     for stored in fields.values():
         assert LISTED not in stored.model_dump_json()
+
+
+ECHO, FOXTROT = "usdot:3000005", "usdot:3000006"
+ECHO_ABOUT = "https://echofreight.test/about"
+
+
+def _named_on(url: str, name: str, quote: str) -> list[StreamLine]:
+    answer: JsonValue = {
+        "name": name,
+        "title": "Owner",
+        "reason": "",
+        "citation": {"url": url, "quote": quote},
+    }
+    return [web_fetch_call("t1", url), web_fetch_result("t1", url), result_line(answer)]
+
+
+async def test_website_verified_candidates_through_all_five_stages(
+    session_factory: SessionFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with session_factory() as session:
+        _, vertical = await an_active_manifest_with(session, _body())
+        await session.commit()
+
+    fmcsa = MockFmcsa(
+        census=[
+            _row("3000005", "ECHO", email_address="ops@echofreight.test"),
+            _row("3000006", "FOXTROT", email_address="ops@foxtrotfreight.test"),
+        ],
+        revocations=[],
+    )
+    places = MockPlaces(
+        answers={
+            "ECHO": (200, load_fixture("places_no_listing")),
+            "FOXTROT": (200, load_fixture("places_mail_drop")),
+        },
+        default=(200, {}),
+    )
+    web = MockWeb()
+    web.html("https://echofreight.test/")
+    web.html("https://foxtrotfreight.test/")
+    verify = VerifyBusinessStage(
+        transport=routed(places, web), clock=a_clock(), backoff_seconds=0.0, throttle=False
+    )
+
+    census = MockCensus()
+    census.on(STREET, json_answer(200, a_match(32.73, -97.11, "76011")))
+
+    def mock_geocoder(*args: object, **kwargs: object) -> CensusGeocoder:
+        return census.geocoder()
+
+    monkeypatch.setattr(routing_service, "CensusGeocoder", mock_geocoder)
+
+    rollup = _ByRegistryId({ECHO: NOTHING_FIRED, FOXTROT: NOTHING_FIRED})
+    owner = _ByRegistryId(
+        {
+            ECHO: _named_on(ECHO_ABOUT, "Dana Reyes", "Dana Reyes started the company in 2011."),
+            FOXTROT: _named_on("https://directory.test/foxtrot", "Sam Ortiz", "Sam Ortiz, owner"),
+        }
+    )
+    monkeypatch.setattr(judgment, "sdk_runner", rollup)
+    monkeypatch.setattr(owner_judgment, "sdk_runner", owner)
+
+    stages: list[Stage] = [
+        registry_stage(fmcsa, batch_size=10),
+        verify,
+        CLASSIFY_ROLLUP,
+        RESOLVE_OWNER,
+        CLUSTER_ROUTES,
+    ]
+    try:
+        run = await SourcingPipeline(session_factory, stages=stages).run(a_brief(vertical))
+    finally:
+        await census.aclose()
+
+    assert run.status is RunStatus.completed, run.status_detail
+    assert run.counts["places_verified"] == 0
+    assert run.counts["places_no_listing"] == 1
+    assert run.counts["places_mail_drop"] == 1
+    assert run.counts["verify_website_only"] == 2
+    assert run.counts["judgment_unverified_skipped"] == 0
+    assert run.counts["classified"] == 2
+    assert run.counts["owner_calls"] == 2
+    assert run.counts["owner_resolved"] == 1, "the directory quote names no business (OQ-4)"
+    assert run.counts["owner_absent"] == 1
+    assert run.counts["routing_clustered"] == 1
+    assert run.counts["routing_mail_drop"] == 1
+
+    (foxtrot_prompt,) = [p for p in rollup.prompts if f"registry id: {FOXTROT} " in p]
+    (echo_prompt,) = [p for p in rollup.prompts if f"registry id: {ECHO} " in p]
+    assert VERDICT_PHRASES[MissKind.mail_drop] in foxtrot_prompt
+    assert VERDICT_PHRASES[MissKind.no_listing] in echo_prompt
+    assert "ChIJ" not in foxtrot_prompt + echo_prompt
+
+    async with session_factory() as session:
+        candidates = await SourcingService(session).list_candidates(run.id)
+    fields: dict[str, CandidateFields] = {c.registry_id: c.fields for c in candidates}
+    echo, foxtrot = fields[ECHO], fields[FOXTROT]
+    assert echo.is_verified() and foxtrot.is_verified()
+    assert echo.places_verdict is not None
+    assert echo.places_verdict.value.kind is MissKind.no_listing
+    assert foxtrot.places_verdict is not None
+    assert foxtrot.places_verdict.value.kind is MissKind.mail_drop
+    echo_owner = echo.owner
+    assert echo_owner is not None and echo_owner.source_url == ECHO_ABOUT
+    assert foxtrot.owner is None
+    for stored in fields.values():
+        assert "United States Postal Service" not in stored.model_dump_json()
+        assert "post_office" not in stored.model_dump_json()

@@ -11,7 +11,7 @@ from app.core.cost import RunCost
 from app.manifests.schemas import ManifestResponse, RuleOperator
 from app.qualification.schemas import RecordSet
 from app.qualification.service import QualificationService
-from app.shared.provenance import RetrievalMethod
+from app.shared.provenance import ProvenancedValue, RetrievalMethod
 from app.sourcing.owner import judgment
 from app.sourcing.schemas import CandidateResponse, Principal, SourcingRunResponse
 from app.sourcing.service import SourcingService
@@ -26,11 +26,16 @@ from tests.sourcing.builders import (
     REGISTRY,
     VERIFY,
     a_candidate,
+    looked_up,
+    own_site,
     place_checked,
     sourced,
+    website_verified,
 )
 
-ABOUT = "https://www.acme.test/about"
+SITE = "https://www.acme.test"
+"""Every verified candidate's homepage: :data:`ABOUT` is on it, so the page tie holds (OQ-4)."""
+ABOUT = f"{SITE}/about"
 BODY = a_body_with(predicate("no_broker_entity_type", "carship", RuleOperator.not_contains, "B"))
 OWNER = PipelineStage.resolve_owner
 
@@ -69,7 +74,9 @@ async def _verify(session: AsyncSession, run: SourcingRunResponse, *registry_ids
     await SourcingService(session).record_candidates(
         run.id,
         [
-            a_candidate(rid).model_copy(update={"business_check": place_checked()})
+            a_candidate(rid).model_copy(
+                update={"business_check": place_checked(), "website": looked_up(SITE)}
+            )
             for rid in registry_ids
         ],
         stage=VERIFY,
@@ -203,6 +210,55 @@ class TestTheStage:
 
         assert result.counts["owner_absent"] == 1
         assert (await _by_id(db_session, run))["704"].fields.owner is None
+
+
+@requires_db
+class TestWebsiteVerified:
+    """Website-verification B1: a homepage on the business's own email domain verifies it."""
+
+    async def _run_for(
+        self,
+        session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        fields_for: dict[str, object],
+    ) -> tuple[_ByRegistryId, dict[str, int]]:
+        named = _named("Bryan Griggs", "Bryan Griggs founded Acme Freight.")
+        runner = _ByRegistryId({"706": named})
+        monkeypatch.setattr(judgment, "sdk_runner", runner)
+        manifest, run, _ = await a_run_with(session, BODY, "706")
+        await SourcingService(session).record_candidates(
+            run.id,
+            [website_verified(a_candidate("706")).model_copy(update=fields_for)],
+            stage=VERIFY,
+        )
+        result = await STAGE.run(_context(manifest, run, session))
+        return runner, dict(result.counts)
+
+    async def test_a_website_verified_survivor_is_resolved(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner, counts = await self._run_for(db_session, monkeypatch, {})
+        assert runner.called_for("706")
+        assert counts["owner_resolved"] == 1
+        assert counts["owner_unverified_skipped"] == 0
+
+    @pytest.mark.parametrize(
+        "website",
+        [
+            own_site("https://www.acme.test"),
+            own_site("https://www.acmefreight.test", RetrievalMethod.llm_inference),
+        ],
+        ids=["another_domain", "llm_inference"],
+    )
+    async def test_a_website_that_does_not_verify_is_still_skipped(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        website: ProvenancedValue[str],
+    ) -> None:
+        runner, counts = await self._run_for(db_session, monkeypatch, {"website": website})
+        assert runner.prompts == []
+        assert counts["owner_unverified_skipped"] == 1
 
 
 @requires_db

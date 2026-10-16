@@ -1,0 +1,18 @@
+{
+  "places": [
+    {
+      "id": "ChIJ-usps-arlington",
+      "displayName": {
+        "text": "United States Postal Service",
+        "languageCode": "en"
+      },
+      "formattedAddress": "2100 Olympic Dr, Arlington, TX 76011, USA",
+      "businessStatus": "OPERATIONAL",
+      "types": [
+        "post_office",
+        "establishment",
+        "point_of_interest"
+      ]
+    }
+  ]
+}

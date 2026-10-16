@@ -18,9 +18,12 @@ The stage module is `app/tools/cluster_routes.py`, and the work lives here.
   geocoded, so routes are built from survivors and balanced over them. `routing/` still never imports
   `qualification/`; the stage module bridges the two. Unscored candidates are routed (they are
   promotable). Whether routing re-runs if qualification ever changes after stage 5 stays T10's.
-- **A verified address**, by `CandidateFields.has_verified_address()`: the census address **and** a
-  `business_check`. A candidate without one is counted and never geocoded, because a door placed
-  from a guess sends a founder to the wrong street.
+- **A routable address**, by `CandidateFields.has_routable_address()`: the census address **and**
+  either a `business_check` of it, or a homepage on the business's own email domain with no `mail_drop`
+  verdict for that address (website-verification OQ-3, amending the 2026-10-10 rule). A website
+  verifies the business, not the door: a known mail drop is counted `routing_mail_drop`, and a
+  `no_listing` or `other_business` verdict stays routable. Anything else is counted and never
+  geocoded, because a door placed from a guess sends a founder to the wrong street.
 
 ## Where the coordinates come from (D13)
 
@@ -69,6 +72,6 @@ candidate field (`app/sourcing/stages.py`).
 
 The stage reports these to `sourcing_run.counts`, every key every time:
 - `routing_disqualified` (counted once: never also as unverified)
-- `routing_eligible`, `routing_unverified_address`
+- `routing_eligible`, `routing_mail_drop`, `routing_unverified_address`
 - `routing_geocode_unmatched`, `routing_geocode_ambiguous`, `routing_geocode_failed`
 - `routing_clustered`, `routing_clusters`

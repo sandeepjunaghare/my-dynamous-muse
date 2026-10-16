@@ -16,7 +16,14 @@ from app.manifests.schemas import (
     SourceKind,
 )
 from app.shared.provenance import ProvenancedValue, RetrievalMethod
-from app.sourcing.schemas import CandidateFields, PlaceCheck, PostalAddress, SourcingBrief
+from app.sourcing.schemas import (
+    CandidateFields,
+    MissKind,
+    PlaceCheck,
+    PlacesVerdict,
+    PostalAddress,
+    SourcingBrief,
+)
 from app.sourcing.stages import PipelineStage
 from tests.manifests.builders import a_body, a_vertical, cited
 
@@ -70,6 +77,43 @@ def place_checked(
         PLACES_URL,
         RetrievalMethod.web_lookup,
     )
+
+
+VERDICT_PLACE_ID = "ChIJ-usps-arlington"
+VERDICT_URL = "https://places.googleapis.com/v1/places/ChIJ-usps-arlington"
+
+
+def a_verdict(
+    kind: MissKind = MissKind.mail_drop,
+    place_id: str = VERDICT_PLACE_ID,
+    *,
+    address: PostalAddress = ARLINGTON,
+) -> ProvenancedValue[PlacesVerdict]:
+    """Our verdict on a Places miss, as ``verify_business`` keeps it: a kind, the place ID it rests
+    on, and the census address checked (website-verification OQ-1). Defaults to a mail drop at
+    :func:`a_candidate`'s address."""
+    return sourced(
+        PlacesVerdict(kind=kind, place_id=place_id, checked_address=address),
+        f"https://places.googleapis.com/v1/places/{place_id}",
+        RetrievalMethod.web_lookup,
+    )
+
+
+OWN_DOMAIN = "acmefreight.test"
+"""The business's own email domain in the website-verification suites."""
+
+
+def own_site(
+    origin: str = f"https://www.{OWN_DOMAIN}",
+    method: RetrievalMethod = RetrievalMethod.web_lookup,
+) -> ProvenancedValue[str]:
+    """A homepage as ``verify_business``'s free fetch cites it: the origin, ``web_lookup``."""
+    return sourced(origin, f"{origin}/", method)
+
+
+def website_verified(fields: CandidateFields) -> CandidateFields:
+    """``fields`` with an email on :data:`OWN_DOMAIN` and that domain's homepage (B2)."""
+    return fields.model_copy(update={"email": sourced(f"ops@{OWN_DOMAIN}"), "website": own_site()})
 
 
 def a_brief(vertical: str | None = None) -> SourcingBrief:

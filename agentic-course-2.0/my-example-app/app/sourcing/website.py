@@ -36,15 +36,27 @@ logger = get_logger(__name__)
 
 FREE_MAIL_DOMAINS: frozenset[str] = frozenset(
     {
+        # Webmail
         "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "rocketmail.com",
-        "hotmail.com", "outlook.com", "live.com", "msn.com", "aol.com", "icloud.com", "me.com",
-        "mac.com", "att.net", "sbcglobal.net", "bellsouth.net", "comcast.net", "verizon.net",
-        "charter.net", "cox.net", "proton.me", "protonmail.com", "gmx.com", "mail.com",
-        "zoho.com", "yandex.com",
+        "hotmail.com", "outlook.com", "live.com", "msn.com", "aol.com", "aim.com", "icloud.com",
+        "me.com", "mac.com", "proton.me", "protonmail.com", "gmx.com", "gmx.net", "mail.com",
+        "email.com", "usa.net", "zoho.com", "zohomail.com", "yandex.com", "fastmail.com",
+        "tutanota.com", "hey.com", "inbox.com", "excite.com", "lycos.com",
+        "yahoo.co.uk", "yahoo.ca", "yahoo.com.mx", "hotmail.co.uk", "hotmail.ca", "live.ca",
+        # US ISPs: AT&T and its Bell brands (swbell and flash.net are Texas), then the rest
+        "att.net", "sbcglobal.net", "swbell.net", "flash.net", "prodigy.net", "pacbell.net",
+        "bellsouth.net", "ameritech.net", "snet.net", "nvbell.net", "wans.net",
+        "comcast.net", "xfinity.com", "verizon.net", "charter.net", "spectrum.net", "rr.com",
+        "roadrunner.com", "twc.com", "cox.net", "earthlink.net", "mindspring.com",
+        "windstream.net", "centurylink.net", "centurytel.net", "embarqmail.com", "q.com",
+        "frontier.com", "frontiernet.net", "netzero.net", "netzero.com", "juno.com",
+        "optonline.net", "suddenlink.net", "cableone.net", "mediacombb.net", "wowway.com",
+        "grandecom.net", "consolidated.net", "peoplepc.com",
     }
 )  # fmt: skip
-"""Generic consumer mail providers: an address there says nothing about a business's own site.
-Generic across verticals, so code rather than manifest data."""
+"""Generic consumer mail providers and ISPs: an address there says nothing about a business's own
+site, and the provider's homepage answers like one (PR #36 M3). A subdomain counts too, so
+``tx.rr.com`` is ``rr.com``. Generic across verticals, so code rather than manifest data."""
 
 SHARED_DOMAIN_MIN_BUSINESSES = 3
 """A domain this many distinct pool businesses share is a service's (a process agent, a franchisor,
@@ -69,9 +81,15 @@ def email_domain(email: str) -> str | None:
         return None
     if any(char.isspace() or char in "/?#:" for char in domain):
         return None
-    if domain in FREE_MAIL_DOMAINS or not _has_alphabetic_tld(domain):
+    if _is_free_mail(domain) or not _has_alphabetic_tld(domain):
         return None
     return domain
+
+
+def _is_free_mail(domain: str) -> bool:
+    """``domain`` or any parent of it is a free-mail provider: ``tx.rr.com`` is Spectrum's."""
+    labels = domain.split(".")
+    return any(".".join(labels[i:]) in FREE_MAIL_DOMAINS for i in range(len(labels) - 1))
 
 
 def _has_alphabetic_tld(domain: str) -> bool:

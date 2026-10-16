@@ -1,0 +1,17 @@
+{
+  "places": [
+    {
+      "id": "ChIJ-napco",
+      "displayName": {
+        "text": "Napco Bag & Film",
+        "languageCode": "en"
+      },
+      "formattedAddress": "2100 Olympic Dr Ste 120, Arlington, TX 76011, USA",
+      "businessStatus": "OPERATIONAL",
+      "types": [
+        "store",
+        "establishment"
+      ]
+    }
+  ]
+}
