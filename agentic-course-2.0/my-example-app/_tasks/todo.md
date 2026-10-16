@@ -1792,7 +1792,8 @@ all four recommendations.
 - [x] Phase 2: `classify_miss` + fixtures; `verify_business` records the verdict, skips a current one, counts — `_Outcome` replaces the bare `Checked | None`
 - [x] Phase 3: classify/owner skips on `is_verified()`, prompt verdict line, structure pin, routing, owner page tie, T9 `unverified` — `PROMOTE_COUNTS` needed `refused_unverified` too (not in the plan)
 - [x] Phase 4: five-stage E2E case, docs (ticket, READMEs, CLAUDE.md), validation — 1,696 passed, 4 skipped; alembic no drift
-- [x] Level 4 read-only Places rerun over run `9ca51e17`: done 2026-10-16 with the founder's go-ahead. 4 of 4 named as expected; TBJ borderline (see the ticket); the paid batch still waits
+- [x] Level 4 read-only Places rerun over run `9ca51e17`: done 2026-10-16 with the founder's go-ahead. 4 of 4 named as expected; TBJ borderline (see the ticket)
+- [x] Level 4 paid batch: run `f412e485` (10, $0.19) on 2026-10-16. 1 website-verified (then disqualified by judgment), 0 Places-verified; promote dry-run 0 created, 8 disqualified, 2 unverified. Results in ticket T6
 
 ### Review
 

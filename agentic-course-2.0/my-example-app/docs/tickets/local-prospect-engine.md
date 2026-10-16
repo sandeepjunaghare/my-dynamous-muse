@@ -277,8 +277,15 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
   unit item. Unishippers is no longer a survivor, so its expected `None` went untested. Website verification
   now covers 2 of 5 (DBT, Ark), where Places verified none. Every suite came back inline (`Ste 100`, `Suite A`,
   `#2023`), never after a comma, which supports keeping R2 deferred on #37.
-- **Not done:** a paid batch (`lpe sourcing run --vertical freight --batch-size 10`, then a promote `--dry-run`).
-  It waits for the founder.
+- **Paid batch, done 2026-10-16** (founder's go-ahead; run `f412e485`, freight v9, batch 10, **$0.19**, completed).
+  The free rules removed 7. Of 3 survivors, 1 was verified by its own-domain homepage (`verify_website_only`) and
+  went to the judgment node, which disqualified it. Places verified none: 2 `no_listing`, 1 nothing at the
+  address. The 2 unverified survivors skipped the paid judgment and owner calls (owners came from the census),
+  and got no routes (`routing_unverified_address` 2). Promote `--dry-run`: 0 created, 8 `refused_disqualified`,
+  2 `refused_unverified`; no HubSpot writes. **For T10:** batches have yielded 0–1 promotable per 10. That is two
+  small runs, not a rate, but it bears on the batch size and the Friday report. Whether a survivor with a census
+  owner but no listing and no business domain should reach review, rather than be refused as `unverified`, is
+  the founder's call.
 
 **First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
