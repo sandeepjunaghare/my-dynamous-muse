@@ -1862,3 +1862,53 @@ locators must agree. R2, R3 and R4 → issue #37 (comment added).
   real tenant because of a neighbour).
 - **Note:** the `Bldg 5` row passed under the old code as well (5 is not in {3, 300}). It pins the agreed rule
   rather than proving the fix.
+
+## Unverified survivors reach review (planned 2026-10-16)
+
+Founder's decision on the open question from the T6 Level 4 paid batch (run `f412e485`): a survivor with a census
+owner but no Places match and no own-domain homepage goes to review instead of being refused `unverified`. The
+three choices behind it (asked 2026-10-16):
+- **Scope:** refuse only when a **current** Places verdict contradicts the address (`mail_drop` or
+  `other_business`). `no_listing`, a plain miss with no verdict, and a candidate never checked all reach review
+  if every required field is cited. A verdict is stale once the address changes (`has_current_verdict`), so it
+  no longer refuses.
+- **Judgment:** unchanged. `classify_rollup` and `resolve_owner` still skip unverified candidates, so these reach
+  review unscored, owner from the census only. The founder catches rollups at review.
+- **Flag:** a new company property, `lpe_verification` (`places` / `website` / `none`), added to `RecordMeta`.
+  That set is closed on purpose, so this is a deliberate widening of it, pinned by a test.
+- Unchanged: routing (unverified addresses are never geocoded, so `lpe_route_cluster` stays empty; the cadence
+  is call/voicemail/email, so no route is needed), `REQUIRED_FIELDS`, and the write-gate.
+
+- [x] `app/sourcing/schemas.py`: `CandidateFields.has_contradicting_verdict()`, which is true for a current
+  `mail_drop` or `other_business`
+- [x] `app/promotion/exceptions.py` + `eligibility.py`: replace `RefusalReason.unverified` with `contradicted`,
+  using the same ordering slot (after `disqualified`). Docstrings: an unverified candidate without a census
+  owner is now honestly `no_principal`
+- [x] `app/promotion/schemas.py`: `refused_unverified` → `refused_contradicted` in `PROMOTE_COUNTS`, plus a
+  count of `promoted_unverified` so the Friday report can show how many records reached review unverified;
+  `RecordMeta.verification` (a `Verification` StrEnum), rendered on COMPANY only
+- [x] `app/promotion/properties.py`: provision `lpe_verification` (an enumeration, the same pattern as
+  `lpe_review_status`, idempotent)
+- [x] `app/promotion/mapping.py`: work out `verification` from the fields (Places > website > none). Also on
+  `CompanyWrite`, so the report reads it without an optional; `PromotedProspect.verification` and a CLI column
+- [x] Tests: eligibility matrix (no_listing / no verdict / unchecked → promotable; mail_drop / other_business →
+  `contradicted`; stale verdict → promotable; unverified without an owner → `no_principal`), the RecordMeta
+  pin, the property provisioning, mapping, the promote counts, and updates to the E2E case
+- [x] Docs: ticket T6 (the decision), T10's report counters, the promotion README, the CLAUDE.md command
+  blurb if its wording now misleads
+- [x] `/piv-validate`, then a promote `--dry-run` over `f412e485` (read-only) and a check that the 2 unverified
+  now show as promotable
+  — PASS (full): 1,747 passed, 4 skipped (the paid live evals), no alembic drift. Dry run over `f412e485`:
+  SYMZI TECH SOLUTIONS and ACROSS THE LANDS would be created, `verified none`, no route, 0 duplicates; 8
+  `refused_disqualified`, `promoted_unverified` 2. No HubSpot or Supabase writes
+
+### Review (2026-10-16)
+
+- **Worked:** asking the three questions before planning. "Unverified" covered four different states, and only
+  two of them are evidence against an address. The scope question is what split them.
+- **Worked:** carrying `verification` on `CompanyWrite` as well as in `RecordMeta`. The report reads it without
+  an optional field, and no `or none` fallback hides a missing value.
+- **Note:** the test database for this project is `lpe-test-pg` on **5434**, not 5433 (5433 is Langfuse's
+  Postgres; the password was refused, so nothing touched it). `/piv-validate`'s example port is a suggestion only.
+- **Open:** the first real promote provisions `lpe_verification` in the portal, a permanent property name. The
+  dry run left `ACROSS THE LANDS` with an uncertain name split (first=JORGE, last=ARMANDO ROBLES) to check at review.

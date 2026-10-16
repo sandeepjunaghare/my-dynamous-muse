@@ -40,6 +40,7 @@ from app.promotion.schemas import (
     SearchRequest,
     TaskCreate,
     TaskType,
+    Verification,
 )
 from tests.promotion.conftest import (
     TEST_TOKEN,
@@ -472,6 +473,7 @@ META = RecordMeta(
     vertical="freight",
     review_status=ReviewStatus.pending_review,
     route_cluster="A · 75238",
+    verification=Verification.none,
     owner_id="81234567",
 )
 
@@ -479,25 +481,30 @@ META = RecordMeta(
 class TestRecordMeta:
     """OQ6: the closed carve-out for engine metadata — facts about our process, not the prospect."""
 
-    def test_it_holds_exactly_four_fields(self) -> None:
-        """Widening the carve-out must be a visible diff, never a side door for a prospect field."""
+    def test_it_holds_exactly_five_fields(self) -> None:
+        """Widening the carve-out must be a visible diff, never a side door for a prospect field.
+
+        ``verification`` widened it on 2026-10-16: which of our checks found the business.
+        """
         assert set(RecordMeta.model_fields) == {
             "vertical",
             "review_status",
             "route_cluster",
+            "verification",
             "owner_id",
         }
 
-    def test_a_company_gets_all_four_properties(self) -> None:
+    def test_a_company_gets_all_five_properties(self) -> None:
         assert META.to_properties(ObjectType.companies) == {
             "lpe_vertical": "freight",
             "lpe_review_status": "pending_review",
             "lpe_route_cluster": "A · 75238",
+            "lpe_verification": "none",
             "hubspot_owner_id": "81234567",
         }
 
-    def test_a_contact_gets_no_review_status_and_no_route(self) -> None:
-        """Route and review status exist on COMPANY only; on a contact they would be a 400."""
+    def test_a_contact_gets_no_review_status_route_or_verification(self) -> None:
+        """All three exist on COMPANY only; on a contact they would be a 400."""
         assert META.to_properties(ObjectType.contacts) == {
             "lpe_vertical": "freight",
             "hubspot_owner_id": "81234567",
@@ -530,6 +537,7 @@ class TestObjectWrites:
             "lpe_vertical": "freight",
             "lpe_review_status": "pending_review",
             "lpe_route_cluster": "A · 75238",
+            "lpe_verification": "none",
             "hubspot_owner_id": "81234567",
         }
         await client.aclose()

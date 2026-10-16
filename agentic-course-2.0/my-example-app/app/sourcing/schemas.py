@@ -642,6 +642,19 @@ class CandidateFields(BaseModel):
             and self.places_verdict.value.kind is MissKind.mail_drop
         )
 
+    def has_contradicting_verdict(self) -> bool:
+        """Whether the current address's verdict says the business is not at that door.
+
+        A mail drop or another business, recorded for *this* address: positive evidence against it,
+        unlike ``no_listing`` or no verdict at all, which are only an absence of evidence. T9's
+        gate refuses on this, not on ``is_verified()`` (founder's decision, 2026-10-16).
+        """
+        return (
+            self.has_current_verdict()
+            and self.places_verdict is not None
+            and self.places_verdict.value.kind in {MissKind.mail_drop, MissKind.other_business}
+        )
+
     def has_routable_address(self) -> bool:
         """Whether T8 may put this candidate on a route (website-verification OQ-3).
 

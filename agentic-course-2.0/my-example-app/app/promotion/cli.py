@@ -127,7 +127,7 @@ def _created_line(prospect: PromotedProspect, *, dry_run: bool) -> list[str]:
             f"  company {_record(prospect.company_url, prospect.company_id)}"
             f"  contact {_record(prospect.contact_url, prospect.contact_id)}"
         )
-    line += f"  route {prospect.route_label or '-'}"
+    line += f"  route {prospect.route_label or '-'}  verified {prospect.verification.value}"
     lines = [line]
     if prospect.name_ambiguous:
         lines.append(

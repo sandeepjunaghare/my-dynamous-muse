@@ -3,12 +3,18 @@
 import pytest
 
 from app.promotion.client import to_property_payload
-from app.promotion.mapping import company_write, contact_write, record_url, website_domain
-from app.promotion.schemas import ObjectType, ReviewStatus
+from app.promotion.mapping import (
+    company_write,
+    contact_write,
+    record_url,
+    verification_of,
+    website_domain,
+)
+from app.promotion.schemas import ObjectType, ReviewStatus, Verification
 from app.shared.provenance import ProvenancedValue
 from app.sourcing.schemas import CandidateFields, Principal, is_google_maps
 from tests.promotion.builders import a_promotable, a_score, an_owner, census_row_url
-from tests.sourcing.builders import ARLINGTON, QCMOBILE_URL, sourced
+from tests.sourcing.builders import ARLINGTON, QCMOBILE_URL, sourced, website_verified
 
 
 def _company(fields: CandidateFields, route: str | None = "A · 76011") -> dict[str, str]:
@@ -119,8 +125,25 @@ class TestCompany:
             "lpe_vertical": "freight",
             "lpe_review_status": ReviewStatus.pending_review.value,
             "lpe_route_cluster": "A · 76011",
+            "lpe_verification": Verification.places.value,
             "hubspot_owner_id": "77",
         }
+
+    def test_verification_is_places_first_then_website_then_none(self) -> None:
+        both = website_verified(a_promotable())
+        website_only = website_verified(a_promotable()).model_copy(update={"business_check": None})
+        neither = a_promotable().model_copy(update={"business_check": None})
+
+        assert verification_of(both) is Verification.places
+        assert verification_of(website_only) is Verification.website
+        assert verification_of(neither) is Verification.none
+
+    def test_the_verification_rides_on_the_write_and_its_meta(self) -> None:
+        fields = a_promotable().model_copy(update={"business_check": None})
+        write = company_write(fields, vertical="freight", route_label=None, owner_id=None)
+
+        assert write.verification is Verification.none
+        assert write.meta.verification is Verification.none
 
     def test_an_unrouted_company_has_no_route(self) -> None:
         write = company_write(a_promotable(), vertical="freight", route_label=None, owner_id=None)

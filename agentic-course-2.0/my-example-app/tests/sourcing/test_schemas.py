@@ -697,6 +697,22 @@ class TestPlacesVerdict:
         fields = a_candidate().model_copy(update={"places_verdict": a_verdict(kind)})
         assert not fields.has_mail_drop_here()
 
+    @pytest.mark.parametrize(
+        ("kind", "contradicts"),
+        [(MissKind.mail_drop, True), (MissKind.other_business, True), (MissKind.no_listing, False)],
+    )
+    def test_a_mail_drop_or_another_business_contradicts_the_address(
+        self, kind: MissKind, contradicts: bool
+    ) -> None:
+        """T9 gate, 2026-10-16: ``no_listing`` is an absence of evidence, not evidence against."""
+        fields = a_candidate().model_copy(update={"places_verdict": a_verdict(kind)})
+        assert fields.has_contradicting_verdict() is contradicts
+
+    def test_no_verdict_or_a_stale_one_contradicts_nothing(self) -> None:
+        assert not a_candidate().has_contradicting_verdict()
+        stale = a_candidate().model_copy(update={"places_verdict": a_verdict(address=MOVED)})
+        assert not stale.has_contradicting_verdict()
+
 
 class TestWebsiteVerification:
     """B1, B2, OQ-3: the predicates every paid step, routing and T9 ask."""

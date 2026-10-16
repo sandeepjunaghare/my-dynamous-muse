@@ -29,7 +29,7 @@ from app.core.config import DEFAULT_HUBSPOT_UI_DOMAIN, get_settings
 from app.core.logging import get_logger
 from app.promotion.client import ProvenancedProperty
 from app.promotion.names import NameSplit, split_owner_name
-from app.promotion.schemas import ObjectType, RecordMeta, ReviewStatus
+from app.promotion.schemas import ObjectType, RecordMeta, ReviewStatus, Verification
 from app.shared.provenance import ProvenancedValue
 from app.sourcing.schemas import CandidateFields
 
@@ -48,6 +48,8 @@ class CompanyWrite:
     """The company's ``lpe_source_url`` — how an interrupted create is found again."""
     domain: str | None
     """The website's host, for dedupe; ``None`` without a website."""
+    verification: Verification
+    """Which check found the business; also in ``meta``, where HubSpot reads it."""
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,15 @@ def website_domain(website: str) -> str | None:
     if host.startswith("www."):
         host = host[len("www.") :]
     return host or None
+
+
+def verification_of(fields: CandidateFields) -> Verification:
+    """Which check found the business: Places at its address, then its own homepage, else none."""
+    if fields.has_verified_address():
+        return Verification.places
+    if fields.has_own_domain_website():
+        return Verification.website
+    return Verification.none
 
 
 def company_write(
@@ -115,13 +126,21 @@ def company_write(
             properties["domain"] = _recited(domain, fields.website)
     if fields.priority is not None:
         properties["lpe_priority_score"] = _recited(fields.priority.value.score, fields.priority)
+    verification = verification_of(fields)
     meta = RecordMeta(
         vertical=vertical,
         review_status=ReviewStatus.pending_review,
         route_cluster=route_label,
+        verification=verification,
         owner_id=owner_id,
     )
-    return CompanyWrite(properties=properties, meta=meta, key=registry.source_url, domain=domain)
+    return CompanyWrite(
+        properties=properties,
+        meta=meta,
+        key=registry.source_url,
+        domain=domain,
+        verification=verification,
+    )
 
 
 def contact_write(fields: CandidateFields, *, vertical: str, owner_id: str | None) -> ContactWrite:

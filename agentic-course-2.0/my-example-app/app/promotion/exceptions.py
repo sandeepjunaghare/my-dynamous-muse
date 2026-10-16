@@ -131,28 +131,29 @@ class UnprovenancedWriteError(HubSpotError):
 
 
 class RefusalReason(StrEnum):
-    """Why a candidate was not promoted (T9, OQ1-D). Eligibility checks them in its own fixed order
-    (``app.promotion.eligibility``: disqualified, unverified, the missing fields, dead_score), which
-    is not this declaration order.
+    """Why a candidate was not promoted (T9, OQ1-D). Eligibility checks them in its own fixed
+    order (``app.promotion.eligibility``: disqualified, contradicted, the missing fields,
+    dead_score), which is not this declaration order.
 
     ``no_principal`` is ``missing_fields`` where the owner is the **only** gap — counted on its own
     because "no owner found" is the yield question T6 answers, and a company is never promoted
-    without its contact. ``unverified`` is neither Places-verified nor website-verified
-    (website-verification B6): such a candidate never reaches the owner node, so without its own
-    reason it would be counted ``no_principal`` and hide the real gap. Kept here, beside the error
-    that carries it, so it has one home.
+    without its contact. ``contradicted`` is a current Places verdict that says the business is not
+    at its address (a mail drop or another business: ``CandidateFields.has_contradicting_verdict``).
+    An unverified candidate without one is not refused for it (founder's decision, 2026-10-16): it
+    reaches review flagged ``lpe_verification = none``. Kept here, beside the error that carries
+    it, so it has one home.
     """
 
     disqualified = "disqualified"
-    unverified = "unverified"
+    contradicted = "contradicted"
     dead_score = "dead_score"
     no_principal = "no_principal"
     missing_fields = "missing_fields"
 
 
 class PromotionRefusedError(LocalProspectEngineError):
-    """A candidate that may not be promoted: suppressed, unverified, a cited-dead score, or missing
-    a field.
+    """A candidate that may not be promoted: suppressed, contradicted, a cited-dead score, or
+    missing a field.
 
     Raised before anything is written, so it costs no HubSpot request and leaves no ledger row.
     ``fields`` names **every** missing required field in declaration order, not the first — the

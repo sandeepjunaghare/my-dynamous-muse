@@ -9,9 +9,10 @@ recorded, and a disqualified business keeps none of it.
 
 **Free before paid** (D8): a candidate the free predicates already removed is never sent, and
 neither is one ``verify_business`` could not verify — neither Places at its address nor a homepage
-on its own email domain (``CandidateFields.is_verified``, website-verification B1): T9 cannot
-promote it (OQ-5). What Places saw
-reaches the prompt as context through ``StageContext.places`` and is never stored (D13). **Retries
+on its own email domain (``CandidateFields.is_verified``, website-verification B1). The call would
+have no evidence to read beyond the census row, so it is not paid for; such a candidate may still
+reach review unscored, flagged ``lpe_verification = none`` (2026-10-16). What Places saw reaches
+the prompt as context through ``StageContext.places`` and is never stored (D13). **Retries
 do not pay twice** for a candidate already scored or disqualified. **A per-run call cap**
 (``max_judgment_calls_per_run``) is a breaker against a runaway loop: reaching it ends the stage
 **degraded**, never raising, so a paid batch is not handed back (Amendment 3). One failed call is

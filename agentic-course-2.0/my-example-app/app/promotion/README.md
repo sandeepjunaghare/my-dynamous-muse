@@ -22,15 +22,15 @@ nothing is serialized until the whole mapping has passed — no partial payload 
 22 hand-typed prospects already in the portal; they carry no citable fields at all, and a gate
 applied to `create_task` would refuse the ticket that exists to rescue them. A test asserts it.
 
-**Engine metadata is the other carve-out** (T9, OQ6-A). Four properties are not claims about the
+**Engine metadata is the other carve-out** (T9, OQ6-A). Five properties are not claims about the
 prospect but facts about our process, with no honest URL to cite: `lpe_vertical`,
-`lpe_review_status`, `lpe_route_cluster` and `hubspot_owner_id`. They travel in `RecordMeta`, a
-closed, typed model of exactly those four (a test pins the set), rendered **after** the prospect
+`lpe_review_status`, `lpe_route_cluster`, `lpe_verification` (2026-10-16) and `hubspot_owner_id`.
+They travel in `RecordMeta`, a closed, typed model of exactly those five (a test pins the set), rendered **after** the prospect
 fields have passed the gate and merged into the same body; a key claimed by both halves is refused
 before any request. `lpe_priority_score` is not metadata — it is a judgment about the business, and
 goes through the gate with its `llm_inference` citation.
 
-## The six custom properties
+## The seven custom properties
 
 | Internal name | Type / fieldType | COMPANY | CONTACT |
 |---|---|---|---|
@@ -40,10 +40,15 @@ goes through the gate with its `llm_inference` citation.
 | `lpe_priority_score` | `number` / `number` | ✅ | — |
 | `lpe_route_cluster` | `string` / `text` | ✅ | — |
 | `lpe_review_status` | `enumeration` / `select` | ✅ | — |
+| `lpe_verification` | `enumeration` / `select` | ✅ | — |
 
-Scoring, routing and review describe a business; provenance describes a record, and E18 is a *contact*-
+Scoring, routing, verification and review describe a business; provenance describes a record, and E18 is a *contact*-
 quality finding. There is no `datetime` fieldType in HubSpot — the type is `datetime`, the
 fieldType is `date`.
+
+`lpe_verification` (2026-10-16) is an enumeration too — `places` · `website` · `none` — set at
+create and never read back. `none` means nothing contradicted the address, not that anything
+confirmed it; it is what lets the founder filter the unverified records at review.
 
 `lpe_review_status` (T9, OQ2-A) **is** an enumeration — `pending_review` · `accepted` · `rejected`
 — because its values are a closed workflow, not data, and a select is what lets the founder filter
@@ -117,12 +122,16 @@ lpe promotion promote --run <id> [--dry-run]
 ```
 
 - **Eligible** (`eligibility.py`) means the five required fields are cited — `registry_id`,
-  `legal_name`, `address`, `phone`, `owner` — the candidate is **verified** (`is_verified()`: Places
-  at its address, or a homepage on its own email domain; website-verification B6), and it is **qualified
-  under OQ1-D**: not suppressed (no `disqualification` for its `(vertical, registry_id)`) and not a
-  cited-*dead* score. **An unscored candidate is promotable** (absent is not bad; the founder judges
-  it at review — confirmed 2026-10-13). Reasons are checked in a fixed order: `disqualified`, then
-  `unverified`, then missing fields (`no_principal` when the owner is the only gap), then `dead_score`.
+  `legal_name`, `address`, `phone`, `owner` — **nothing contradicts the address**
+  (`has_contradicting_verdict()`: no current Places verdict of a mail drop or another business there),
+  and it is **qualified under OQ1-D**: not suppressed (no `disqualification` for its
+  `(vertical, registry_id)`) and not a cited-*dead* score. **An unscored candidate is promotable**
+  (absent is not bad; the founder judges it at review — confirmed 2026-10-13). **So is an unverified
+  one** (founder's decision, 2026-10-16, replacing website-verification B6): neither Places nor its own
+  homepage found it, but nothing said it isn't there. It arrives unscored, with a census owner, no
+  route, and `lpe_verification = none`, counted in `promoted_unverified`. Reasons are checked in a
+  fixed order: `disqualified`, then `contradicted`, then missing fields (`no_principal` when the owner
+  is the only gap), then `dead_score`.
 - **The ledger** (`models.py`) is a state machine, one row per `(vertical, registry_id)`:
   `pending_create → pending_review → enrolling → enrolled`, terminal `rejected`, `duplicate`,
   `withdrawn`. Its unique key is what makes a re-run, or next week's run, promote nothing twice.
