@@ -400,12 +400,17 @@ def _typed(
     )
 
 
+_TAIL = "Arlington, TX 76011, USA"
+_BUILDING = f"2100 Olympic Dr, {_TAIL}"
+"""The census address with no unit: a result here is the whole building."""
+
+
 class TestClassifyMiss:
     """Website-verification OQ-2: our verdict on what sits at the census address. No model."""
 
     @pytest.mark.parametrize("kind", sorted(MAIL_DROP_TYPES))
     def test_each_mail_drop_type_is_a_mail_drop(self, kind: str) -> None:
-        result = _typed((kind, "establishment"), name="The UPS Store")
+        result = _typed((kind, "establishment"), name="The UPS Store", address=_BUILDING)
         assert classify_miss(a_candidate(), [result]) == (MissKind.mail_drop, "ChIJ-here")
 
     @pytest.mark.parametrize("kind", ["street_address", "premise", "subpremise"])
@@ -449,7 +454,7 @@ class TestClassifyMiss:
 
     def test_a_mail_drop_wins_over_a_business_listed_first(self) -> None:
         napco = _typed(("store",), name="Napco Bag & Film", place_id="ChIJ-napco")
-        usps = _typed(("post_office",), name="USPS", place_id="ChIJ-usps")
+        usps = _typed(("post_office",), name="USPS", place_id="ChIJ-usps", address=_BUILDING)
         assert classify_miss(a_candidate(), [napco, usps]) == (MissKind.mail_drop, "ChIJ-usps")
 
     def test_no_listing_wins_over_another_business(self) -> None:
@@ -458,8 +463,44 @@ class TestClassifyMiss:
         assert classify_miss(a_candidate(), [napco, suite]) == (MissKind.no_listing, "ChIJ-suite")
 
     def test_a_closed_post_office_is_still_a_mail_drop(self) -> None:
-        usps = _typed(("post_office",), name="USPS", status=CLOSED_PERMANENTLY)
+        usps = _typed(("post_office",), name="USPS", status=CLOSED_PERMANENTLY, address=_BUILDING)
         assert classify_miss(a_candidate(), [usps]) == (MissKind.mail_drop, "ChIJ-here")
+
+
+class TestMailDropUnit:
+    """PR #36 M1: a mail drop counts only at our door, not at a neighbour's suite."""
+
+    @pytest.mark.parametrize(
+        ("census", "theirs", "is_mail_drop"),
+        [
+            ("2100 Olympic Dr Ste 300", "2100 Olympic Dr Ste 120", False),
+            ("2100 Olympic Dr", "2100 Olympic Dr Ste 120", False),
+            ("2100 Olympic Dr #120", "2100 Olympic Dr Ste 120", True),
+            ("2100 OLYMPIC DR STE 100 PMB 555", "2100 Olympic Dr Ste 100", True),
+            ("2100 Olympic Dr #555", "2100 Olympic Dr", True),
+            ("2100 Olympic Dr", "2100 Olympic Dr", True),
+            ("2100 Olympic Dr Suite B", "2100 Olympic Dr # B", True),
+        ],
+    )
+    def test_the_unit_decides(self, census: str, theirs: str, is_mail_drop: bool) -> None:
+        store = _typed(("shipping_service",), name="The UPS Store", address=f"{theirs}, {_TAIL}")
+        verdict = classify_miss(_at(census), [store])
+        assert (verdict is not None and verdict.kind is MissKind.mail_drop) is is_mail_drop
+
+    def test_a_neighbours_mail_drop_does_not_mask_no_listing(self) -> None:
+        """Precedence still runs: the neighbour is skipped, our own empty suite is found."""
+        store = _typed(("shipping_service",), address=f"2100 Olympic Dr Ste 120, {_TAIL}")
+        ours = _typed(("subpremise",), place_id="ChIJ-ours")
+        assert classify_miss(_at("2100 Olympic Dr Ste 300"), [store, ours]) == (
+            MissKind.no_listing,
+            "ChIJ-ours",
+        )
+
+    def test_a_ranch_to_market_road_is_not_a_unit(self) -> None:
+        """``RM 620`` is a Texas road; the post office on it is the whole building."""
+        usps = _typed(("post_office",), address=f"2100 RM 620 N, {_TAIL}")
+        verdict = classify_miss(_at("2100 RM 620 N"), [usps])
+        assert verdict == (MissKind.mail_drop, "ChIJ-here")
 
     def test_a_courier_is_never_a_mail_drop(self) -> None:
         courier = _typed(("courier_service", "establishment"), name="Metro Courier")

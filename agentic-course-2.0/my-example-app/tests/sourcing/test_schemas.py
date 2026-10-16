@@ -732,6 +732,17 @@ class TestWebsiteVerification:
         )
         assert not fields.has_own_domain_website()
 
+    def test_an_isps_own_homepage_does_not(self) -> None:
+        """PR #36 M3: ``earthlink.net`` answers 2xx HTML, so the list is the only fence."""
+        fields = website_verified(a_candidate()).model_copy(
+            update={
+                "email": sourced("acme@earthlink.net"),
+                "website": own_site("https://www.earthlink.net"),
+            }
+        )
+        assert not fields.has_own_domain_website()
+        assert not fields.is_verified()
+
     def test_no_email_does_not(self) -> None:
         fields = website_verified(a_candidate()).model_copy(update={"email": None})
         assert not fields.has_own_domain_website()

@@ -43,6 +43,7 @@ from app.sourcing.exceptions import OwnerJudgmentError
 from app.sourcing.owner.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.sourcing.owner.schemas import AdmittedOwner, OwnerAnswer
 from app.sourcing.schemas import (
+    MIN_SHARED_WORDS,
     CandidateFields,
     is_google_maps,
     name_words,
@@ -260,20 +261,26 @@ def _host(url: str) -> str:
     return (urlsplit(url.strip()).hostname or "").removeprefix("www.")
 
 
-def _tied(page_url: str, quote: str, fields: CandidateFields) -> bool:
+def _tied(page_url: str, quote: str, fields: CandidateFields, person: str) -> bool:
     """Whether the cited page is about *this* business (PR #34 M3, website-verification OQ-4).
 
     On the business's own website host, the page is the business's whoever found it: an About page
     that says "Dana founded the company" never repeats its name. Anywhere else, the quote must carry
-    the legal or DBA name's distinguishing words. An empty word set never ties (``shares_name`` is
-    vacuously true on one, so it is refused here).
+    the legal or DBA name's distinguishing words **other than the person's own** (PR #36 M2): the
+    quote already holds the surname, so ``RODRIGUEZ LLC`` would otherwise tie to any Rodriguez.
+    Off-site, a name needs at least :data:`MIN_SHARED_WORDS` such words, because one (``FREIGHT``)
+    is a trade word, not this business; nothing anchors it here the way an address does for Places.
+    So a business named for its owner, or with one distinguishing word, ties only on its own site.
     """
     page_host = _host(page_url)
     if fields.website is not None and page_host and page_host == _host(fields.website.value):
         return True
     quoted = name_words(quote)
-    names = (name_words(cited.value) for cited in (fields.legal_name, fields.dba_name) if cited)
-    return any(ours and shares_name(ours, quoted) for ours in names)
+    theirs = name_words(person)
+    names = (
+        name_words(cited.value) - theirs for cited in (fields.legal_name, fields.dba_name) if cited
+    )
+    return any(len(ours) >= MIN_SHARED_WORDS and shares_name(ours, quoted) for ours in names)
 
 
 def admit_owner(
@@ -305,7 +312,7 @@ def admit_owner(
         return _omit("names a company or nothing, not a person (E18)")
     if not _names(citation.quote, _surname(principal.name)):
         return _omit("the quote does not contain the name")
-    if not _tied(read.url, citation.quote, fields):
+    if not _tied(read.url, citation.quote, fields, principal.name):
         return _omit("the cited page is not tied to this business")
     roles = f"{principal.title or ''} {citation.quote}".lower()
     if any(agent in roles for agent in AGENT_TITLES):

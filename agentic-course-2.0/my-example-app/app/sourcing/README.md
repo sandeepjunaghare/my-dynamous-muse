@@ -118,7 +118,8 @@ website-verified with no current `mail_drop` verdict: a website verifies the bus
 
 **A miss can leave our verdict** (website-verification OQ-1, OQ-2). `places_verdict` (`PlacesVerdict(kind,
 place_id, checked_address)`) records what sat at the census address when Places did not match. The kinds are
-`mail_drop` (a `post_office`, `business_center` or `shipping_service`), then `no_listing` (only address types),
+`mail_drop` (a `post_office`, `business_center` or `shipping_service` at our unit: one at a suite the census
+street doesn't name is a neighbour's, PR #36 M1), then `no_listing` (only address types),
 then `other_business` (sharing **no** distinguishing word). It keeps the place ID and our kind, never a Places
 name, type or address, and it is the second field D13 lets cite Google Maps. Like the check, it is tied to the
 address it checked.
@@ -149,8 +150,8 @@ adapters, not a proof: a Maps host not on it would pass. Google *search* results
 
 Stage 2 (`app/tools/verify_business.py`), for every candidate no free rule removed, in `registry_id` order:
 
-- **Website, free, first** (`website.py`). The census email's domain, unless it is free-mail (gmail,
-  yahoo, … by name) or shared by three or more pool businesses (process agents, franchisors; one grouped
+- **Website, free, first** (`website.py`). The census email's domain, unless it is free-mail or an ISP
+  mailbox (gmail, earthlink, swbell, … by name, and their subdomains: `tx.rr.com`) or shared by three or more pool businesses (process agents, franchisors; one grouped
   query, no domain in code). `https://{domain}/` is fetched once, at most three redirects; only a 2xx
   HTML page on that host or its `www.` counts, and the origin is kept, cited `web_lookup` to the page
   read. Any failure is `None` with a logged reason, never an error. Measured 2026-10-11: only 24% of DFW
@@ -199,8 +200,9 @@ candidate the judgment rules removed.
 - **The gate** (`owner/judgment.py`, A10). A name is kept only when, in order: one was offered; it is
   cited; the URL parses; the node verifiably fetched that page (`ReadTracker`, fail-closed); it is not
   Google Maps; `Principal` accepts it as a person; the quote contains its last word; **the page is tied to
-  this business** (it is on the candidate's website host, or the quote carries the legal or DBA name's
-  distinguishing words, by `shares_name`; PR #34 M3, website-verification OQ-4); and the title is not a
+  this business** (it is on the candidate's website host, or the quote carries at least two of the legal or
+  DBA name's distinguishing words other than the person's own, by `shares_name`; PR #34 M3, website-verification
+  OQ-4, PR #36 M2: so `RODRIGUEZ LLC` or `AJ FREIGHT LLC` ties only on its own site); and the title is not a
   registered, process or statutory agent. The registry record is never citable here. Anything else
   leaves `owner` absent: **never guessed, never repaired.** No name is ever logged.
 - **`owner` belongs to `resolve_owner`.** A retry of it may replace its own answer; the registry may only

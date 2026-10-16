@@ -1810,3 +1810,32 @@ all four recommendations.
   (`PROMOTE_COUNTS`, `COUNT_KEYS`) up front.
 - **Validation:** ruff, format, mypy, pyright clean; pytest with the DB 1,696 passed, 4 skipped (paid `live`);
   alembic check no drift.
+
+
+## PR #36 review fixes: M1, M2, M3, L3–L5 (2026-10-15)
+
+Review: `.claude/code-reviews/pr-36-review.md`. Scope chosen by the owner: M1 + M2 + M3 + the quick Lows. M1 is
+unit-aware (the owner's pick of three rules). M4, L1, L2 → issue #37.
+
+- [x] M1: `mail_drop` counts only at our unit. A result naming no unit is the whole building; one naming a unit
+  counts only if the census street names it (`_units`, `_our_unit`). `RM` is left out (a Texas road). Tests: the
+  agreed seven-row table, the neighbour not masking `no_listing`, an RM road
+- [x] M2: `_tied` takes the person, drops their words from the business name, and needs `MIN_SHARED_WORDS` of the
+  rest off-site; tests for `RODRIGUEZ LLC`, `RODRIGUEZ TRUCKING LLC`, `AJ FREIGHT LLC`, plus two admitted cases
+- [x] M3: ISP and country webmail domains added; a subdomain of a listed provider is free-mail (`tx.rr.com`); tests,
+  and `starr.com` stays a business
+- [x] L3: `verify_website_only` counted on a retry that writes nothing; DB test
+- [x] L4: every `MissKind` has its `places_*` count key; test
+- [x] L5: the refusal docstrings no longer claim declaration order is check order
+- [x] Docs: sourcing README, ticket T6 *Built*; issue #37 for M4, L1, L2 and `other_business`'s unit
+- [x] `/piv-validate`, commit, push
+
+### Review (2026-10-15)
+
+- **Worked:** a mutation check per fix (M1, M2, M3) each undid the fix and was caught by its new tests; files
+  restored and diffed afterwards.
+- **M2 nuance the review missed:** subtracting the surname from the *quote* would break a business named for its
+  owner even with a true quote ("Maria Rodriguez of Rodriguez Trucking"). It is subtracted from the *name*
+  instead, so an owner-named business ties off-site only by two other words, and on its own site always.
+- **M1 nuance:** a Texas `RM 620` road would have read as a unit, so `RM` is not a designator.
+- **Didn't:** L5's enum order predates this PR and a test pins it, so the docstring was fixed, not the order.

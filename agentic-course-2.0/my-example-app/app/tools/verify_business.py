@@ -246,24 +246,23 @@ class VerifyBusinessStage:
                     update["business_check"] = checked[0]
                 if outcome.verdict is not None:
                     update["places_verdict"] = outcome.verdict
-                if not update:
-                    continue
-
-                written = fields.model_copy(update=update)
-                try:
-                    await sourcing.record_candidates(
-                        context.run_id, [written], stage=PipelineStage.verify_business
-                    )
-                except ValidationError as exc:
-                    # One refused write (a D13 guard, say) must not stop a paid batch half-way.
-                    counts["verify_write_refused"] += 1
-                    logger.warning(
-                        "tools.verify_business.write_refused",
-                        run_id=str(context.run_id),
-                        candidate_id=str(candidate.id),
-                        errors=exc.error_count(),
-                    )
-                    continue
+                # Nothing new (a retry, say) is no write, but is still counted (PR #36 L3).
+                written = fields.model_copy(update=update) if update else fields
+                if update:
+                    try:
+                        await sourcing.record_candidates(
+                            context.run_id, [written], stage=PipelineStage.verify_business
+                        )
+                    except ValidationError as exc:
+                        # One refused write (a D13 guard, say) must not stop a paid batch half-way.
+                        counts["verify_write_refused"] += 1
+                        logger.warning(
+                            "tools.verify_business.write_refused",
+                            run_id=str(context.run_id),
+                            candidate_id=str(candidate.id),
+                            errors=exc.error_count(),
+                        )
+                        continue
                 if checked is not None:
                     # Only a stored check passes its evidence on: unverified means unread (OQ-5).
                     context.places[fields.registry_id.value] = checked[1]

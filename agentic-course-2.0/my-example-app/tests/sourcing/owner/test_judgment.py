@@ -359,6 +359,39 @@ class TestTheBusinessTie:
         admitted = admit_owner(answer, nameless, reads=[_read(OFF_SITE)])
         assert admitted.omitted == "the cited page is not tied to this business"
 
+    @pytest.mark.parametrize(
+        ("legal_name", "quote"),
+        [
+            ("RODRIGUEZ LLC", "Maria Rodriguez, owner"),
+            ("RODRIGUEZ TRUCKING LLC", "Maria Rodriguez of Rodriguez Trucking"),
+            ("AJ FREIGHT LLC", "Maria Rodriguez, freight broker"),
+        ],
+    )
+    def test_the_surname_or_one_word_never_ties_off_site(self, legal_name: str, quote: str) -> None:
+        """PR #36 M2: the person's own surname is not this business, nor is one trade word."""
+        fields = FIELDS.model_copy(update={"legal_name": sourced(legal_name), "dba_name": None})
+        answer = OwnerAnswer.model_validate(_answer("Maria Rodriguez", url=OFF_SITE, quote=quote))
+        admitted = admit_owner(answer, fields, reads=[_read(OFF_SITE)])
+        assert admitted.omitted == "the cited page is not tied to this business"
+
+    def test_an_owner_named_business_ties_by_its_other_words(self) -> None:
+        fields = FIELDS.model_copy(
+            update={"legal_name": sourced("RODRIGUEZ BLUE STAR TRUCKING LLC"), "dba_name": None}
+        )
+        answer = OwnerAnswer.model_validate(
+            _answer("Maria Rodriguez", url=OFF_SITE, quote="Maria Rodriguez of Blue Star Trucking")
+        )
+        assert admit_owner(answer, fields, reads=[_read(OFF_SITE)]).owner is not None
+
+    def test_an_owner_named_business_still_ties_on_its_own_site(self) -> None:
+        fields = FIELDS.model_copy(
+            update={"legal_name": sourced("RODRIGUEZ LLC"), "dba_name": None}
+        )
+        answer = OwnerAnswer.model_validate(
+            _answer("Maria Rodriguez", quote="Maria Rodriguez, owner")
+        )
+        assert admit_owner(answer, fields, reads=[_read()]).owner is not None
+
     def test_the_omission_never_logs_the_name(self) -> None:
         answer = OwnerAnswer.model_validate(
             _answer("Dana Reyes", url=OFF_SITE, quote="Dana Reyes, President")

@@ -26,7 +26,7 @@ from app.sourcing.sources.fmcsa import census_pool_record
 from app.sourcing.sources.google_places import place_url
 from app.sourcing.stages import PipelineStage
 from app.tools.registry import StageContext, StageResult, registered_stages
-from app.tools.verify_business import NO_PLACES_SOURCE, VerifyBusinessStage
+from app.tools.verify_business import COUNT_KEYS, NO_PLACES_SOURCE, VerifyBusinessStage
 from tests.conftest import requires_db
 from tests.qualification.builders import a_body_with, an_active_manifest_with, census_row, predicate
 from tests.sourcing.builders import (
@@ -440,6 +440,21 @@ class TestTheWebsite:
         result = await _run(_stage(places, web), context)
         assert result.counts["verify_website_only"] == 0
 
+    async def test_a_retry_that_changes_nothing_still_counts_website_only(
+        self, db_session: AsyncSession
+    ) -> None:
+        """PR #36 L3: the website is stored and the verdict is current, so nothing is written."""
+        web = MockWeb()
+        web.html("https://alpha.test/")
+        places = MockPlaces(answers={"Alpha Freight": (200, load_fixture("places_mail_drop"))})
+        context, _ = await _setup(db_session, _candidate("Alpha", email="ops@alpha.test"))
+        await _run(_stage(places, web), context)
+
+        retry = await _run(_stage(places, web), context)
+
+        assert retry.counts["places_skipped"] == 1
+        assert retry.counts["verify_website_only"] == 1
+
 
 VERDICT_FIXTURES = {
     "places_mail_drop": (MissKind.mail_drop, "ChIJ-usps-arlington", "United States Postal Service"),
@@ -599,3 +614,9 @@ async def _seed_pool(
     await PoolRepository(session).refresh(
         context.manifest.vertical, context.run_id, [record for record in records if record]
     )
+
+
+@pytest.mark.parametrize("kind", list(MissKind))
+def test_every_miss_kind_has_its_count_key(kind: MissKind) -> None:
+    """PR #36 L4: ``counts`` is pre-seeded, so a kind without a key is a ``KeyError`` mid-batch."""
+    assert f"places_{kind.value}" in COUNT_KEYS

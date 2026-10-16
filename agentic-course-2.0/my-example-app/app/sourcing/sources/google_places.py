@@ -93,6 +93,13 @@ _API_KEY_INVALID = "API_KEY_INVALID"
 
 _LEADING_NUMBER = re.compile(r"^\s*(\d+)")
 _ZIP5 = re.compile(r"^\s*(\d{5})")
+_UNIT = re.compile(
+    r"(?:\b(?:STE|SUITE|UNIT|APT|ROOM|BLDG|BUILDING|FL|FLOOR|PMB)\b\.?|#)\s*#?\s*"
+    r"([A-Z0-9][A-Z0-9-]*)"
+)
+"""A unit designator and its number, in an upper-cased street line. Only the number is kept, so
+``#120`` and ``Ste 120`` are the same unit (PR #36 M1). No ``RM``: in Texas that is a Ranch to
+Market road (``1234 RM 620 N``), not a room."""
 
 
 class PlaceResult(BaseModel):
@@ -282,6 +289,7 @@ class _Checkable(NamedTuple):
     zip5: str
     number: str
     names: tuple[frozenset[str], ...]
+    units: frozenset[str] = frozenset()
 
 
 def _checkable(fields: CandidateFields) -> _Checkable | None:
@@ -302,7 +310,17 @@ def _checkable(fields: CandidateFields) -> _Checkable | None:
     names = tuple(tokens for tokens in (name_words(name.value) for name in cited if name) if tokens)
     if not names:
         return None
-    return _Checkable(zip5=zip_match.group(1), number=number_match.group(1), names=names)
+    return _Checkable(
+        zip5=zip_match.group(1),
+        number=number_match.group(1),
+        names=names,
+        units=_units(address.street),
+    )
+
+
+def _units(street: str) -> frozenset[str]:
+    """The unit numbers a street line names: ``Ste 100 PMB 555`` is ``{100, 555}``."""
+    return frozenset(_UNIT.findall(street.upper()))
 
 
 def search_query(fields: CandidateFields) -> str | None:
@@ -341,6 +359,18 @@ def _at_address(result: PlaceResult, checkable: _Checkable) -> bool:
     return _contains_number(formatted, checkable.zip5) and _starts_with_number(
         formatted, checkable.number
     )
+
+
+def _our_unit(result: PlaceResult, checkable: _Checkable) -> bool:
+    """Whether a result at the address is at *our* door, not a neighbour's suite (PR #36 M1).
+
+    A result naming no unit is the whole building (a standalone post office). One naming a unit is
+    ours only if the census street names that unit too, so a UPS Store at Ste 120 says nothing about
+    Ste 300, or about a census address with no suite. Only the street line, before the first comma,
+    is read.
+    """
+    theirs = _units((result.formatted_address or "").split(",", 1)[0])
+    return not theirs or bool(theirs & checkable.units)
 
 
 def match_place(fields: CandidateFields, results: Sequence[PlaceResult]) -> PlaceResult | None:
@@ -385,7 +415,8 @@ def classify_miss(fields: CandidateFields, results: Sequence[PlaceResult]) -> Mi
     ``mail_drop``, then ``no_listing``, then ``other_business``:
 
     - a result whose types include a :data:`MAIL_DROP_TYPES` type is a mail drop, whatever its
-      status: a closed post office is still a post office;
+      status (a closed post office is still a post office), if it is at our unit: one naming a
+      suite the census street does not name is a neighbour's (PR #36 M1, :func:`_our_unit`);
     - a result whose types are all :data:`ADDRESS_TYPES` is nothing listed;
     - a business sharing **no** distinguishing word with the legal or DBA name is another business.
       A one-word overlap stays a plain miss, which is what keeps a storefront that shortened our
@@ -399,7 +430,7 @@ def classify_miss(fields: CandidateFields, results: Sequence[PlaceResult]) -> Mi
         return None
     here = [result for result in results if _at_address(result, checkable)]
     for result in here:
-        if MAIL_DROP_TYPES.intersection(result.types):
+        if MAIL_DROP_TYPES.intersection(result.types) and _our_unit(result, checkable):
             return MissVerdict(MissKind.mail_drop, result.id)
     for result in here:
         if result.types and ADDRESS_TYPES.issuperset(result.types):
