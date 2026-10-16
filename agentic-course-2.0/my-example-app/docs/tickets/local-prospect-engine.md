@@ -270,8 +270,15 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
   in `places_not_found`), `verify_website_only`, `routing_mail_drop`, and the promote report's
   `refused_unverified`. `judgment_unverified_skipped` and `owner_unverified_skipped` keep their names and now mean
   "neither Places- nor website-verified".
-- **Not done:** the Level 4 read-only Places rerun over run `9ca51e17`'s five misses, and a paid batch. Both wait
-  for the founder.
+- **Level 4 read-only rerun, done 2026-10-16** (founder's go-ahead; 5 Text Search calls, ~$0, nothing stored).
+  Run `9ca51e17`'s five survivors: DBT `other_business` (a manufacturer in its suite), Isla `no_listing`, Ark
+  `no_listing`, Optimal `other_business` (a store at Ste A250), all as the plan expected. TBJ `other_business`
+  came from a unit-less parking garage at the tower, which is borderline and belongs with #37's `other_business`
+  unit item. Unishippers is no longer a survivor, so its expected `None` went untested. Website verification
+  now covers 2 of 5 (DBT, Ark), where Places verified none. Every suite came back inline (`Ste 100`, `Suite A`,
+  `#2023`), never after a comma, which supports keeping R2 deferred on #37.
+- **Not done:** a paid batch (`lpe sourcing run --vertical freight --batch-size 10`, then a promote `--dry-run`).
+  It waits for the founder.
 
 **First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
