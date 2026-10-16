@@ -480,6 +480,16 @@ class TestMailDropUnit:
             ("2100 Olympic Dr #555", "2100 Olympic Dr", True),
             ("2100 Olympic Dr", "2100 Olympic Dr", True),
             ("2100 Olympic Dr Suite B", "2100 Olympic Dr # B", True),
+            # Round-2 R1: a building or floor is a locator, never a door, and must be ours too.
+            ("2100 Olympic Dr Bldg 3 Ste 300", "2100 Olympic Dr Bldg 3 Ste 120", False),
+            ("2100 Olympic Dr Bldg 3 Ste 300", "2100 Olympic Dr Bldg 3 Ste 300", True),
+            ("2100 Olympic Dr Bldg 3 Ste 300", "2100 Olympic Dr Bldg 5", False),
+            ("2100 Olympic Dr Bldg 3 Ste 300", "2100 Olympic Dr Ste 300", True),
+            ("2100 Olympic Dr Ste 300", "2100 Olympic Dr Bldg 3 Ste 300", False),
+            ("2100 Olympic Dr Fl 2 Ste 210", "2100 Olympic Dr Fl 2 Ste 240", False),
+            ("2100 Olympic Dr Building 3 Ste 300", "2100 Olympic Dr Bldg. 3 #300", True),
+            ("2100 Olympic Dr Floor 3 Ste 300", "2100 Olympic Dr Bldg 3 Ste 300", False),
+            ("2100 Olympic Dr Bldg #3", "2100 Olympic Dr Bldg 3 Ste 3", False),
         ],
     )
     def test_the_unit_decides(self, census: str, theirs: str, is_mail_drop: bool) -> None:

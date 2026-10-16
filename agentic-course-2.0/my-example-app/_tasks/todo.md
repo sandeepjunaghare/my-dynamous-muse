@@ -1839,3 +1839,25 @@ unit-aware (the owner's pick of three rules). M4, L1, L2 → issue #37.
   instead, so an owner-named business ties off-site only by two other words, and on its own site always.
 - **M1 nuance:** a Texas `RM 620` road would have read as a unit, so `RM` is not a designator.
 - **Didn't:** L5's enum order predates this PR and a test pins it, so the docstring was fixed, not the order.
+
+
+## PR #36 round-2 review fixes: R1 (2026-10-15)
+
+Review: `.claude/code-reviews/pr-36-review-round-2.md`. Scope chosen by the owner: R1 only, using the rule that
+locators must agree. R2, R3 and R4 → issue #37 (comment added).
+
+- [x] R1: `_units` splits doors (STE, SUITE, UNIT, APT, ROOM, PMB, `#`) from locators (BLDG/BUILDING, FL/FLOOR,
+  kept with their kind). `_our_unit` needs every locator the result names to be ours, and its door (if any) to
+  match ours. Locators are removed before doors are read, so `Bldg #3` is not door 3
+- [x] Tests: nine rows added to `TestMailDropUnit` (the six agreed rows, `Building`/`Bldg.` spelling, floor ≠
+  building, `Bldg #3`). Mutation check: with the fix reverted, 5 of the new rows fail
+- [x] Docs: the sourcing README and ticket T6 describe the building rule
+- [x] `/piv-validate`, commit, push
+
+### Review (2026-10-15)
+
+- **Worked:** asking for the rule before coding settled the one real design choice: what a result naming only
+  another building means. It now fails toward "not a mail drop", which matches the M1 direction (never drop a
+  real tenant because of a neighbour).
+- **Note:** the `Bldg 5` row passed under the old code as well (5 is not in {3, 300}). It pins the agreed rule
+  rather than proving the fix.

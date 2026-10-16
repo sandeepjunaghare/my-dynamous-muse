@@ -119,7 +119,8 @@ website-verified with no current `mail_drop` verdict: a website verifies the bus
 **A miss can leave our verdict** (website-verification OQ-1, OQ-2). `places_verdict` (`PlacesVerdict(kind,
 place_id, checked_address)`) records what sat at the census address when Places did not match. The kinds are
 `mail_drop` (a `post_office`, `business_center` or `shipping_service` at our unit: one at a suite the census
-street doesn't name is a neighbour's, PR #36 M1), then `no_listing` (only address types),
+street doesn't name is a neighbour's, PR #36 M1, and so is one in a building or on a floor it doesn't name,
+round-2 R1), then `no_listing` (only address types),
 then `other_business` (sharing **no** distinguishing word). It keeps the place ID and our kind, never a Places
 name, type or address, and it is the second field D13 lets cite Google Maps. Like the check, it is tied to the
 address it checked.

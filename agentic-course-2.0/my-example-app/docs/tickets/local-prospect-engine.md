@@ -249,7 +249,7 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
   `verify_business`, cited to the place it names. It is the second field D13 lets cite Google Maps, with its shape
   pinned beside `PlaceCheck`'s. `business_check` still means only "Places found it".
 - **OQ-2 → three kinds, from results at the census address only** (the matcher's own street-number and ZIP test).
-  The precedence is `mail_drop` (`post_office`, `business_center`, `shipping_service`, at our unit: PR #36 M1), then `no_listing` (types
+  The precedence is `mail_drop` (`post_office`, `business_center`, `shipping_service`, at our unit and building: PR #36 M1, round-2 R1), then `no_listing` (types
   all `street_address` / `premise` / `subpremise`), then `other_business` (shares **no** distinguishing word, so
   Spearpoint stays a plain miss). Nothing at the address is still just `places_not_found`. A current verdict is
   not paid for twice in a run.
