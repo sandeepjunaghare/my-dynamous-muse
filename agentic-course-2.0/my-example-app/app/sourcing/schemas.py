@@ -647,7 +647,9 @@ class CandidateFields(BaseModel):
 
         A mail drop or another business, recorded for *this* address: positive evidence against it,
         unlike ``no_listing`` or no verdict at all, which are only an absence of evidence. T9's
-        gate refuses on this, not on ``is_verified()`` (founder's decision, 2026-10-16).
+        gate refuses an *unverified* candidate on this (founder's decision, 2026-10-16); a verified
+        one is exempt, since a website verifies the business, not the door (website-verification
+        OQ-3).
         """
         return (
             self.has_current_verdict()

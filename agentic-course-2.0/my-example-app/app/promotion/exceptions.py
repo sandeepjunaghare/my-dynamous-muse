@@ -113,8 +113,9 @@ class UnprovenancedWriteError(HubSpotError):
     already in the portal, which carry no citable fields at all; a gate that refused them would
     refuse the ticket that exists to rescue them. :meth:`HubSpotClient.create_task` is therefore
     ungated by design, and a test asserts it. **Engine metadata** is the one other carve-out (T9,
-    OQ6-A): the closed ``RecordMeta`` — vertical, review status, route label, owner — merged after
-    the prospect fields pass, because those are facts about our process with nothing to cite.
+    OQ6-A): the closed ``RecordMeta`` — vertical, review status, route label, owner, verification —
+    merged after the prospect fields pass, because those are facts about our process with nothing to
+    cite.
 
     ``status_code`` is 500, not the base class's 502: nothing left the process, so calling this a
     bad *gateway* would point the reader upstream at exactly the wrong moment. The offending field

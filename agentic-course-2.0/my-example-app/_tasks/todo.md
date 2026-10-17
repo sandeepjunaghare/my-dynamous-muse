@@ -1923,3 +1923,24 @@ three choices behind it (asked 2026-10-16):
 - **Lesson:** a gate rewritten from "not verified" to "contradicted" needs the old gate's other half kept: the
   new check silently widened to verified candidates. The fresh-context review caught it; my own pass didn't.
   — PASS (full): 1,752 passed, 4 skipped, no drift
+
+### PR #38 round-2 review fixes (planned 2026-10-17)
+
+All four Lows describe the old "verification required" gate that this PR replaced, so they belong here.
+Comment and doc edits only; no behaviour changes.
+
+- [x] L1: `app/sourcing/README.md`, three places: `:58-59` (required fields no longer include
+  verification), `:116` (T9 uses `is_verified()` only to exempt; it refuses on `has_contradicting_verdict()`),
+  `:199` (an unverified candidate is not paid for and reaches review only with a census owner)
+- [x] L2: `app/sourcing/schemas.py:649-650`, the `has_contradicting_verdict` docstring: the gate refuses an
+  *unverified* candidate on it, and a verified one is exempt
+- [x] L3: add `verification` to the `RecordMeta` lists in `app/promotion/exceptions.py:116` and
+  `app/shared/provenance.py:186`
+- [x] L4: `docs/tickets/local-prospect-engine.md:424`, T9 "Required for promotion": a dated *Superseded* note
+  (`business_check` is out; verification no longer required)
+- [x] `/piv-validate`, then commit and push to `feat/unverified-to-review`
+  — PASS (full): ruff, mypy, pyright clean; 1,752 passed, 4 skipped; no alembic drift. No new tests: all four
+  are wording, and the suite staying green is the check
+- **Lesson:** a decision that changes a gate goes stale in every place that *describes* the gate, not only
+  the code: the sourcing README, a docstring in another slice, and the ticket that first set the rule. Grep for
+  the old rule's wording (`cannot be promoted`, `is_verified()`), not only the renamed symbol.
