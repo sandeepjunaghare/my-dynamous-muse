@@ -29,7 +29,7 @@ class TestPromotionRefusedError:
     def test_the_reasons_are_the_five_eligibility_checks_in_order(self) -> None:
         assert [reason.value for reason in RefusalReason] == [
             "disqualified",
-            "unverified",
+            "contradicted",
             "dead_score",
             "no_principal",
             "missing_fields",

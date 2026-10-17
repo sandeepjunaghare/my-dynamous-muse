@@ -56,7 +56,8 @@ candidate.fields.unprovenanced_fields()
 ```
 
 T9 enforces which fields promotion requires (decided 2026-10-11: `registry_id`, `legal_name`, `address`,
-`phone`, `owner`, and since website verification, `is_verified()` instead of `business_check`). This slice
+`phone`, `owner`; `business_check` left the set at website verification, and since 2026-10-16 verification
+is not required either: an unverified candidate is refused only on a contradicting verdict). This slice
 only reports which fields are missing.
 
 `registry_id` is stored twice, as the key column and as the cited `fields.registry_id`.
@@ -113,7 +114,8 @@ address matched (D13, option A). A permanently closed listing stores no check.
 **Two ways to be verified** (website-verification B1, B2). `CandidateFields.is_verified()` is Places at the
 current address **or** `has_own_domain_website()`: a `website` cited `web_lookup` (the free fetch, never the
 judgment node's `llm_inference` homepage) whose host, without `www.`, equals the email's own domain. The paid
-stages and T9 ask `is_verified()`. Routing asks `has_routable_address()`, which is Places-verified, or
+stages ask `is_verified()`. T9 refuses an unverified candidate only when `has_contradicting_verdict()` (a current
+`mail_drop` or `other_business`, founder 2026-10-16); a verified one is exempt. Routing asks `has_routable_address()`, which is Places-verified, or
 website-verified with no current `mail_drop` verdict: a website verifies the business, not the door.
 
 **A miss can leave our verdict** (website-verification OQ-1, OQ-2). `places_verdict` (`PlacesVerdict(kind,
@@ -196,8 +198,8 @@ candidate the judgment rules removed.
 - **Census first** (A2). `search_registry` already filled `owner` from `company_officer_1` wherever
   `principal_or_none` accepts it, cited `bulk_file`. Those candidates cost nothing here.
 - **The node only for verified, officer-less survivors.** A candidate is sent to `owner/` only when no rule
-  removed it, it `is_verified()` (Places or an own-domain homepage; an unverified candidate cannot be
-  promoted, OQ-5), and it still has no `owner`. A refused census officer (`"ACME LLC - JANE DOE"`) counts as absent, so the node runs for it.
+  removed it, it `is_verified()` (Places or an own-domain homepage; an unverified candidate is not paid
+  for, and reaches review only with a census owner, OQ-5 as amended 2026-10-16), and it still has no `owner`. A refused census officer (`"ACME LLC - JANE DOE"`) counts as absent, so the node runs for it.
 - **The gate** (`owner/judgment.py`, A10). A name is kept only when, in order: one was offered; it is
   cited; the URL parses; the node verifiably fetched that page (`ReadTracker`, fail-closed); it is not
   Google Maps; `Principal` accepts it as a person; the quote contains its last word; **the page is tied to

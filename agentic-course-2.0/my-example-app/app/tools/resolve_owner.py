@@ -6,8 +6,8 @@
 
 * no rule removed — free predicates, and the judgment rules ``classify_rollup`` just fired;
 * is verified — Places at its address, or a homepage on its own email domain
-  (``CandidateFields.is_verified``, website-verification B1). An unverified candidate cannot be
-  promoted (OQ-5), so it is not paid for;
+  (``CandidateFields.is_verified``, website-verification B1). An unverified candidate has no page
+  to read, so it is not paid for; it reaches review only with a census owner (2026-10-16);
 * still has no ``owner``.
 
 What the node names is kept only through its gate (A10), cited ``llm_inference`` to the page it

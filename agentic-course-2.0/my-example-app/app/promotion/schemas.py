@@ -110,6 +110,22 @@ class ReviewStatus(StrEnum):
     rejected = "rejected"
 
 
+class Verification(StrEnum):
+    """How the engine verified a promoted business: ``lpe_verification`` (decided 2026-10-16).
+
+    The values are the HubSpot option values, exactly. Ours, about our process: which check found
+    the business, not a claim about it. ``none`` reaches review because nothing contradicted the
+    address, not because anything confirmed it, so the founder can filter for it.
+    """
+
+    places = "places"
+    """Places found it at its current address."""
+    website = "website"
+    """It answers a homepage on its own email domain."""
+    none = "none"
+    """Neither check found it."""
+
+
 class PromotionStatus(StrEnum):
     """Where one business stands in the ``promotion`` ledger — a state machine, not a log.
 
@@ -312,16 +328,17 @@ class RecordMeta(BaseModel):
     """**The OQ6 carve-out:** engine metadata, written ungated beside the gated prospect fields.
 
     The write-gate exists so that no claim about a prospect reaches HubSpot without a citation.
-    These four are not claims about the prospect; they are facts about our process, and there is no
+    These five are not claims about the prospect; they are facts about our process, and there is no
     honest URL to cite for any of them:
 
     * ``lpe_vertical`` — which manifest the record was sourced under;
     * ``lpe_review_status`` — workflow state the founder moves (OQ2);
     * ``lpe_route_cluster`` — our routing's own label, such as ``A · 75238``;
+    * ``lpe_verification`` — which of our checks found the business (2026-10-16);
     * ``hubspot_owner_id`` — who works the record.
 
     Citing them anyway would attach a citation that does not support the value, which is the small
-    lie the primitive exists to prevent. **The set is closed**: a typed model of exactly four
+    lie the primitive exists to prevent. **The set is closed**: a typed model of exactly five
     fields, not a ``dict[str, str]``, so it cannot become a side door for a prospect field, and
     widening it is a visible diff that a test pins. The client renders the prospect fields through
     the gate first and merges these after; a key claimed by both halves is refused. Same reasoning
@@ -333,13 +350,14 @@ class RecordMeta(BaseModel):
     vertical: str
     review_status: ReviewStatus | None = None
     route_cluster: str | None = None
+    verification: Verification | None = None
     owner_id: str | None = None
 
     def to_properties(self, object_type: ObjectType) -> dict[str, str]:
         """Render to HubSpot property names for one object type; absent values are omitted.
 
-        Review status and route exist on COMPANY only. Sending either on a contact would be a 400,
-        so they are never rendered there.
+        Review status, route and verification exist on COMPANY only. Sending any of them on a
+        contact would be a 400, so they are never rendered there.
         """
         properties = {"lpe_vertical": self.vertical}
         if object_type is ObjectType.companies:
@@ -347,6 +365,8 @@ class RecordMeta(BaseModel):
                 properties["lpe_review_status"] = self.review_status.value
             if self.route_cluster is not None:
                 properties["lpe_route_cluster"] = self.route_cluster
+            if self.verification is not None:
+                properties["lpe_verification"] = self.verification.value
         if self.owner_id is not None:
             properties["hubspot_owner_id"] = self.owner_id
         return properties
@@ -538,7 +558,7 @@ PROMOTE_COUNTS: tuple[str, ...] = (
     "created",
     "already_promoted",
     "refused_disqualified",
-    "refused_unverified",
+    "refused_contradicted",
     "refused_dead_score",
     "refused_no_principal",
     "refused_missing_fields",
@@ -549,8 +569,13 @@ PROMOTE_COUNTS: tuple[str, ...] = (
     "recovery_pending",
     "failed",
     "name_ambiguous",
+    "promoted_unverified",
 )
-"""Every key a promote report carries, every time — zeros included, so a missing key is a bug."""
+"""Every key a promote report carries, every time — zeros included, so a missing key is a bug.
+
+``promoted_unverified`` is the part of ``created`` and ``recovered`` that went to review with
+``lpe_verification = none``: the number the Friday report shows beside them, not a third outcome.
+"""
 
 REVIEW_COUNTS: tuple[str, ...] = ("read", "enrolled", "rejected", "withdrawn", "waiting", "failed")
 """Every key a review sync report carries, every time."""
@@ -571,6 +596,7 @@ class PromotedProspect(BaseModel):
     first_name: str | None
     last_name: str
     name_ambiguous: bool
+    verification: Verification
     recovered: bool = False
     """Finished by the recovery of an earlier, interrupted pass rather than created afresh."""
 

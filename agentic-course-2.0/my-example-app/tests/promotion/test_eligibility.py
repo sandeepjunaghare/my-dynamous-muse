@@ -4,9 +4,11 @@ import pytest
 
 from app.promotion.eligibility import REQUIRED_FIELDS, check_promotable
 from app.promotion.exceptions import PromotionRefusedError, RefusalReason
-from app.sourcing.schemas import CandidateFields
+from app.sourcing.schemas import CandidateFields, MissKind, PostalAddress
 from tests.promotion.builders import a_promotable, a_score, as_response
-from tests.sourcing.builders import website_verified
+from tests.sourcing.builders import a_verdict, website_verified
+
+ELSEWHERE = PostalAddress(street="900 E Main St", city="Allen", state="TX", postal_code="75002")
 
 
 def _refusal(fields: CandidateFields, *, suppressed: bool = False) -> PromotionRefusedError:
@@ -69,31 +71,79 @@ def test_no_owner_alone_is_no_principal() -> None:
     assert refusal.fields == ("owner",)
 
 
-def test_neither_places_nor_website_verified_is_unverified() -> None:
-    """Owned is not verified: a business neither check found is not promoted (B6)."""
-    refusal = _refusal(_without(a_promotable(), "business_check"))
+def _unverified(fields: CandidateFields) -> CandidateFields:
+    return _without(fields, "business_check")
 
-    assert refusal.reason is RefusalReason.unverified
+
+def test_neither_places_nor_website_verified_is_promotable() -> None:
+    """Founder's decision, 2026-10-16: unverified reaches review when nothing contradicts it."""
+    fields = _unverified(a_promotable())
+    assert not fields.is_verified()
+    check_promotable(as_response(fields), suppressed=False)
+
+
+def test_a_no_listing_verdict_is_promotable() -> None:
+    """``no_listing`` says nothing is listed there, not that the business is somewhere else."""
+    fields = _unverified(a_promotable()).model_copy(
+        update={"places_verdict": a_verdict(MissKind.no_listing)}
+    )
+    check_promotable(as_response(fields), suppressed=False)
+
+
+@pytest.mark.parametrize("kind", [MissKind.mail_drop, MissKind.other_business])
+def test_a_contradicting_verdict_is_refused(kind: MissKind) -> None:
+    fields = _unverified(a_promotable()).model_copy(update={"places_verdict": a_verdict(kind)})
+    refusal = _refusal(fields)
+
+    assert refusal.reason is RefusalReason.contradicted
     assert refusal.fields == ()
 
 
-def test_unverified_is_checked_before_the_owner() -> None:
-    """An unverified candidate never reaches the owner node; ``no_principal`` would hide why."""
-    refusal = _refusal(_without(a_promotable(owner=None), "business_check"))
+def test_a_stale_contradicting_verdict_does_not_refuse() -> None:
+    """A verdict on an address the business has since left says nothing about the new one."""
+    fields = _unverified(a_promotable()).model_copy(
+        update={"places_verdict": a_verdict(MissKind.mail_drop, address=ELSEWHERE)}
+    )
+    check_promotable(as_response(fields), suppressed=False)
 
-    assert refusal.reason is RefusalReason.unverified
+
+def test_a_contradicted_candidate_is_counted_before_its_owner() -> None:
+    fields = _unverified(a_promotable(owner=None)).model_copy(
+        update={"places_verdict": a_verdict(MissKind.mail_drop)}
+    )
+    refusal = _refusal(fields)
+
+    assert refusal.reason is RefusalReason.contradicted
     assert refusal.fields == ("owner",)
 
 
-def test_a_suppressed_unverified_candidate_is_disqualified() -> None:
-    refusal = _refusal(_without(a_promotable(), "business_check"), suppressed=True)
+def test_an_unverified_candidate_without_a_census_owner_is_no_principal() -> None:
+    """It never reaches the owner node, so the census owner is the only one it can have."""
+    assert _refusal(_unverified(a_promotable(owner=None))).reason is RefusalReason.no_principal
 
-    assert refusal.reason is RefusalReason.disqualified
+
+def test_a_suppressed_contradicted_candidate_is_disqualified() -> None:
+    fields = _unverified(a_promotable()).model_copy(
+        update={"places_verdict": a_verdict(MissKind.mail_drop)}
+    )
+    assert _refusal(fields, suppressed=True).reason is RefusalReason.disqualified
 
 
 def test_a_website_verified_owned_candidate_is_promotable() -> None:
     """Website-verification B1: a homepage on its own email domain verifies it."""
     fields = website_verified(_without(a_promotable(), "business_check"))
+    check_promotable(as_response(fields), suppressed=False)
+
+
+@pytest.mark.parametrize("kind", [MissKind.mail_drop, MissKind.other_business])
+def test_a_website_verified_candidate_is_not_refused_for_a_contradicting_verdict(
+    kind: MissKind,
+) -> None:
+    """Its homepage verifies the business, not the door (OQ-3); routing decides the door."""
+    fields = website_verified(_without(a_promotable(), "business_check")).model_copy(
+        update={"places_verdict": a_verdict(kind)}
+    )
+    assert fields.has_contradicting_verdict()
     check_promotable(as_response(fields), suppressed=False)
 
 

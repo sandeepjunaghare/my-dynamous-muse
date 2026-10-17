@@ -1862,3 +1862,85 @@ locators must agree. R2, R3 and R4 → issue #37 (comment added).
   real tenant because of a neighbour).
 - **Note:** the `Bldg 5` row passed under the old code as well (5 is not in {3, 300}). It pins the agreed rule
   rather than proving the fix.
+
+## Unverified survivors reach review (planned 2026-10-16)
+
+Founder's decision on the open question from the T6 Level 4 paid batch (run `f412e485`): a survivor with a census
+owner but no Places match and no own-domain homepage goes to review instead of being refused `unverified`. The
+three choices behind it (asked 2026-10-16):
+- **Scope:** refuse only when a **current** Places verdict contradicts the address (`mail_drop` or
+  `other_business`). `no_listing`, a plain miss with no verdict, and a candidate never checked all reach review
+  if every required field is cited. A verdict is stale once the address changes (`has_current_verdict`), so it
+  no longer refuses.
+- **Judgment:** unchanged. `classify_rollup` and `resolve_owner` still skip unverified candidates, so these reach
+  review unscored, owner from the census only. The founder catches rollups at review.
+- **Flag:** a new company property, `lpe_verification` (`places` / `website` / `none`), added to `RecordMeta`.
+  That set is closed on purpose, so this is a deliberate widening of it, pinned by a test.
+- Unchanged: routing (unverified addresses are never geocoded, so `lpe_route_cluster` stays empty; the cadence
+  is call/voicemail/email, so no route is needed), `REQUIRED_FIELDS`, and the write-gate.
+
+- [x] `app/sourcing/schemas.py`: `CandidateFields.has_contradicting_verdict()`, which is true for a current
+  `mail_drop` or `other_business`
+- [x] `app/promotion/exceptions.py` + `eligibility.py`: replace `RefusalReason.unverified` with `contradicted`,
+  using the same ordering slot (after `disqualified`). Docstrings: an unverified candidate without a census
+  owner is now honestly `no_principal`
+- [x] `app/promotion/schemas.py`: `refused_unverified` → `refused_contradicted` in `PROMOTE_COUNTS`, plus a
+  count of `promoted_unverified` so the Friday report can show how many records reached review unverified;
+  `RecordMeta.verification` (a `Verification` StrEnum), rendered on COMPANY only
+- [x] `app/promotion/properties.py`: provision `lpe_verification` (an enumeration, the same pattern as
+  `lpe_review_status`, idempotent)
+- [x] `app/promotion/mapping.py`: work out `verification` from the fields (Places > website > none). Also on
+  `CompanyWrite`, so the report reads it without an optional; `PromotedProspect.verification` and a CLI column
+- [x] Tests: eligibility matrix (no_listing / no verdict / unchecked → promotable; mail_drop / other_business →
+  `contradicted`; stale verdict → promotable; unverified without an owner → `no_principal`), the RecordMeta
+  pin, the property provisioning, mapping, the promote counts, and updates to the E2E case
+- [x] Docs: ticket T6 (the decision), T10's report counters, the promotion README, the CLAUDE.md command
+  blurb if its wording now misleads
+- [x] `/piv-validate`, then a promote `--dry-run` over `f412e485` (read-only) and a check that the 2 unverified
+  now show as promotable
+  — PASS (full): 1,747 passed, 4 skipped (the paid live evals), no alembic drift. Dry run over `f412e485`:
+  SYMZI TECH SOLUTIONS and ACROSS THE LANDS would be created, `verified none`, no route, 0 duplicates; 8
+  `refused_disqualified`, `promoted_unverified` 2. No HubSpot or Supabase writes
+
+### Review (2026-10-16)
+
+- **Worked:** asking the three questions before planning. "Unverified" covered four different states, and only
+  two of them are evidence against an address. The scope question is what split them.
+- **Worked:** carrying `verification` on `CompanyWrite` as well as in `RecordMeta`. The report reads it without
+  an optional field, and no `or none` fallback hides a missing value.
+- **Note:** the test database for this project is `lpe-test-pg` on **5434**, not 5433 (5433 is Langfuse's
+  Postgres; the password was refused, so nothing touched it). `/piv-validate`'s example port is a suggestion only.
+- **Open:** the first real promote provisions `lpe_verification` in the portal, a permanent property name. The
+  dry run left `ACROSS THE LANDS` with an uncertain name split (first=JORGE, last=ARMANDO ROBLES) to check at review.
+
+### PR #38 review fixes (2026-10-17)
+
+- [x] H1: contradiction refuses only an unverified candidate (`not is_verified() and has_contradicting_verdict()`);
+  a website-verified candidate with a mail-drop or other-business verdict promotes as it did before the PR
+- [x] L1–L2: stale property and placement counts (seven / ten) in `properties.py`, README, test docstring
+- [x] L3–L4: service tests for a website-verified promote, an unverified recovery and an unverified dry run
+- [ ] L5 (CLI wording `verified none`): skipped, optional polish
+- **Lesson:** a gate rewritten from "not verified" to "contradicted" needs the old gate's other half kept: the
+  new check silently widened to verified candidates. The fresh-context review caught it; my own pass didn't.
+  — PASS (full): 1,752 passed, 4 skipped, no drift
+
+### PR #38 round-2 review fixes (planned 2026-10-17)
+
+All four Lows describe the old "verification required" gate that this PR replaced, so they belong here.
+Comment and doc edits only; no behaviour changes.
+
+- [x] L1: `app/sourcing/README.md`, three places: `:58-59` (required fields no longer include
+  verification), `:116` (T9 uses `is_verified()` only to exempt; it refuses on `has_contradicting_verdict()`),
+  `:199` (an unverified candidate is not paid for and reaches review only with a census owner)
+- [x] L2: `app/sourcing/schemas.py:649-650`, the `has_contradicting_verdict` docstring: the gate refuses an
+  *unverified* candidate on it, and a verified one is exempt
+- [x] L3: add `verification` to the `RecordMeta` lists in `app/promotion/exceptions.py:116` and
+  `app/shared/provenance.py:186`
+- [x] L4: `docs/tickets/local-prospect-engine.md:424`, T9 "Required for promotion": a dated *Superseded* note
+  (`business_check` is out; verification no longer required)
+- [x] `/piv-validate`, then commit and push to `feat/unverified-to-review`
+  — PASS (full): ruff, mypy, pyright clean; 1,752 passed, 4 skipped; no alembic drift. No new tests: all four
+  are wording, and the suite staying green is the check
+- **Lesson:** a decision that changes a gate goes stale in every place that *describes* the gate, not only
+  the code: the sourcing README, a docstring in another slice, and the ticket that first set the rule. Grep for
+  the old rule's wording (`cannot be promoted`, `is_verified()`), not only the renamed symbol.

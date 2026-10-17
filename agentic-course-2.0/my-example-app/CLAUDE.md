@@ -138,9 +138,10 @@ source or `GOOGLE_PLACES_API_KEY`, `verify_business` fails the run and the batch
 
 Promotion is run by hand until T10 calls it after the stages (T9): `uv run lpe promotion promote --run <id> [--dry-run]`
 — completed or degraded runs only; creates each qualified, fully cited candidate as a Company + Contact at
-`lpe_review_status = pending_review` (unscored is allowed, a cited-dead score is not), and provisions the custom
-properties first. The founder accepts or rejects in HubSpot; `uv run lpe promotion sync [--dry-run]` reads the
-decisions back and enrols accepted contacts in the cadence. Run it daily in the launchd job, before `lpe cadence sync`.
+`lpe_review_status = pending_review` (unscored or unverified is allowed, flagged `lpe_verification = none`;
+a cited-dead score or a contradicted address is not), and provisions the custom properties first. The
+founder accepts or rejects in HubSpot; `uv run lpe promotion sync [--dry-run]` reads the decisions back and
+enrols accepted contacts in the cadence. Run it daily in the launchd job, before `lpe cadence sync`.
 
 Database-backed tests need a throwaway Postgres and skip without one:
 `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·

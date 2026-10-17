@@ -1,9 +1,11 @@
-"""Idempotent provisioning of the six custom properties that make a record reviewable.
+"""Idempotent provisioning of the seven custom properties that make a record reviewable.
 
 Review happens in HubSpot — there is no frontend and no second login — so a record that cannot
 show where it came from cannot be reviewed. None of T3's five existed in portal 244766495 when
 this was written, confirmed live on 2026-09-27. T9 adds the sixth, ``lpe_review_status`` (OQ2-A):
 no "pending review" stage existed anywhere in the portal, and ``hs_lead_status`` is the founders'.
+The seventh, ``lpe_verification`` (2026-10-16), says which check found the business, now that an
+unverified one can reach review.
 
 Provisioning is **read-then-create**, never a PATCH: a human may have edited a label, and
 overwriting that silently would be the portal editing us back. A property whose ``type`` no longer
@@ -22,6 +24,7 @@ from app.promotion.schemas import (
     PropertyGroupDefinition,
     PropertyOption,
     ReviewStatus,
+    Verification,
 )
 
 logger = get_logger(__name__)
@@ -114,9 +117,33 @@ REVIEW_STATUS = PropertyDefinition(
     ],
 )
 
-# Scoring, routing and review describe a business, so they land on COMPANY only. Provenance
-# describes a record, and E18 is a *contact*-quality finding, so the three provenance fields go on
-# both.
+_VERIFICATION_LABELS = {
+    Verification.places: "Google Places",
+    Verification.website: "Own-domain website",
+    Verification.none: "Not verified",
+}
+
+# An enumeration for the same reason as the review status: a closed set of our own checks, which
+# the founder filters on at review.
+VERIFICATION = PropertyDefinition(
+    name="lpe_verification",
+    label="Verification",
+    type="enumeration",
+    field_type="select",
+    group_name=LPE_GROUP.name,
+    description=(
+        'Which engine check found this business. "Not verified" means nothing contradicted the '
+        "address, not that anything confirmed it: check it before accepting."
+    ),
+    options=[
+        PropertyOption(label=_VERIFICATION_LABELS[kind], value=kind.value, display_order=index)
+        for index, kind in enumerate(Verification)
+    ],
+)
+
+# Scoring, routing, verification and review describe a business, so they land on COMPANY only.
+# Provenance describes a record, and E18 is a *contact*-quality finding, so the three provenance
+# fields go on both.
 PROVISIONING_PLAN: tuple[tuple[ObjectType, PropertyDefinition], ...] = (
     (ObjectType.companies, SOURCE_URL),
     (ObjectType.companies, SOURCED_AT),
@@ -124,6 +151,7 @@ PROVISIONING_PLAN: tuple[tuple[ObjectType, PropertyDefinition], ...] = (
     (ObjectType.companies, PRIORITY_SCORE),
     (ObjectType.companies, ROUTE_CLUSTER),
     (ObjectType.companies, REVIEW_STATUS),
+    (ObjectType.companies, VERIFICATION),
     (ObjectType.contacts, SOURCE_URL),
     (ObjectType.contacts, SOURCED_AT),
     (ObjectType.contacts, VERTICAL),
@@ -161,10 +189,10 @@ async def ensure_property_group(client: HubSpotClient) -> None:
 
 
 async def ensure_properties(client: HubSpotClient) -> None:
-    """Make the six properties exist on the right object types, creating only what is missing.
+    """Make the seven properties exist on the right object types, creating only what is missing.
 
     Safe to run on every deploy: a second pass issues zero writes and logs
-    ``promotion.hubspot.property_present`` for each of the nine placements.
+    ``promotion.hubspot.property_present`` for each of the ten placements.
 
     Event names carry exactly one underscore in their last segment — the
     ``domain.component.action_state`` convention, enforced by ``tests/core/test_logging.py``.

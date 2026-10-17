@@ -87,6 +87,7 @@ from app.promotion.schemas import (
     SearchFilter,
     SearchFilterGroup,
     SearchRequest,
+    Verification,
 )
 from app.qualification.service import QualificationService
 from app.routing.service import RoutingService
@@ -173,6 +174,11 @@ class _Tally:
     duplicates: list[DuplicateProspect] = field(default_factory=list[DuplicateProspect])
     failures: list[PromotionFailure] = field(default_factory=list[PromotionFailure])
     missing: dict[str, int] = field(default_factory=dict[str, int])
+
+    def add_created(self, prospect: PromotedProspect) -> None:
+        self.created.append(prospect)
+        if prospect.verification is Verification.none:
+            self.counts["promoted_unverified"] += 1
 
     def fail(self, registry_id: str, message: str) -> None:
         self.counts["failed"] += 1
@@ -395,7 +401,7 @@ class PromotionService:
         for key in keys:
             seen_keys.setdefault(key, registry_id)
         tally.counts["created"] += 1
-        tally.created.append(self._prospect(writes, company_id=None, contact_id=None))
+        tally.add_created(self._prospect(writes, company_id=None, contact_id=None))
 
     async def _dedupe_then_create(
         self,
@@ -501,7 +507,7 @@ class PromotionService:
         if moved is None:
             raise AssertionError(f"ledger row {row.id} left pending_create while being promoted")
         tally.counts["recovered" if recovered else "created"] += 1
-        tally.created.append(
+        tally.add_created(
             self._prospect(
                 writes, company_id=company_id, contact_id=contact_id, recovered=recovered
             )
@@ -673,6 +679,7 @@ class PromotionService:
             first_name=name.first,
             last_name=name.last,
             name_ambiguous=name.ambiguous,
+            verification=writes.company.verification,
             recovered=recovered,
         )
 

@@ -45,6 +45,7 @@ def _prospect(**overrides: str | bool | None) -> PromotedProspect:
         "first_name": "DAVE",
         "last_name": "MUSGRAVES",
         "name_ambiguous": False,
+        "verification": "places",
     }
     values.update(overrides)
     return PromotedProspect.model_validate(values)
@@ -95,7 +96,7 @@ class TestPromote:
         assert lines[0] == f"run {RUN}  freight  promote"
         assert lines[1] == (
             f"created  AEROWAY TRANSPORTATION  company {COMPANY_URL}  contact {CONTACT_URL}"
-            "  route A · 75094"
+            "  route A · 75094  verified places"
         )
         assert "  created                            1" in lines
 
@@ -140,7 +141,7 @@ class TestPromote:
 
         lines = capsys.readouterr().out.splitlines()
         assert lines[0] == f"run {RUN}  freight  promote (dry run)"
-        assert lines[1] == "would create  AEROWAY TRANSPORTATION  route A · 75094"
+        assert lines[1] == "would create  AEROWAY TRANSPORTATION  route A · 75094  verified places"
 
     def test_the_missing_field_tally_is_printed(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

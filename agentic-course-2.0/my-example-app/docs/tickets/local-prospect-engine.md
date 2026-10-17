@@ -266,9 +266,10 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
   verdict is for the current address.
 - **T9:** `business_check` has left `REQUIRED_FIELDS`. A new `RefusalReason.unverified` is checked after
   `disqualified` and before the owner, so an unverified candidate is no longer miscounted `no_principal`.
+  *Superseded 2026-10-16, see below:* `unverified` no longer refuses; `contradicted` does.
 - **New counts for T10:** `places_mail_drop`, `places_no_listing` and `places_other_business` (each also counted
   in `places_not_found`), `verify_website_only`, `routing_mail_drop`, and the promote report's
-  `refused_unverified`. `judgment_unverified_skipped` and `owner_unverified_skipped` keep their names and now mean
+  `refused_unverified` (since 2026-10-16: `refused_contradicted` and `promoted_unverified`). `judgment_unverified_skipped` and `owner_unverified_skipped` keep their names and now mean
   "neither Places- nor website-verified".
 - **Level 4 read-only rerun, done 2026-10-16** (founder's go-ahead; 5 Text Search calls, ~$0, nothing stored).
   Run `9ca51e17`'s five survivors: DBT `other_business` (a manufacturer in its suite), Isla `no_listing`, Ark
@@ -286,6 +287,16 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
   small runs, not a rate, but it bears on the batch size and the Friday report. Whether a survivor with a census
   owner but no listing and no business domain should reach review, rather than be refused as `unverified`, is
   the founder's call.
+- **Decided 2026-10-16 (founder): unverified survivors reach review.** T9 now refuses only a **contradicted**
+  address: an unverified candidate with a current Places verdict of `mail_drop` or `other_business`
+  (`has_contradicting_verdict()`, `RefusalReason.contradicted`). A website-verified candidate is never refused
+  for one — its homepage verifies the business, not the door (OQ-3), as before (PR #38 review H1).
+  `no_listing`, a plain miss with no verdict, and a candidate never checked are promotable when every
+  required field is cited. The paid judgment and owner node still skip them, so they
+  arrive unscored, with a census owner only (one without one is `no_principal`), and unrouted. A new company
+  property, `lpe_verification` (`places` · `website` · `none`), widens `RecordMeta` to five fields so the founder
+  can filter them at review. Promote reports `refused_contradicted` in place of `refused_unverified`, and
+  `promoted_unverified` as the part of created + recovered flagged `none`.
 
 **First live batch with Places (run `cf648298`, 2026-10-12; freight v9 active).** Of 10 batched, 4 fell to the free
 `broker_authority_not_active` rule, 6 were checked, and 1 was verified. A read-only rerun of those 6 searches (results
@@ -410,7 +421,7 @@ hand today") · PRD §6 step 5.
 - The write-gate, enforced and typed: any required field lacking provenance → refused with a typed exception and a logged event. **No partial writes.** The gate covers prospect field writes only — task creation is T11's and is not gated.
 - Create Company + Contact at a **`pending review`** stage with the custom properties from T3 — review happens in HubSpot; there is no frontend and no second login.
 - `promotion` ledger: candidate → the HubSpot company/contact ids it became. Idempotent: re-running promotes nothing twice.
-- **Required for promotion** *(decided 2026-10-11)*: `registry_id`, `legal_name`, `address`, `phone`, `business_check`, `owner`. The cadence is keyed on a HubSpot contact, so a candidate without a cited owner cannot be worked: it stays in the pool and is counted (no principal), never promoted as an orphan Company. `business_check` is required because owned ≠ verified. `owner.name` is stored as the source stated it; splitting it into `firstname`/`lastname` is T9's, at write time.
+- **Required for promotion** *(decided 2026-10-11)*: `registry_id`, `legal_name`, `address`, `phone`, `business_check`, `owner`. The cadence is keyed on a HubSpot contact, so a candidate without a cited owner cannot be worked: it stays in the pool and is counted (no principal), never promoted as an orphan Company. `business_check` is required because owned ≠ verified. `owner.name` is stored as the source stated it; splitting it into `firstname`/`lastname` is T9's, at write time. *Superseded in part:* `business_check` left the set at T6 (website verification, PR #36), and since 2026-10-16 verification is not required at all. An unverified candidate is refused (`contradicted`) only on a current `mail_drop` or `other_business` verdict, and otherwise reaches review flagged `lpe_verification = none` (see T6).
 - **Hands off to T11** for the cadence: promotion's job ends when the record exists and the first touch has been requested.
 - **Routes carry only qualified candidates** *(handed over from T8, 2026-10-10)*. T8 routes every candidate with a verified address and does not read T7's `disqualification`, so `route_assignment` holds disqualified doors too. Whatever promotion attaches a route to, or shows a founder, reads only qualified candidates' rows. Filtering `route_assignment` by qualification is not enough on its own, because the remaining routes are then lopsided; T10 decides whether to re-route instead.
 - **Adopted contacts (T13) already exist in HubSpot and carry no provenance.** The first field write to one of them cites `retrieval_method = "manual_hubspot_entry"`, source = the HubSpot record URL, `retrieved_at` = the record's create date — honest, not an exemption *(moved here from T13, 2026-10-10)*.
@@ -519,8 +530,9 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
   changes after stage 5 stays here.
 - **Website verification** *(T6 follow-up, 2026-10-15)*. The Friday report should show how a run was verified, not
   only how many: `places_verified`, `verify_website_only`, `places_{mail_drop,no_listing,other_business}`,
-  `routing_mail_drop`, and promotion's `refused_unverified`. T9's gate no longer requires `business_check`: it
-  refuses `unverified` instead (Places or an own-domain homepage).
+  `routing_mail_drop`, and promotion's `refused_contradicted` and `promoted_unverified`. T9's gate no longer
+  requires verification (founder, 2026-10-16): it refuses a contradicted address, and an unverified record
+  reaches review flagged `lpe_verification = none` — the report should say how many did.
 - **Before the first real run (Spike 1 checkpoint, 2026-10-09):** read M5 on the T13-adopted prospects. If touches still are not getting done with the machine running, fix that before the run adds volume. This is a human check, not a code gate.
 
 **Per-ticket context:** PRD §6 steps 1–8 · M7 · architecture → *Scheduling: boring on purpose*, *Cost* ·
