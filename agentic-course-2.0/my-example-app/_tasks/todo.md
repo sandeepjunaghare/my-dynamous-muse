@@ -1944,3 +1944,31 @@ Comment and doc edits only; no behaviour changes.
 - **Lesson:** a decision that changes a gate goes stale in every place that *describes* the gate, not only
   the code: the sourcing README, a docstring in another slice, and the ticket that first set the rule. Grep for
   the old rule's wording (`cannot be promoted`, `is_verified()`), not only the renamed symbol.
+
+## T10: the weekly run, `POST /runs`, the Friday report (planned 2026-10-17)
+
+Plan: `.claude/plans/t10-weekly-run.md`. Founder's decisions, asked before planning (2026-10-17):
+- **Friday numbers from note prefixes.** A read-only portal check found every real touch is a free-text NOTE
+  (calls and meetings are sample data). Notes starting `Door knock` / `Owner conversation` /
+  `Assessment booked` count toward those numbers. Any other note is shown as an unclassified touch. Paid
+  sold renders `not configured` (GATE-A).
+- **`POST /runs` returns 202 and runs in the background.** `GET /runs/{id}` shows progress, and
+  `lpe runs start` runs the same service in-process for launchd.
+- **Real promotion by default**, with `dry_run` on the route and the CLI.
+
+- [ ] Task 1: settings `WEEKLY_RUN_STALE_HOURS` (2) and `WEEKLY_RUN_TARGET_MINUTES` (60), plus `.env.example`
+- [ ] Task 2: HubSpot search `GTE`/`LT` and `after` paging
+- [ ] Task 3: `configured_stages` / `preflight` move to `pipeline.py`; `SourcingPipeline.run(on_started=)`
+- [ ] Task 4: `WeeklyRun` model, `0011_weekly_run`, `env.py`
+- [ ] Task 5: `app/runs/schemas.py` and `exceptions.py`
+- [ ] Task 6: `WeeklyRunRepository`
+- [ ] Task 7: `ReviewTally` and `PromotionService.review_tally` (read-only)
+- [ ] Task 8: `WeeklyRunService` (start / execute / run / get)
+- [ ] Task 9: `touches.py` (`classify_note`, `week_window`, `epoch_ms`)
+- [ ] Task 10: `WeeklyReportService`
+- [ ] Task 11: routes and `app/main.py`
+- [ ] Task 12: `lpe runs start | show | report` and `app/cli.py`
+- [ ] Task 13: tests (`tests/runs/`, plus pipeline and client additions)
+- [ ] Task 14: docs (slice README, CLAUDE.md incl. the test-DB port 5434, HubSpot reference, ticket T10)
+- [ ] `/piv-validate`, then Level 4 steps 1-4 (dry). Steps 5-8 (M5 check, first real run, launchd, logging
+  convention) are the human's
