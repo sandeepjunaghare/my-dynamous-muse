@@ -33,7 +33,7 @@ in-run ledger dedupe (kept in memory), no ledger row, no HubSpot write, no prope
 Rows a real pass would resume are counted ``recovery_pending`` instead.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
@@ -84,6 +84,7 @@ from app.promotion.schemas import (
     ReviewOutcome,
     ReviewStatus,
     ReviewSyncReport,
+    ReviewTally,
     SearchFilter,
     SearchFilterGroup,
     SearchRequest,
@@ -266,6 +267,26 @@ class PromotionService:
             "promotion.service.pass_finished", run_id=str(run_id), dry_run=dry_run, **tally.counts
         )
         return report
+
+    async def review_tally(self, run_ids: Collection[UUID]) -> dict[UUID, ReviewTally]:
+        """The founder's decisions on what each run created (M6), from the ledger alone.
+
+        Read-only: no HubSpot call and no commit, so it reflects the last ``lpe promotion sync``.
+        A row counts under the run that claimed it; a later run's ``already_promoted`` hit on the
+        same business does not move it. Every run asked about gets a tally, zeros included.
+        """
+        by_run = await self._repository.status_counts_by_run(run_ids)
+        tallies: dict[UUID, ReviewTally] = {}
+        for run_id in run_ids:
+            statuses = by_run.get(run_id, {})
+            tallies[run_id] = ReviewTally(
+                pending=statuses.get(PromotionStatus.pending_review.value, 0),
+                accepted=statuses.get(PromotionStatus.enrolling.value, 0)
+                + statuses.get(PromotionStatus.enrolled.value, 0),
+                rejected=statuses.get(PromotionStatus.rejected.value, 0),
+                withdrawn=statuses.get(PromotionStatus.withdrawn.value, 0),
+            )
+        return tallies
 
     async def _route_labels(self, run_id: UUID) -> dict[UUID, str]:
         assignments = await RoutingService(self._session).list_assignments(run_id)

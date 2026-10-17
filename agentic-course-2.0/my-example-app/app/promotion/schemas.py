@@ -51,12 +51,15 @@ class SearchOperator(StrEnum):
     """Search operators the MVP uses.
 
     Members as callers need them, deliberately: ``eq`` for dedupe, which matches exact values on
-    default-searchable properties, and ``neq`` for adoption's open-task listing. An operator we do
-    not use is an operator nobody has tested.
+    default-searchable properties, ``neq`` for adoption's open-task listing, and ``gte``/``lt`` for
+    the Friday report's week window on ``hs_timestamp`` (epoch milliseconds). An operator we do not
+    use is an operator nobody has tested.
     """
 
     eq = "EQ"
     neq = "NEQ"
+    gte = "GTE"
+    lt = "LT"
 
 
 class TaskType(StrEnum):
@@ -246,7 +249,8 @@ class SearchRequest(BaseModel):
     """A CRM search body.
 
     HubSpot caps this at 5 filter groups, 6 filters per group, 18 filters total and a ``limit`` of
-    200. Nothing here approaches those, so they are documented rather than validated.
+    200. Nothing here approaches those, so they are documented rather than validated. A query also
+    stops at 10,000 results however it is paged.
     """
 
     model_config = _REQUEST_CONFIG
@@ -254,6 +258,25 @@ class SearchRequest(BaseModel):
     filter_groups: list[SearchFilterGroup] = Field(serialization_alias="filterGroups")
     properties: list[str]
     limit: int = 10
+    after: str | None = None
+    """The cursor from the previous page's ``paging.next.after``. ``None`` is the first page, and is
+    left out of the body entirely (``exclude_none``)."""
+
+
+class PagingNext(BaseModel):
+    """The cursor to the next page."""
+
+    model_config = _RESPONSE_CONFIG
+
+    after: str | None = None
+
+
+class Paging(BaseModel):
+    """HubSpot's paging envelope."""
+
+    model_config = _RESPONSE_CONFIG
+
+    next: PagingNext | None = None
 
 
 class SearchResponse(BaseModel):
@@ -263,6 +286,14 @@ class SearchResponse(BaseModel):
 
     total: int = 0
     results: list[HubSpotObject] = Field(default_factory=list[HubSpotObject])
+    paging: Paging | None = None
+
+    @property
+    def next_after(self) -> str | None:
+        """The cursor for the next page, or ``None`` on the last one."""
+        if self.paging is None or self.paging.next is None:
+            return None
+        return self.paging.next.after
 
 
 class HubSpotErrorBody(BaseModel):
@@ -517,22 +548,6 @@ class AssociatedObject(BaseModel):
         return self.to_object_id if self.to_object_id is not None else self.legacy_id
 
 
-class PagingNext(BaseModel):
-    """The cursor to the next page."""
-
-    model_config = _RESPONSE_CONFIG
-
-    after: str | None = None
-
-
-class Paging(BaseModel):
-    """HubSpot's paging envelope."""
-
-    model_config = _RESPONSE_CONFIG
-
-    next: PagingNext | None = None
-
-
 class AssociationsPage(BaseModel):
     """One page of a record's associations to one object type."""
 
@@ -640,6 +655,25 @@ class PromotionReport(BaseModel):
     """For ``refused_missing_fields``: how often each required field was the one absent."""
     stopped: str | None = None
     """Why the pass stopped early (an auth failure, the daily quota), or ``None``."""
+
+
+class ReviewTally(BaseModel):
+    """The founder's decisions on what one run created (M6), read from the ledger.
+
+    Rows are counted under the run that **claimed** them: a later run that finds a business
+    ``already_promoted`` does not move its row. ``pending_create`` and ``duplicate`` rows are not
+    here, because nobody reviews them.
+    """
+
+    model_config = _REPORT_CONFIG
+
+    pending: int = 0
+    """Still ``pending_review``."""
+    accepted: int = 0
+    """``enrolling`` or ``enrolled``: accepted, and in or entering the cadence."""
+    rejected: int = 0
+    withdrawn: int = 0
+    """Taken out of review in HubSpot before a decision (the company deleted or merged)."""
 
 
 class ReviewOutcome(StrEnum):

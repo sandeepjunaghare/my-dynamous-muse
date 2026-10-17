@@ -17,7 +17,7 @@ from typing import cast
 
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.sourcing.sources.base import SourceEnv
@@ -219,39 +219,8 @@ async def source_env(mock_fmcsa: MockFmcsa) -> AsyncGenerator[SourceEnv, None]:
 
 
 type SessionFactory = Callable[[], AsyncSession]
-
-
-@pytest.fixture
-async def session_factory(migrated_database: str) -> AsyncGenerator[SessionFactory, None]:
-    """Fresh sessions on **one** connection whose outer transaction is always rolled back.
-
-    The ``db_session`` recipe (``tests/conftest.py``), returning a factory instead of a session —
-    which is what lets the pipeline's crash path, "finish a failed run on a *fresh* session", be
-    tested for real without leaking anything into the next test.
-    """
-    engine = create_async_engine(migrated_database)
-    sessions: list[AsyncSession] = []
-    try:
-        async with engine.connect() as connection:
-            transaction = await connection.begin()
-
-            def make() -> AsyncSession:
-                session = AsyncSession(
-                    bind=connection,
-                    expire_on_commit=False,
-                    join_transaction_mode="create_savepoint",
-                )
-                sessions.append(session)
-                return session
-
-            try:
-                yield make
-            finally:
-                for session in sessions:
-                    await session.close()
-                await transaction.rollback()
-    finally:
-        await engine.dispose()
+"""The ``session_factory`` fixture's type. The fixture itself lives in ``tests/conftest.py``, shared
+with the weekly run's suite (T10)."""
 
 
 def params_of(request: httpx.Request) -> Mapping[str, str]:

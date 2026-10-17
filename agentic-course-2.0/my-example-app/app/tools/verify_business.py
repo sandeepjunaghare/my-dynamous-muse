@@ -183,7 +183,8 @@ class VerifyBusinessStage:
 
         Without it, a manifest with no Places source pulls the census, takes a batch and runs
         QCMobile over it, only to fail here and hand the batch back. The stage's own refusal in
-        :meth:`run` stays as the backstop for a caller that skips this (T10 should call it too).
+        :meth:`run` stays as the backstop for a caller that skips this. Both runners call it,
+        through ``app.sourcing.pipeline.preflight``.
         """
         unavailable = _places_unavailable(body, get_settings())
         if unavailable is not None and not self._allow_degraded:

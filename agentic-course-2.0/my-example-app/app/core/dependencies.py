@@ -17,8 +17,8 @@ from app.core.database import get_db
 def get_run_cost() -> RunCost:
     """Provide a fresh cost accumulator.
 
-    One per request today. When T10 introduces the weekly run, the run — not the request — becomes
-    the scope, and this is the single place that changes.
+    One per request. The weekly run (T10) does not use it: ``SourcingPipeline`` creates one
+    accumulator per run, which is the scope a run's cost belongs to.
     """
     return RunCost()
 
