@@ -189,10 +189,10 @@ async def ensure_property_group(client: HubSpotClient) -> None:
 
 
 async def ensure_properties(client: HubSpotClient) -> None:
-    """Make the six properties exist on the right object types, creating only what is missing.
+    """Make the seven properties exist on the right object types, creating only what is missing.
 
     Safe to run on every deploy: a second pass issues zero writes and logs
-    ``promotion.hubspot.property_present`` for each of the nine placements.
+    ``promotion.hubspot.property_present`` for each of the ten placements.
 
     Event names carry exactly one underscore in their last segment — the
     ``domain.component.action_state`` convention, enforced by ``tests/core/test_logging.py``.

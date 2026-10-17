@@ -27,7 +27,7 @@ from tests.promotion.builders import a_promotable, a_score, census_row_url
 from tests.promotion.conftest import DEFAULT_OWNER, PORTAL_ID, load_fixture
 from tests.promotion.crm import FakeCrm
 from tests.promotion.scenario import a_finished_run, disqualify, route
-from tests.sourcing.builders import a_verdict
+from tests.sourcing.builders import a_verdict, website_verified
 
 pytestmark = requires_db
 
@@ -228,6 +228,25 @@ class TestRefusals:
         company_id = by_id["1000005"].company_id
         assert company_id is not None
         assert crm.company_property(company_id, "lpe_verification") == "none"
+
+    async def test_a_website_verified_mail_drop_is_promoted_flagged_website(
+        self, db_session: AsyncSession, promotion: PromotionService, crm: FakeCrm
+    ) -> None:
+        """Its homepage verifies the business, not the door: a mail-drop verdict does not refuse."""
+        verified = website_verified(
+            a_promotable("1000006", phone="+1-972-555-0106").model_copy(
+                update={"business_check": None}
+            )
+        ).model_copy(update={"places_verdict": a_verdict(MissKind.mail_drop)})
+        scenario = await a_finished_run(db_session, [verified])
+
+        report = await promotion.promote_run(scenario.run.id)
+
+        assert _nonzero(report) == {"considered": 1, "created": 1}
+        (prospect,) = report.created
+        assert prospect.verification is Verification.website
+        assert prospect.company_id is not None
+        assert crm.company_property(prospect.company_id, "lpe_verification") == "website"
 
     @pytest.mark.parametrize("outcome", [RunOutcome.failed, None])
     async def test_a_failed_or_running_run_is_refused(
@@ -437,6 +456,26 @@ class TestRecovery:
         assert report.counts["recovered"] == 1
         assert len(crm.companies) == 1
 
+    async def test_a_recovered_unverified_candidate_is_counted_unverified(
+        self,
+        db_session: AsyncSession,
+        promotion: PromotionService,
+        crm: FakeCrm,
+        crm_clock: FakeClock,
+    ) -> None:
+        crm.fail_company_creates = 1
+        unverified = a_promotable("1000005").model_copy(update={"business_check": None})
+        scenario = await a_finished_run(db_session, [unverified])
+        await promotion.promote_run(scenario.run.id)
+
+        crm_clock.advance(minutes=11)
+        report = await promotion.promote_run(scenario.run.id)
+
+        assert report.counts["recovered"] == 1
+        assert report.counts["promoted_unverified"] == 1
+        (company_id,) = crm.companies
+        assert crm.company_property(company_id, "lpe_verification") == "none"
+
     async def test_a_second_ambiguous_create_waits_out_the_lag_again(
         self,
         db_session: AsyncSession,
@@ -545,6 +584,18 @@ class TestDryRun:
         real = await promotion.promote_run(scenario.run.id)
         assert dry.counts == real.counts
         assert [p.registry_id for p in dry.created] == [p.registry_id for p in real.created]
+
+    async def test_a_dry_run_counts_an_unverified_candidate_and_writes_nothing(
+        self, db_session: AsyncSession, promotion: PromotionService, crm: FakeCrm
+    ) -> None:
+        unverified = a_promotable("1000005").model_copy(update={"business_check": None})
+        scenario = await a_finished_run(db_session, [unverified])
+
+        dry = await promotion.promote_run(scenario.run.id, dry_run=True)
+
+        assert _nonzero(dry) == {"considered": 1, "created": 1, "promoted_unverified": 1}
+        assert [p.verification for p in dry.created] == [Verification.none]
+        assert crm.writes() == 0
 
     async def test_a_key_shared_with_a_portal_duplicate_is_sorted_as_the_real_pass_sorts_it(
         self, db_session: AsyncSession, promotion: PromotionService, crm: FakeCrm

@@ -135,6 +135,18 @@ def test_a_website_verified_owned_candidate_is_promotable() -> None:
     check_promotable(as_response(fields), suppressed=False)
 
 
+@pytest.mark.parametrize("kind", [MissKind.mail_drop, MissKind.other_business])
+def test_a_website_verified_candidate_is_not_refused_for_a_contradicting_verdict(
+    kind: MissKind,
+) -> None:
+    """Its homepage verifies the business, not the door (OQ-3); routing decides the door."""
+    fields = website_verified(_without(a_promotable(), "business_check")).model_copy(
+        update={"places_verdict": a_verdict(kind)}
+    )
+    assert fields.has_contradicting_verdict()
+    check_promotable(as_response(fields), suppressed=False)
+
+
 def test_a_website_verified_candidate_without_an_owner_is_no_principal() -> None:
     fields = website_verified(_without(a_promotable(owner=None), "business_check"))
 

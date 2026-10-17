@@ -9,8 +9,11 @@ never refuses.
 website-verification B6). A candidate neither Places nor its own homepage verified still reaches
 review when nothing says it is *not* at its address: no listing there, nothing readable, or never
 checked. It goes flagged ``lpe_verification = none``, unscored (the paid judgment and owner node
-still skip it) and unrouted. A current verdict of a mail drop or another business at the address
-(``CandidateFields.has_contradicting_verdict``) is evidence against it, and refuses.
+still skip it) and unrouted. For such a candidate, a current verdict of a mail drop or another
+business at the address (``CandidateFields.has_contradicting_verdict``) is the only evidence there
+is, and it says the business is not there: it refuses. A verified candidate is not refused for one
+— its own homepage verifies the business, not the door (website-verification OQ-3), so it promotes
+as before, and ``has_routable_address`` decides whether it is routed.
 
 **Qualified, under OQ1-D:** not suppressed (no ``disqualification`` for its ``(vertical,
 registry_id)``) and not a *cited-dead* score. An absent score is allowed — absent is not bad, and
@@ -57,7 +60,7 @@ def check_promotable(candidate: CandidateResponse, *, suppressed: bool) -> None:
     reason: RefusalReason | None = None
     if suppressed:
         reason = RefusalReason.disqualified
-    elif fields.has_contradicting_verdict():
+    elif not fields.is_verified() and fields.has_contradicting_verdict():
         reason = RefusalReason.contradicted
     elif missing == ("owner",):
         reason = RefusalReason.no_principal

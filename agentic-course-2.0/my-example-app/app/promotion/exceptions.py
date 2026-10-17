@@ -137,8 +137,9 @@ class RefusalReason(StrEnum):
 
     ``no_principal`` is ``missing_fields`` where the owner is the **only** gap — counted on its own
     because "no owner found" is the yield question T6 answers, and a company is never promoted
-    without its contact. ``contradicted`` is a current Places verdict that says the business is not
-    at its address (a mail drop or another business: ``CandidateFields.has_contradicting_verdict``).
+    without its contact. ``contradicted`` is an unverified candidate with a current Places verdict
+    that says the business is not at its address (a mail drop or another business:
+    ``CandidateFields.has_contradicting_verdict``); a verified candidate is never refused for one.
     An unverified candidate without one is not refused for it (founder's decision, 2026-10-16): it
     reaches review flagged ``lpe_verification = none``. Kept here, beside the error that carries
     it, so it has one home.

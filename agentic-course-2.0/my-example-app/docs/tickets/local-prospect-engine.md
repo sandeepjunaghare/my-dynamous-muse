@@ -288,9 +288,11 @@ almost nothing is promotable. DBT and Ark both have a homepage on their own emai
   owner but no listing and no business domain should reach review, rather than be refused as `unverified`, is
   the founder's call.
 - **Decided 2026-10-16 (founder): unverified survivors reach review.** T9 now refuses only a **contradicted**
-  address: a current Places verdict of `mail_drop` or `other_business` (`has_contradicting_verdict()`,
-  `RefusalReason.contradicted`). `no_listing`, a plain miss with no verdict, and a candidate never checked are
-  promotable when every required field is cited. The paid judgment and owner node still skip them, so they
+  address: an unverified candidate with a current Places verdict of `mail_drop` or `other_business`
+  (`has_contradicting_verdict()`, `RefusalReason.contradicted`). A website-verified candidate is never refused
+  for one — its homepage verifies the business, not the door (OQ-3), as before (PR #38 review H1).
+  `no_listing`, a plain miss with no verdict, and a candidate never checked are promotable when every
+  required field is cited. The paid judgment and owner node still skip them, so they
   arrive unscored, with a census owner only (one without one is `no_principal`), and unrouted. A new company
   property, `lpe_verification` (`places` · `website` · `none`), widens `RecordMeta` to five fields so the founder
   can filter them at review. Promote reports `refused_contradicted` in place of `refused_unverified`, and

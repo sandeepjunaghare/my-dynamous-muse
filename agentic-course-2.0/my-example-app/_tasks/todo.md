@@ -1912,3 +1912,14 @@ three choices behind it (asked 2026-10-16):
   Postgres; the password was refused, so nothing touched it). `/piv-validate`'s example port is a suggestion only.
 - **Open:** the first real promote provisions `lpe_verification` in the portal, a permanent property name. The
   dry run left `ACROSS THE LANDS` with an uncertain name split (first=JORGE, last=ARMANDO ROBLES) to check at review.
+
+### PR #38 review fixes (2026-10-17)
+
+- [x] H1: contradiction refuses only an unverified candidate (`not is_verified() and has_contradicting_verdict()`);
+  a website-verified candidate with a mail-drop or other-business verdict promotes as it did before the PR
+- [x] L1–L2: stale property and placement counts (seven / ten) in `properties.py`, README, test docstring
+- [x] L3–L4: service tests for a website-verified promote, an unverified recovery and an unverified dry run
+- [ ] L5 (CLI wording `verified none`): skipped, optional polish
+- **Lesson:** a gate rewritten from "not verified" to "contradicted" needs the old gate's other half kept: the
+  new check silently widened to verified candidates. The fresh-context review caught it; my own pass didn't.
+  — PASS (full): 1,752 passed, 4 skipped, no drift

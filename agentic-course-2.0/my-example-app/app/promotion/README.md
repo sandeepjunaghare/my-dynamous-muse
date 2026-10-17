@@ -65,7 +65,7 @@ Property internal names are **permanent** in HubSpot; there is no rename. The `l
 our fields unmistakably ours in a portal holding 3,118 contacts of mixed provenance.
 
 `ensure_properties()` is read-then-create and safe on every deploy: a second pass issues zero
-writes and logs nine `property_present` events. It never PATCHes — a human may have edited a
+writes and logs ten `property_present` events. It never PATCHes — a human may have edited a
 label, and a property whose type has drifted is logged (`property_drifted`) and left alone.
 
 ## The API version
@@ -122,8 +122,9 @@ lpe promotion promote --run <id> [--dry-run]
 ```
 
 - **Eligible** (`eligibility.py`) means the five required fields are cited — `registry_id`,
-  `legal_name`, `address`, `phone`, `owner` — **nothing contradicts the address**
-  (`has_contradicting_verdict()`: no current Places verdict of a mail drop or another business there),
+  `legal_name`, `address`, `phone`, `owner` — **nothing contradicts an unverified address**
+  (`has_contradicting_verdict()`: no current Places verdict of a mail drop or another business there;
+  a website-verified candidate is never refused for one, and routing decides whether it is routed),
   and it is **qualified under OQ1-D**: not suppressed (no `disqualification` for its
   `(vertical, registry_id)`) and not a cited-*dead* score. **An unscored candidate is promotable**
   (absent is not bad; the founder judges it at review — confirmed 2026-10-13). **So is an unverified

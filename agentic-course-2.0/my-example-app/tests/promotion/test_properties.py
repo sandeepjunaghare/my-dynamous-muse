@@ -1,4 +1,4 @@
-"""Provisioning the six custom properties, idempotently.
+"""Provisioning the seven custom properties, idempotently.
 
 None of them existed in portal 244766495 when this was written. Review happens in HubSpot, so a
 record that cannot show where it came from cannot be reviewed.
