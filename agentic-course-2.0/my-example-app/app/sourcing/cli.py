@@ -1,7 +1,8 @@
-"""``lpe sourcing run`` — source one brief by hand, before T10's ``POST /runs`` exists.
+"""``lpe sourcing run`` — source one brief by hand, without promoting it.
 
-The same pipeline T10 will trigger weekly: refresh the vertical's backlog from its registry, take a
-batch best first, gather the free evidence, record cited candidates. It runs under the vertical's
+The same pipeline ``lpe runs start`` and ``POST /runs`` (T10) run weekly before promoting: refresh
+the vertical's backlog from its registry, take a batch best first, gather the free evidence, record
+cited candidates. It runs under the vertical's
 **ACTIVE** manifest only — a draft is refused, because nobody has decided its sources' terms.
 
 ``--allow-degraded`` is the one way to spend a batch without a declared source's evidence (no
@@ -21,13 +22,14 @@ import sys
 from app.core.cost import format_usd
 from app.core.database import dispose_engine, get_sessionmaker
 from app.manifests.service import ManifestService
-from app.sourcing.pipeline import SourcingPipeline
+from app.sourcing.pipeline import (
+    DEFAULT_GEOGRAPHY,
+    SourcingPipeline,
+    configured_stages,
+    preflight,
+)
 from app.sourcing.schemas import RunStatus, SourcingBrief, SourcingRunResponse
-from app.tools.registry import Stage, registered_stages
-from app.tools.search_registry import SearchRegistryStage
-from app.tools.verify_business import VerifyBusinessStage
-
-DEFAULT_GEOGRAPHY = "dfw"
+from app.tools.registry import registered_stages
 
 
 def _positive(raw: str) -> int:
@@ -86,28 +88,14 @@ def dispatch(args: argparse.Namespace) -> int:
     raise AssertionError(f"unreachable: argparse accepted unknown subcommand {subcommand!r}")
 
 
-def _stages(batch_size: int | None, allow_degraded: bool) -> tuple[Stage, ...]:
-    """Every registered stage, ``search_registry`` and ``verify_business`` carrying this run's
-    options."""
-    return tuple(_configured(stage, batch_size, allow_degraded) for stage in registered_stages())
-
-
-def _configured(stage: Stage, batch_size: int | None, allow_degraded: bool) -> Stage:
-    if isinstance(stage, SearchRegistryStage):
-        return stage.configured(batch_size=batch_size, allow_degraded=allow_degraded)
-    if isinstance(stage, VerifyBusinessStage):
-        return stage.configured(allow_degraded=allow_degraded)
-    return stage
-
-
 async def _run(vertical: str, geography: str, batch_size: int | None, allow_degraded: bool) -> int:
     try:
         async with get_sessionmaker()() as session:
             manifest = await ManifestService(session).get_active(vertical)
-        stages = _stages(batch_size, allow_degraded)
-        for stage in stages:
-            if isinstance(stage, VerifyBusinessStage):
-                stage.preflight(manifest.body)
+        stages = configured_stages(
+            registered_stages(), batch_size=batch_size, allow_degraded=allow_degraded
+        )
+        preflight(stages, manifest.body)
         brief = SourcingBrief(
             vertical=vertical, geography=geography, icp_band=manifest.body.icp_band.value
         )

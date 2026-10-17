@@ -23,9 +23,13 @@ a *fresh* session, with the counts and the cost so far: a run that dies at Place
 says what it spent. The rollback is what the tests prove necessary; the fresh session is for when
 the rollback itself cannot run — a dropped connection — where it draws a new one from the pool. A
 run killed outright never reaches the ``except`` at all; the next run's reaper marks it failed.
+
+**Two callers, one set of options.** ``lpe sourcing run`` and T10's weekly run both build their
+stages with :func:`configured_stages` and refuse early with :func:`preflight`, so a hand run and a
+weekly run of the same options behave the same.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from datetime import timedelta
 from uuid import UUID
@@ -37,17 +41,54 @@ from app.core.config import get_settings
 from app.core.cost import RunCost
 from app.core.database import get_sessionmaker
 from app.core.logging import get_logger
+from app.manifests.schemas import ManifestBody
 from app.manifests.service import ManifestService
 from app.sourcing.schemas import PlacesEvidence, RunOutcome, SourcingBrief, SourcingRunResponse
 from app.sourcing.service import SourcingService
 from app.tools.registry import Stage, StageContext, registered_stages
+from app.tools.search_registry import SearchRegistryStage
+from app.tools.verify_business import VerifyBusinessStage
 
 logger = get_logger(__name__)
 
 type SessionFactory = Callable[[], AsyncSession]
+type OnStarted = Callable[[UUID], Awaitable[None]]
+
+DEFAULT_GEOGRAPHY = "dfw"
+"""What a run records as its geography. The manifest sets the real area; this is only recorded."""
 
 _DETAIL_MAX = 500
 """How much of an exception's text a failed run keeps in ``status_detail``."""
+
+
+def configured_stages(
+    stages: Sequence[Stage], *, batch_size: int | None, allow_degraded: bool
+) -> tuple[Stage, ...]:
+    """``stages`` with ``search_registry`` and ``verify_business`` carrying this run's options.
+
+    The stages are passed in, not looked up here, so each caller's own ``registered_stages`` is the
+    one a test patches.
+    """
+    return tuple(_configured(stage, batch_size, allow_degraded) for stage in stages)
+
+
+def _configured(stage: Stage, batch_size: int | None, allow_degraded: bool) -> Stage:
+    if isinstance(stage, SearchRegistryStage):
+        return stage.configured(batch_size=batch_size, allow_degraded=allow_degraded)
+    if isinstance(stage, VerifyBusinessStage):
+        return stage.configured(allow_degraded=allow_degraded)
+    return stage
+
+
+def preflight(stages: Sequence[Stage], body: ManifestBody) -> None:
+    """Refuse from the manifest and settings alone, before any batch is taken or any row written.
+
+    Raises ``SourceUnavailableError`` (409) when a declared source cannot run and the stages were
+    not configured to go on without it.
+    """
+    for stage in stages:
+        if isinstance(stage, VerifyBusinessStage):
+            stage.preflight(body)
 
 
 class SourcingPipeline:
@@ -62,11 +103,18 @@ class SourcingPipeline:
         self._session_factory = session_factory or get_sessionmaker()
         self._stages = tuple(stages) if stages is not None else None
 
-    async def run(self, brief: SourcingBrief) -> SourcingRunResponse:
+    async def run(
+        self, brief: SourcingBrief, *, on_started: OnStarted | None = None
+    ) -> SourcingRunResponse:
         """Source one brief. Returns the finished run; re-raises whatever failed it.
 
         Nothing is opened if the vertical has no ACTIVE manifest: ``start_run`` refuses with
         ``ActiveManifestNotFoundError`` before a row exists.
+
+        ``on_started`` is awaited with the new run's id as soon as ``start_run`` has committed,
+        before this session opens another transaction (T10 links its weekly run to it there, on a
+        session of its own). It runs inside the run's ``try``, so a callback that raises fails the
+        run exactly as a stage would.
         """
         settings = get_settings()
         stages = self._stages if self._stages is not None else registered_stages()
@@ -77,7 +125,6 @@ class SourcingPipeline:
                 brief.vertical, older_than=timedelta(hours=settings.sourcing_stale_run_hours)
             )
             run = await service.start_run(brief)
-            manifest = await ManifestService(session).get(run.manifest_id)
 
             structlog.contextvars.bind_contextvars(run_id=str(run.id))
             cost = RunCost()
@@ -85,6 +132,9 @@ class SourcingPipeline:
             counts: dict[str, int] = {}
             reasons: list[str] = []
             try:
+                if on_started is not None:
+                    await on_started(run.id)
+                manifest = await ManifestService(session).get(run.manifest_id)
                 logger.info(
                     "sourcing.pipeline.run_started",
                     vertical=brief.vertical,

@@ -1956,19 +1956,41 @@ Plan: `.claude/plans/t10-weekly-run.md`. Founder's decisions, asked before plann
   `lpe runs start` runs the same service in-process for launchd.
 - **Real promotion by default**, with `dry_run` on the route and the CLI.
 
-- [ ] Task 1: settings `WEEKLY_RUN_STALE_HOURS` (2) and `WEEKLY_RUN_TARGET_MINUTES` (60), plus `.env.example`
-- [ ] Task 2: HubSpot search `GTE`/`LT` and `after` paging
-- [ ] Task 3: `configured_stages` / `preflight` move to `pipeline.py`; `SourcingPipeline.run(on_started=)`
-- [ ] Task 4: `WeeklyRun` model, `0011_weekly_run`, `env.py`
-- [ ] Task 5: `app/runs/schemas.py` and `exceptions.py`
-- [ ] Task 6: `WeeklyRunRepository`
-- [ ] Task 7: `ReviewTally` and `PromotionService.review_tally` (read-only)
-- [ ] Task 8: `WeeklyRunService` (start / execute / run / get)
-- [ ] Task 9: `touches.py` (`classify_note`, `week_window`, `epoch_ms`)
-- [ ] Task 10: `WeeklyReportService`
-- [ ] Task 11: routes and `app/main.py`
-- [ ] Task 12: `lpe runs start | show | report` and `app/cli.py`
-- [ ] Task 13: tests (`tests/runs/`, plus pipeline and client additions)
-- [ ] Task 14: docs (slice README, CLAUDE.md incl. the test-DB port 5434, HubSpot reference, ticket T10)
-- [ ] `/piv-validate`, then Level 4 steps 1-4 (dry). Steps 5-8 (M5 check, first real run, launchd, logging
+- [x] Task 1: settings `WEEKLY_RUN_STALE_HOURS` (2) and `WEEKLY_RUN_TARGET_MINUTES` (60), plus `.env.example`
+- [x] Task 2: HubSpot search `GTE`/`LT` and `after` paging
+- [x] Task 3: `configured_stages` / `preflight` move to `pipeline.py`; `SourcingPipeline.run(on_started=)`
+- [x] Task 4: `WeeklyRun` model, `0011_weekly_run`, `env.py`
+- [x] Task 5: `app/runs/schemas.py` and `exceptions.py`
+- [x] Task 6: `WeeklyRunRepository`
+- [x] Task 7: `ReviewTally` and `PromotionService.review_tally` (read-only)
+- [x] Task 8: `WeeklyRunService` (start / execute / run / get)
+- [x] Task 9: `touches.py` (`classify_note`, `week_window`, `epoch_ms`)
+- [x] Task 10: `WeeklyReportService`
+- [x] Task 11: routes and `app/main.py`
+- [x] Task 12: `lpe runs start | show | report` and `app/cli.py`
+- [x] Task 13: tests (`tests/runs/`, plus pipeline and client additions)
+- [x] Task 14: docs (slice README, CLAUDE.md incl. the test-DB port 5434, HubSpot reference, ticket T10)
+- [x] `/piv-validate`, then Level 4 steps 1-4 (dry). Steps 5-8 (M5 check, first real run, launchd, logging
   convention) are the human's
+
+### Review (implemented 2026-10-17, branch `feature/t10-weekly-run`)
+
+- **Validation:** ruff, format, mypy, pyright clean; pytest 1855 passed / 4 skipped (was 1752 / 4); alembic
+  head `0011_weekly_run`, no drift. Zero suppressions.
+- **Level 4 (dev):** `0011` applied to dev Supabase. `lpe runs report --week 2026-09-28` → 2 door knocks,
+  0, 0, paid `not configured`, 7 unclassified of 9 notes (the epoch-ms `hs_timestamp` filter works). Dry run
+  `--batch-size 5`: completed in 29 s, $0.03, 1 would-create (unverified), only search calls to HubSpot.
+  `POST /runs` → 202, second POST → 409 naming the run, `GET /runs/{id}` → completed at 0.43 min.
+- **Worked:** the plan's shape held. The service tests caught a real ordering bug: `on_started` ran after
+  the pipeline's session had opened its next transaction, and a rollback could take the link with it. It
+  now runs straight after `start_run` commits, and the manifest read moved inside the `try`.
+- **Deviations:** reused the existing `Paging`/`PagingNext` models instead of new `SearchPaging*`; the
+  one-running `IntegrityError` is caught in the service, not the repository (rollback is the service's);
+  `brief_to_hubspot_minutes` is a validator-filled field, not `computed_field` (which needs a type
+  suppression); `session_factory` lifted to `tests/conftest.py`; the DST test uses the week of 2026-10-26
+  (DST ends 2026-11-01, so the plan's 2026-11-02 week does not cross it).
+- **Follow-ups for the human:** (1) `FUNNEL_COUNTERS` omits `places_not_found` and
+  `routing_unverified_address`; in the dry run the one survivor appeared in neither, so the funnel does not
+  add up on Friday. Two-line change if wanted. (2) `.claude/skills/piv-validate/SKILL.md` still says port
+  5433. (3) Level 4 steps 5-8: the M5 check on the adopted 22, the first real run, the launchd jobs, telling
+  the founders the note-prefix convention. (4) Cross-check the 2 door knocks of 2026-09-28 in HubSpot by hand.

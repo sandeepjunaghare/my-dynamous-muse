@@ -955,3 +955,13 @@ route tests are deterministic.
 ## AMENDMENTS
 
 <!-- Append-only. Newest at the bottom. -->
+
+**2026-10-17, during implementation:**
+- `on_started` runs straight after `start_run` commits, and the manifest read moved inside the `try`. As
+  first placed (after the read), a failing stage's rollback could undo the weekly run's link to its
+  sourcing run. Caught by `test_a_failed_sourcing_run_promotes_nothing_and_is_recorded`.
+- Search paging reuses the existing `Paging`/`PagingNext`; no `SearchPaging*` models.
+- `WeeklyRunRepository.create` flushes and lets the `IntegrityError` rise; `start` rolls back and maps
+  `uq_weekly_run_one_running` to the 409, as `CadenceService` does with `UNIQUE_CONTACT`.
+- `brief_to_hubspot_minutes` is a field an after-validator fills: `computed_field` needs a type suppression.
+- The DST case is the week of 2026-10-26: US DST ends Sunday 2026-11-01, inside that week.

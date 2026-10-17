@@ -401,3 +401,68 @@ def test_the_stale_window_is_the_setting() -> None:
     from app.core.config import get_settings
 
     assert timedelta(hours=get_settings().sourcing_stale_run_hours) == timedelta(hours=6)
+
+
+class Seen:
+    """A stage that records whether the run's ``on_started`` had already fired when it ran."""
+
+    def __init__(self, started: list[object]) -> None:
+        self._started = started
+        self.saw: list[object] = []
+
+    @property
+    def stage(self) -> PipelineStage:
+        return PipelineStage.search_registry
+
+    async def run(self, context: StageContext) -> StageResult:
+        self.saw = list(self._started)
+        return StageResult(counts={})
+
+
+class TestOnStarted:
+    """T10 links its weekly run to the sourcing run through this callback."""
+
+    async def test_it_receives_the_run_id_before_the_first_stage(
+        self, session_factory: SessionFactory
+    ) -> None:
+        vertical = await _freight(session_factory)
+        started: list[object] = []
+        stage = Seen(started)
+
+        async def on_started(run_id: object) -> None:
+            started.append(run_id)
+
+        run = await SourcingPipeline(session_factory, stages=[stage]).run(
+            a_brief(vertical), on_started=on_started
+        )
+
+        assert started == [run.id]
+        assert stage.saw == [run.id]
+
+    async def test_a_raising_callback_fails_the_run_like_a_stage(
+        self, session_factory: SessionFactory
+    ) -> None:
+        vertical = await _freight(session_factory)
+
+        async def on_started(run_id: object) -> None:
+            raise RuntimeError("could not link the weekly run")
+
+        with pytest.raises(RuntimeError, match="could not link"):
+            await SourcingPipeline(
+                session_factory, stages=[Counts(PipelineStage.search_registry, {"batched": 1})]
+            ).run(a_brief(vertical), on_started=on_started)
+
+        [run] = await _runs(session_factory, vertical)
+        assert run.status is RunStatus.failed
+        assert run.status_detail == "RuntimeError: could not link the weekly run"
+        assert run.counts == {}
+
+    async def test_no_callback_changes_nothing(self, session_factory: SessionFactory) -> None:
+        vertical = await _freight(session_factory)
+
+        run = await SourcingPipeline(
+            session_factory, stages=[Counts(PipelineStage.search_registry, {"batched": 2})]
+        ).run(a_brief(vertical))
+
+        assert run.status is RunStatus.completed
+        assert run.counts == {"batched": 2}

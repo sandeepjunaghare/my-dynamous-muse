@@ -141,6 +141,20 @@ class PromotionRepository:
         )
         return result.all()
 
+    async def status_counts_by_run(self, run_ids: Collection[UUID]) -> dict[UUID, dict[str, int]]:
+        """``{run_id: {status: rows}}`` for the runs given. A run with no rows is absent."""
+        if not run_ids:
+            return {}
+        result = await self._session.execute(
+            select(Promotion.run_id, Promotion.status, func.count())
+            .where(Promotion.run_id.in_(list(run_ids)))
+            .group_by(Promotion.run_id, Promotion.status)
+        )
+        counts: dict[UUID, dict[str, int]] = {}
+        for run_id, status, rows in result.tuples():
+            counts.setdefault(run_id, {})[status] = rows
+        return counts
+
     async def transition(
         self,
         row_id: UUID,
