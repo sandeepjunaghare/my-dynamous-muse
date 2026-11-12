@@ -151,7 +151,7 @@ class PromotionRepository:
             .group_by(Promotion.run_id, Promotion.status)
         )
         counts: dict[UUID, dict[str, int]] = {}
-        for run_id, status, rows in result.tuples():
+        for run_id, status, rows in result:
             counts.setdefault(run_id, {})[status] = rows
         return counts
 
