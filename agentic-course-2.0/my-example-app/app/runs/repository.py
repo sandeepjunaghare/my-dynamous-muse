@@ -66,11 +66,20 @@ class WeeklyRunRepository:
             update(WeeklyRun).where(WeeklyRun.id == run_id).values(sourcing_run_id=sourcing_run_id)
         )
 
-    async def mark_sourced(self, run_id: UUID) -> None:
-        """Sourcing finished: stamp ``sourced_at`` from the database clock."""
-        await self._session.execute(
-            update(WeeklyRun).where(WeeklyRun.id == run_id).values(sourced_at=func.now())
+    async def mark_sourced(self, run_id: UUID) -> WeeklyRun | None:
+        """Sourcing finished: stamp ``sourced_at``; ``None`` when it was no longer running.
+
+        A compare-and-set, like :meth:`finish`: a run the reaper failed mid-sourcing must not go on
+        to promote, so the service stops on ``None`` rather than writing to HubSpot.
+        """
+        result = await self._session.scalars(
+            update(WeeklyRun)
+            .where(WeeklyRun.id == run_id, WeeklyRun.status == WeeklyRunStatus.running.value)
+            .values(sourced_at=func.now())
+            .returning(WeeklyRun),
+            execution_options={"populate_existing": True},
         )
+        return result.one_or_none()
 
     async def finish(
         self,

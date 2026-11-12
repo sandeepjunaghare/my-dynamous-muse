@@ -60,6 +60,10 @@ sourcing and promotion **through their services** and never writes their tables.
   sourcing run is reaped by sourcing, per vertical, at the next pipeline start, after
   `SOURCING_STALE_RUN_HOURS` (6h). A fresh run between 2h and 6h is fine: `start_run` has no
   running-run guard, and the old run's batch is not handed back until it is reaped.
+- **A reaped run that is still alive stops before promotion.** Stamping `sourced_at` is a
+  compare-and-set on `running`, as the finish is; when the reaper got there first, the run returns
+  without calling `promote_run`, so it never writes to HubSpot beside its successor. A run already
+  inside `promote_run` cannot be stopped; only its finish is lost (`runs.weekly.finish_lost`).
 - **Not guarded:** a hand-run `lpe sourcing run` beside a weekly run. That is the human's choice.
 
 ## The Friday report

@@ -22,6 +22,8 @@ from app.runs.service import WeeklyRunService
 from app.sourcing.exceptions import SourceUnavailableError
 from app.sourcing.pipeline import configured_stages
 from app.sourcing.schemas import RunStatus
+from app.sourcing.stages import PipelineStage
+from app.tools.registry import StageContext, StageResult
 from app.tools.verify_business import VerifyBusinessStage
 from tests.conftest import SessionFactory, requires_db
 from tests.promotion.builders import a_promotable
@@ -262,6 +264,50 @@ class TestFailed:
         run = await service.get(started.id)
         assert run.status is WeeklyRunStatus.failed
         assert run.status_detail == "sourcing failed: CancelledError: "
+
+    async def test_a_run_reaped_mid_sourcing_never_promotes(
+        self,
+        session_factory: SessionFactory,
+        make_service: MakeService,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        vertical = await an_active_vertical(session_factory)
+        promoted: list[UUID] = []
+
+        async def spy(
+            self: PromotionService, run_id: UUID, *, dry_run: bool = False
+        ) -> PromotionReport:
+            promoted.append(run_id)
+            return _report(run_id)
+
+        monkeypatch.setattr(PromotionService, "promote_run", spy)
+
+        class ReapedMeanwhile:
+            """A second ``start`` reaps this run while its sourcing is still going."""
+
+            @property
+            def stage(self) -> PipelineStage:
+                return PipelineStage.verify_business
+
+            async def run(self, context: StageContext) -> StageResult:
+                async with session_factory() as session:
+                    await session.execute(
+                        text(
+                            "update weekly_run set status = 'failed', status_detail = 'reaped', "
+                            "finished_at = now() where status = 'running'"
+                        )
+                    )
+                    await session.commit()
+                return StageResult(counts={})
+
+        run = await make_service(Records(), ReapedMeanwhile()).run(
+            WeeklyRunRequest(vertical=vertical)
+        )
+
+        assert promoted == []
+        assert run.status is WeeklyRunStatus.failed
+        assert run.status_detail == "reaped"
+        assert (run.sourced_at, run.promoted_at) == (None, None)
 
     async def test_a_finished_run_is_not_executed_again(
         self, session_factory: SessionFactory, make_service: MakeService

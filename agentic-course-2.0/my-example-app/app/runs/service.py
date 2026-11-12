@@ -4,7 +4,7 @@
 start()    reap stale weekly runs ─▶ ACTIVE manifest ─▶ configure stages ─▶ preflight
            ─▶ INSERT weekly_run (the partial unique index: one running at a time) ─▶ commit
 execute()  SourcingPipeline.run(on_started = link the sourcing run)   ── raises ─▶ FAILED
-           ─▶ sourced_at
+           ─▶ sourced_at (only while still running; reaped meanwhile ─▶ stop, nothing promoted)
            ─▶ PromotionService.promote_run(dry_run = the row's)        ── raises ─▶ FAILED
            ─▶ COMPLETED | DEGRADED (sourcing degraded, promotion stopped, or failures > 0)
 ```
@@ -169,8 +169,10 @@ class WeeklyRunService:
             return await self._fail(run_id, _failure("sourcing", exc), exc)
 
         async with self._session_factory() as session:
-            await WeeklyRunRepository(session).mark_sourced(run_id)
+            sourced = await WeeklyRunRepository(session).mark_sourced(run_id)
             await session.commit()
+        if sourced is None:
+            return await self._lost(run_id, step="sourced")
 
         try:
             async with self._session_factory() as session:
@@ -262,9 +264,13 @@ class WeeklyRunService:
             return await self._lost(run_id)
         return await self.get(run_id)
 
-    async def _lost(self, run_id: UUID) -> WeeklyRunResponse:
-        """The row was no longer running when this run finished: the reaper got there first."""
-        logger.warning("runs.weekly.finish_lost")
+    async def _lost(self, run_id: UUID, *, step: str = "finish") -> WeeklyRunResponse:
+        """The row was no longer running at ``step``: the reaper got there first.
+
+        After sourcing, this stops the run before promotion, so a reaped run never writes to
+        HubSpot. A run already inside ``promote_run`` cannot be stopped; only its finish is lost.
+        """
+        logger.warning("runs.weekly.finish_lost", step=step)
         return await self.get(run_id)
 
 
