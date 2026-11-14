@@ -26,6 +26,7 @@ from app.manifests import models as manifest_models
 from app.promotion import models as promotion_models
 from app.qualification import models as qualification_models
 from app.routing import models as routing_models
+from app.runs import models as runs_models
 from app.sourcing import models as sourcing_models
 
 # Importing a slice's models is what puts its tables on Base.metadata. The tuple keeps the import
@@ -40,6 +41,7 @@ _REGISTERED_MODELS = (
     qualification_models.Disqualification,
     routing_models.RouteAssignment,
     promotion_models.Promotion,
+    runs_models.WeeklyRun,
 )
 
 config = context.config

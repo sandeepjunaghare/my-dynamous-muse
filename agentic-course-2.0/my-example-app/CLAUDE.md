@@ -17,12 +17,12 @@ five stages (registry search, business verification, route clustering) never nee
 place, and clustering and promotion are required to be reproducible.
 
 ## Architecture map
-**Today** — Waves 1–3 have shipped (T1, T2, T3, T4, T11, T12), T13 from Wave 4, T5, T7 and T8 from Wave 5, T6
-from Wave 6 (`verify_business`, `resolve_owner`), and T9: the service boots, validates clean, the provenance
-primitive exists, and seven slices are built — `manifests/` with its authoring agent and dry-run gate,
-`promotion/` (the gateway, the `promotion` ledger, promote and review sync), `sourcing/` with the pipeline runner, backlog, FMCSA and Places adapters, the website check and the owner node,
-the `cadence/` state machine with adoption, `qualification/` with the `classify_rollup` stage, and `routing/`
-with its stage, `cluster_routes`.
+**Today** — every MVP ticket has shipped (T1–T13), T10 last: one weekly run goes from a brief to a
+pending-review list in HubSpot unattended. Eight slices: `manifests/` with its authoring agent and dry-run
+gate; `promotion/` (the gateway, the `promotion` ledger, promote and review sync); `sourcing/` with the
+pipeline runner, backlog, FMCSA and Places adapters, the website check and the owner node; the `cadence/`
+state machine with adoption; `qualification/` with the `classify_rollup` stage; `routing/` with its stage,
+`cluster_routes`; and `runs/`, the weekly run and the Friday report.
 ```
 app/main.py                                 # FastAPI + lifespan, middleware, error handlers, GET /health
 app/core/                                   # config · logging · database · exceptions · cost · middleware · dependencies
@@ -39,6 +39,7 @@ app/sourcing/owner/                         # the resolve_owner judgment node: a
 app/qualification/                          # free predicate evaluator, classify_rollup judgment node, priority score, disqualification + suppression, dry-run (T7)
 app/cadence/                                # the three-touch schedule (no outcomes), D5 done-signal sync, overdue view, adoption (T13), routes + CLI
 app/routing/                                # route_assignment, the Census Geocoder (never Places), balanced-bisection clustering (T8)
+app/runs/                                   # T10: weekly_run (M7, one running at a time), POST /runs (202 + background), `lpe runs`, the Friday report from note prefixes
 app/tools/registry.py                       # the Stage contract (+ the run's in-memory Places channel); a stage registers by being app/tools/<PipelineStage>.py exporting STAGE
 app/tools/search_registry.py                # stage 1 of 5 (T5): pull with pushdown, refresh the pool, take a batch best first, free evidence, free predicates (T7)
 app/tools/verify_business.py                # stage 2 of 5 (T6): website from the email domain (an own-domain homepage verifies too), Places check → place ID + checked address, or our verdict on a miss; refuses without a declared source/key
@@ -46,7 +47,7 @@ app/tools/classify_rollup.py                # stage 3 of 5 (T7): reads the Place
 app/tools/resolve_owner.py                  # stage 4 of 5 (T6): census first; the node only for verified officer-less survivors; cap → degraded
 app/tools/cluster_routes.py                 # stage 5 of 5 (T8): verified addresses → drive routes of ≤ ROUTE_MAX_DOORS
 app/cli.py                                  # the `lpe` entry point; each slice registers its command group
-alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification · 0009 run-scoped candidate FKs · 0010 promotion
+alembic/                                    # async env.py + 0001_baseline · 0002 vertical_manifest · 0003 freight/fire seeds · 0004 sourcing · 0005 cadence · 0006 sourcing_pool · 0007 routing · 0008 qualification · 0009 run-scoped candidate FKs · 0010 promotion · 0011 weekly_run
 tests/                                      # mirrors app/, plus the structure guards that keep decisions decided
 docs/local-prospect-engine.prd.md           # intent: problem, evidence E1–E20, MVP, metrics M1–M9
 docs/local-prospect-engine.architecture.md  # the how: decisions, spikes, missing pieces, open questions
@@ -131,21 +132,28 @@ The cadence is synced **daily by an external launchd job**, not by the weekly ru
 `uv run lpe cadence adopt --dry-run` · `uv run lpe cadence adopt --roster <file> [--dry-run]` (T13; no
 plain enrol command by design — adoption reconstructs, and T9 enrols in code).
 
-Sourcing is run by hand until T10's `POST /runs` (T5): `uv run lpe sourcing run --vertical <slug> [--batch-size N]`
+**The weekly run** (T10) does sourcing and promotion in one go, from launchd weekly or ad hoc:
+`uv run lpe runs start --vertical <slug> [--batch-size N] [--allow-degraded] [--dry-run]` in-process, or
+`POST /runs` (202; the work runs in the background; a second call while one runs is 409) and `GET /runs/{id}`.
+One weekly run at a time, globally; a killed one is reaped after `WEEKLY_RUN_STALE_HOURS`. The Friday report:
+`uv run lpe runs report [--week YYYY-MM-DD]` or `GET /runs/weekly-report` — the four playbook numbers from
+notes starting `Door knock` / `Owner conversation` / `Assessment booked`; paid sold is `not configured`.
+
+The two halves still run by hand. Sourcing (T5): `uv run lpe sourcing run --vertical <slug> [--batch-size N]`
 — ACTIVE manifests only. Without `FMCSA_WEBKEY` it refuses before taking a batch; without a declared Places
 source or `GOOGLE_PLACES_API_KEY`, `verify_business` fails the run and the batch goes back to the pool.
 `--allow-degraded` spends the batch without that evidence, which is never looked up again.
 
-Promotion is run by hand until T10 calls it after the stages (T9): `uv run lpe promotion promote --run <id> [--dry-run]`
+Promotion (T9): `uv run lpe promotion promote --run <id> [--dry-run]`
 — completed or degraded runs only; creates each qualified, fully cited candidate as a Company + Contact at
 `lpe_review_status = pending_review` (unscored or unverified is allowed, flagged `lpe_verification = none`;
 a cited-dead score or a contradicted address is not), and provisions the custom properties first. The
 founder accepts or rejects in HubSpot; `uv run lpe promotion sync [--dry-run]` reads the decisions back and
 enrols accepted contacts in the cadence. Run it daily in the launchd job, before `lpe cadence sync`.
 
-Database-backed tests need a throwaway Postgres and skip without one:
-`docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` ·
-`export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5433/postgres`
+Database-backed tests need a throwaway Postgres and skip without one (port 5434; 5433 is taken by Langfuse):
+`docker start lpe-test-pg || docker run --name lpe-test-pg -d -p 5434:5432 -e POSTGRES_PASSWORD=test postgres:16` ·
+`export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5434/postgres`
 
 ## Runtime
 Local Mac first, small VPS when the weekly run is something you'd miss — so config is strict 12-factor and

@@ -37,7 +37,9 @@ from app.promotion.schemas import (
     ReviewStatus,
     SearchFilter,
     SearchFilterGroup,
+    SearchOperator,
     SearchRequest,
+    SearchResponse,
     TaskCreate,
     TaskType,
     Verification,
@@ -103,6 +105,71 @@ class TestRequestShape:
         assert captured, "the request funnel must log something"
         assert TEST_TOKEN not in json.dumps(captured, default=str)
         await client.aclose()
+
+
+class TestSearchWindowAndPaging:
+    """T10: the Friday report reads a week of notes — a range filter, and more than one page."""
+
+    async def test_range_operators_and_the_cursor_reach_the_body(self) -> None:
+        portal = MockPortal([("POST", "/notes/search", json_responder(200, {"results": []}))])
+        client = make_client(portal)
+
+        await client.search(
+            ObjectType.notes,
+            SearchRequest(
+                filter_groups=[
+                    SearchFilterGroup(
+                        filters=[
+                            SearchFilter(
+                                property_name="hs_timestamp",
+                                operator=SearchOperator.gte,
+                                value="1760245200000",
+                            ),
+                            SearchFilter(
+                                property_name="hs_timestamp",
+                                operator=SearchOperator.lt,
+                                value="1760850000000",
+                            ),
+                        ]
+                    )
+                ],
+                properties=["hs_body_preview"],
+                limit=200,
+                after="200",
+            ),
+        )
+
+        body = portal.bodies("POST", "/notes/search")[0]
+        assert body["filterGroups"] == [
+            {
+                "filters": [
+                    {"propertyName": "hs_timestamp", "operator": "GTE", "value": "1760245200000"},
+                    {"propertyName": "hs_timestamp", "operator": "LT", "value": "1760850000000"},
+                ]
+            }
+        ]
+        assert body["after"] == "200"
+        assert body["limit"] == 200
+        await client.aclose()
+
+    async def test_a_first_page_sends_no_cursor(self) -> None:
+        """``None`` is dropped, not sent as ``null`` — the same rule as every property."""
+        portal = MockPortal([("POST", "/companies/search", json_responder(200, {"results": []}))])
+        client = make_client(portal)
+
+        await client.search(ObjectType.companies, _search_request())
+
+        assert "after" not in portal.bodies("POST", "/companies/search")[0]
+        await client.aclose()
+
+    def test_the_next_cursor_parses(self) -> None:
+        page = SearchResponse.model_validate(
+            {"total": 300, "results": [], "paging": {"next": {"after": "200", "link": "x"}}}
+        )
+        assert page.next_after == "200"
+
+    def test_the_last_page_has_no_cursor(self) -> None:
+        assert SearchResponse.model_validate({"total": 3, "results": []}).next_after is None
 
 
 class TestRateLimiting:

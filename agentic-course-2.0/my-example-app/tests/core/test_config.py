@@ -26,6 +26,9 @@ _MANAGED_VARS = (
     "MAX_OWNER_CALLS_PER_RUN",
     "HUBSPOT_PORTAL_ID",
     "HUBSPOT_UI_DOMAIN",
+    "SOURCING_STALE_RUN_HOURS",
+    "WEEKLY_RUN_STALE_HOURS",
+    "WEEKLY_RUN_TARGET_MINUTES",
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -147,6 +150,32 @@ class TestEnrichmentSettings:
 
     @pytest.mark.parametrize("name", ["MAX_PLACES_CALLS_PER_RUN", "MAX_OWNER_CALLS_PER_RUN"])
     def test_a_zero_breaker_is_refused(self, env: pytest.MonkeyPatch, name: str) -> None:
+        env.setenv("DATABASE_URL", VALID_URL)
+        env.setenv(name, "0")
+        with pytest.raises(ValidationError):
+            Settings.model_validate({})
+
+
+class TestWeeklyRunSettings:
+    """T10: the stale-run reaper and M7's target."""
+
+    def test_defaults(self, env: pytest.MonkeyPatch) -> None:
+        env.setenv("DATABASE_URL", VALID_URL)
+        settings = Settings.model_validate({})
+
+        assert settings.weekly_run_stale_hours == 2
+        assert settings.weekly_run_target_minutes == 60
+
+    def test_a_weekly_run_is_reaped_before_its_sourcing_run(self, env: pytest.MonkeyPatch) -> None:
+        """The ordering the config comment promises: a reaped weekly run never leaves the guard
+        waiting on a sourcing run that is still `running`."""
+        env.setenv("DATABASE_URL", VALID_URL)
+        settings = Settings.model_validate({})
+
+        assert settings.weekly_run_stale_hours < settings.sourcing_stale_run_hours
+
+    @pytest.mark.parametrize("name", ["WEEKLY_RUN_STALE_HOURS", "WEEKLY_RUN_TARGET_MINUTES"])
+    def test_zero_is_refused(self, env: pytest.MonkeyPatch, name: str) -> None:
         env.setenv("DATABASE_URL", VALID_URL)
         env.setenv(name, "0")
         with pytest.raises(ValidationError):

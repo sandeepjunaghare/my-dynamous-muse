@@ -535,9 +535,24 @@ schedule, HubSpot owns the outcomes* · E15 · M5 · **SPIKE-4** (nothing sends)
   reaches review flagged `lpe_verification = none` — the report should say how many did.
 - **Before the first real run (Spike 1 checkpoint, 2026-10-09):** read M5 on the T13-adopted prospects. If touches still are not getting done with the machine running, fix that before the run adds volume. This is a human check, not a code gate.
 
+**Decisions (founder, 2026-10-17, asked before planning):**
+1. **The Friday numbers come from note prefixes.** A read-only check of the portal found every real touch
+   logged as a free-text note (calls and meetings are sample data; no deal is at $999). A note that **starts
+   with** `Door knock`, `Owner conversation` or `Assessment booked` counts toward that number; any other note
+   in the week is shown as an unclassified touch. Paid assessments sold renders `not configured` (GATE-A).
+2. **`POST /runs` returns 202 and runs in the background.** The preflight, the manifest check and the
+   one-run-at-a-time guard refuse in the request; `GET /runs/{id}` shows progress. `lpe runs start` runs the
+   same service in-process for launchd.
+3. **Real promotion by default**, with `dry_run` on the route and the CLI.
+
+**Routes after qualification: done by T9 OQ8-B.** `cluster_routes` excludes the run's disqualified
+candidates, and every disqualification is recorded before stage 5, so there is nothing to re-route.
+
 **Per-ticket context:** PRD §6 steps 1–8 · M7 · architecture → *Scheduling: boring on purpose*, *Cost* ·
 **GATE-A**.
-**Files:** `app/main.py`, `app/sourcing/routes.py`, `app/reporting/*`, `tests/`
+**Files:** `app/runs/*` (one slice for the run and the report, replacing the planned `app/sourcing/routes.py`
+and `app/reporting/*`), `app/sourcing/pipeline.py`, `app/promotion/{schemas,client,service,repository}.py`,
+`app/main.py`, `app/cli.py`, `alembic/versions/0011_weekly_run.py`, `tests/runs/`
 **Size:** ~800–1200 lines · **Depends on:** T5, T6, T7, T8, T9, T11
 
 ---

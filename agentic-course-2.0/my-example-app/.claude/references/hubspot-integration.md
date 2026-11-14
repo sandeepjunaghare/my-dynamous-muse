@@ -14,9 +14,10 @@ field without provenance cannot be written to HubSpot. That is the structural fi
 sitting in a first-name field is exactly a field nobody could cite) and what turns M6 and M8 into something
 enforced rather than hoped for. Custom properties carry what the human needs to trust the record: source URL,
 sourced-at, vertical, priority score, route cluster, review status — created by the first real
-`lpe promotion promote`, never by hand or through the connector. Four of them are **engine metadata**, not
+`lpe promotion promote`, never by hand or through the connector. Five of them are **engine metadata**, not
 claims about the prospect, and pass in the closed `RecordMeta` beside the gate (T9, OQ6-A): vertical, review
-status, route cluster and the record owner. The score is gated: it is a judgment about the business.
+status, route cluster, verification (2026-10-16) and the record owner. The score is gated: it is a judgment
+about the business.
 
 **Review lives on the company, in `lpe_review_status`** (T9): `pending_review` at create, then the founder
 sets `accepted` or `rejected`, singly or in bulk from the company list view. `lpe promotion sync` reads it back
@@ -58,3 +59,12 @@ One dependency left open on purpose: the `$999 assessment` deal pipeline does no
 January, none at that value) and we have decided not to create it yet. M3 is therefore unmeasurable, and the
 Friday report must render it as **not configured** — never as `0`, which would be indistinguishable from a
 real zero.
+
+**The Friday report reads notes, by prefix** (T10, DECISION 1, 2026-10-17). A read of the portal found every
+real touch logged as a free-text **note**; its calls and meetings are HubSpot's sample data. So the founders'
+logging rule is: **start the note with `Door knock`, `Owner conversation` or `Assessment booked`**. Emoji,
+punctuation and case before the label are ignored, and `Door-knock` counts. `lpe runs report` counts each
+label toward its playbook number over the Monday-to-Sunday Dallas week (a notes search on `hs_timestamp`,
+`GTE`/`LT` in epoch ms, paged with `after`). Every other note is shown as an **unclassified touch**, so the
+convention's adoption is visible on Friday. The report is read-only and reads live; it never logs note text.
+Accept/reject (M6) comes from our `promotion` ledger as of the last daily sync, not from HubSpot.

@@ -354,7 +354,8 @@ editable.
   Places is stored, and `tests/test_structure.py` guards the call site and the field mask.
 - **`disqualification` and an index on `registry_id` alone.** These are T7's, which adds the index
   together with the cross-run query that uses it.
-- **Routes.** `POST /runs` is T10's. The one CLI is `lpe sourcing run` (below).
+- **Routes.** `POST /runs` lives in `app/runs/` (T10), which calls this slice's pipeline and reads its
+  runs through `SourcingService`. The one CLI here is `lpe sourcing run` (below), kept for hand runs.
 - **A run-lock** (one running run per vertical). A run-lock is the stated trigger for reopening the
   Redis decision, so it is not this slice's to add quietly.
 

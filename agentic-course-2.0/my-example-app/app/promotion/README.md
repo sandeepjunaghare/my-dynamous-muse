@@ -4,7 +4,8 @@ The one place this service talks to HubSpot. T3 built the gateway (`client.py`, 
 `properties.py`); T9 built promotion on it — a finished run's qualified candidates become a
 Company + Contact at `pending review`, and the founder's decision is read back and handed to the
 cadence (`service.py`, the `promotion` ledger, `lpe promotion`). The cadence slice (T11) is the
-gateway's other caller.
+gateway's other caller. `app/runs/` (T10) calls `promote_run` after each weekly run's stages, reads
+`review_tally` for the Friday report, and searches notes through the gateway.
 
 ## The write-gate
 

@@ -21,6 +21,7 @@ from app.core.exceptions import LocalProspectEngineError
 from app.core.logging import setup_logging
 from app.manifests import cli as manifests_cli
 from app.promotion import cli as promotion_cli
+from app.runs import cli as runs_cli
 from app.sourcing import cli as sourcing_cli
 
 
@@ -71,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
             help="promote a run's qualified prospects to HubSpot; read review decisions back",
         )
     )
+    runs_cli.register(commands.add_parser("runs", help="the weekly run and the Friday report"))
     return parser
 
 
@@ -94,6 +96,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return sourcing_cli.dispatch(args)
         if command == "promotion":
             return promotion_cli.dispatch(args)
+        if command == "runs":
+            return runs_cli.dispatch(args)
     except LocalProspectEngineError as exc:
         # A deliberate failure is a message, not a stack trace: every one of these is something a
         # person can act on (read the terms, fix the id, activate a draft first).

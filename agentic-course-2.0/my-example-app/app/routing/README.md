@@ -17,7 +17,8 @@ The stage module is `app/tools/cluster_routes.py`, and the work lives here.
   disqualification of the run is recorded by then. They are counted `routing_disqualified` and never
   geocoded, so routes are built from survivors and balanced over them. `routing/` still never imports
   `qualification/`; the stage module bridges the two. Unscored candidates are routed (they are
-  promotable). Whether routing re-runs if qualification ever changes after stage 5 stays T10's.
+  promotable). Nothing changes qualification after stage 5 inside a run, so the weekly run (T10)
+  never re-routes.
 - **A routable address**, by `CandidateFields.has_routable_address()`: the census address **and**
   either a `business_check` of it, or a homepage on the business's own email domain with no `mail_drop`
   verdict for that address (website-verification OQ-3, amending the 2026-10-10 rule). A website

@@ -70,6 +70,16 @@ class Settings(BaseSettings):
     # how many candidates there are, never the other way round.
     route_max_doors: int = Field(default=12, gt=0)
 
+    # --- Weekly run (T10) ---
+    # A weekly run still `running` this long after it was requested was killed; the next start
+    # marks it failed, which is what lifts the one-at-a-time guard. Kept below
+    # `sourcing_stale_run_hours`, so a reaped weekly run never outlives the guard on its own
+    # sourcing run (which sourcing reaps per vertical, at its own next start, anyway).
+    weekly_run_stale_hours: int = Field(default=2, gt=0)
+    # M7's target: brief to a pending-review list in HubSpot in under this many minutes. The Friday
+    # report compares each run's measured time against it.
+    weekly_run_target_minutes: int = Field(default=60, gt=0)
+
     # Integrations. Optional at T1 — T3 is what first needs a token.
     hubspot_private_app_token: str | None = None
     # The HubSpot owner a cadence task is assigned to when ``enrol`` names none. Unset leaves tasks

@@ -19,7 +19,7 @@ import os
 
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test"
 
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -34,6 +34,8 @@ from app.main import app
 
 ROOT = Path(__file__).resolve().parents[1]
 
+type SessionFactory = Callable[[], AsyncSession]
+
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 """A **throwaway** database for the tests that need one — never ``DATABASE_URL``.
 
@@ -46,9 +48,9 @@ requires_db = pytest.mark.skipif(
     TEST_DATABASE_URL is None,
     reason=(
         "needs a throwaway Postgres. Start one and point TEST_DATABASE_URL at it:\n"
-        "  docker run --rm -d --name lpe-test-pg -p 5433:5432"
+        "  docker run --rm -d --name lpe-test-pg -p 5434:5432"
         " -e POSTGRES_PASSWORD=test postgres:16\n"
-        "  export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5433/postgres"
+        "  export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5434/postgres"
     ),
 )
 """Mark for database-backed tests. The reason names the exact command that un-skips them."""
@@ -179,3 +181,36 @@ async def client_with_db(db_session: AsyncSession) -> AsyncGenerator[AsyncClient
             yield async_client
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def session_factory(migrated_database: str) -> AsyncGenerator[SessionFactory, None]:
+    """Fresh sessions on **one** connection whose outer transaction is always rolled back.
+
+    The ``db_session`` recipe above, returning a factory instead of a session —
+    which is what lets the pipeline's crash path, "finish a failed run on a *fresh* session", be
+    tested for real without leaking anything into the next test.
+    """
+    engine = create_async_engine(migrated_database)
+    sessions: list[AsyncSession] = []
+    try:
+        async with engine.connect() as connection:
+            transaction = await connection.begin()
+
+            def make() -> AsyncSession:
+                session = AsyncSession(
+                    bind=connection,
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                sessions.append(session)
+                return session
+
+            try:
+                yield make
+            finally:
+                for session in sessions:
+                    await session.close()
+                await transaction.rollback()
+    finally:
+        await engine.dispose()

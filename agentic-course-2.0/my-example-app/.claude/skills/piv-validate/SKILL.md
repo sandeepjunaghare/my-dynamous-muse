@@ -22,9 +22,9 @@ green** (`CLAUDE.md`) — this skill is that bar, run the same way every time.
   - **Set** → full run. Refuse to continue if it points at hosted Supabase (`supabase.co` or `pooler.supabase`
     in the URL): it must be a throwaway database, because the suite migrates and writes to it.
   - **Unset** → offline run. Allowed, but the verdict says so (see §6). To get the full tier:
-    `docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=test postgres:16` then
-    `export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5433/postgres`
-    (pick another port if 5433 is taken).
+    `docker start lpe-test-pg || docker run --name lpe-test-pg -d -p 5434:5432 -e POSTGRES_PASSWORD=test postgres:16`
+    then `export TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5434/postgres`
+    (5434, as in `CLAUDE.md`: 5433 is taken by Langfuse).
 
 Run the checks in order. **Keep going after a failure** so the report covers everything, and capture the
 output of any command that fails.

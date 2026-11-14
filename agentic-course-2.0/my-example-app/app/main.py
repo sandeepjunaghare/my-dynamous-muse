@@ -1,7 +1,7 @@
 """FastAPI application: lifespan, middleware, centralized error handling, health.
 
-Feature routers mount here as slices land. T2 mounts the first — the read-only manifests router.
-The weekly-run trigger endpoint is T10.
+Feature routers mount here as slices land: the read-only manifests router (T2), the cadence sync
+(T11), and the weekly-run trigger and Friday report (T10).
 """
 
 from collections.abc import AsyncGenerator
@@ -21,6 +21,7 @@ from app.core.logging import get_logger, get_request_id, setup_logging
 from app.core.middleware import RequestContextMiddleware
 from app.manifests.routes import router as manifests_router
 from app.promotion.client import aclose_hubspot_client
+from app.runs.routes import router as runs_router
 
 logger = get_logger(__name__)
 
@@ -66,6 +67,7 @@ app = FastAPI(
 app.add_middleware(RequestContextMiddleware)
 app.include_router(manifests_router)
 app.include_router(cadence_router)
+app.include_router(runs_router)
 
 
 def _error_response(status_code: int, payload: ErrorResponse) -> JSONResponse:
