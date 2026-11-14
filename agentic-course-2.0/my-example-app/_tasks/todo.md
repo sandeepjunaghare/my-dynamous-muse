@@ -2005,3 +2005,9 @@ Plan: `.claude/plans/t10-weekly-run.md`. Founder's decisions, asked before plann
 - [x] `/piv-validate`, commit, push to `feature/t10-weekly-run`
   — PASS: ruff, format, mypy, pyright clean; 1862 passed, 4 skipped. No migration touched, so no alembic step
 - Also: the slice README now says the prefixes match as whole words
+
+### PR #39 review L1: the two missing funnel counters (2026-11-13)
+
+- [x] `FUNNEL_COUNTERS` gains `places_not_found` (beside `places_verified`) and `routing_unverified_address`
+  (first of routing's, in `routing/service.py` emit order), so an unverified survivor shows up in the funnel
+  — PASS: ruff, format, mypy, pyright clean; 1862 passed, 4 skipped. The existing pin test covers both keys
