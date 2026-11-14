@@ -2011,3 +2011,28 @@ Plan: `.claude/plans/t10-weekly-run.md`. Founder's decisions, asked before plann
 - [x] `FUNNEL_COUNTERS` gains `places_not_found` (beside `places_verified`) and `routing_unverified_address`
   (first of routing's, in `routing/service.py` emit order), so an unverified survivor shows up in the funnel
   — PASS: ruff, format, mypy, pyright clean; 1862 passed, 4 skipped. The existing pin test covers both keys
+
+## PR #39 merged; M5 read on the adopted prospects (2026-11-13)
+
+- PR #39 merged (`f663349`); local main fast-forwarded.
+- Dev Supabase refused connections (`tenant/user … not found`): most likely paused for inactivity. Needs an
+  unpause in the dashboard before any `lpe` command that touches the database.
+- **M5, read from HubSpot (read-only):** 0 of 14 adopted prospects have finished even one touch since
+  adoption on 2026-10-10. All 14 `Cadence N/3 · …` tasks are `NOT_STARTED`, overdue since 2026-10-11 and
+  unchanged. No calls or emails logged since then. The 29 notes since then (2026-10-18/19) all sit on 15 new
+  contacts / 22 new companies from a trade show, none adopted, none in the cadence.
+- Per the ticket's checkpoint, the first real run waits: adding volume would not fix the touches not getting done.
+
+### Options 1 + 2: daily cadence for real, trade-show contacts adopted (2026-11-13)
+
+- **Found:** `com.compumatrice.lpe.cadence-sync` was already loaded. 11 good runs 10-09 → 10-23 (0 touches
+  closed, 14 overdue every day), then exit 1 daily since ~10-24 on the paused Supabase project: three weeks of
+  silent failure. launchd's exit code reaches nobody.
+- [x] `~/lpe/bin/lpe-job.sh`: runs each `lpe` command in order, one failure doesn't skip the rest, posts a
+  macOS notification on failure
+- [x] `~/lpe/launchd/`: `daily-sync` (07:00: promotion sync → cadence sync; replaces `cadence-sync`),
+  `friday-report` (Fri 07:30), `weekly-run` (Mon 06:00, **written, not to be loaded** until M5 moves)
+- [x] `~/lpe/adopt-2026-11-tradeshow.toml`: 8 engaged trade-show contacts, all `start = "1-call"`; 5 engaged
+  company-only ones listed to get contacts first. Passes `load_roster`
+- [ ] Human: unpause dev Supabase · install the plists · roster review → dry-run → apply · agree who works
+  the tasks daily · re-read M5 on 2026-11-27
