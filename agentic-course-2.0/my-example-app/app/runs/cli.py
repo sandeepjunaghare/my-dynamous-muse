@@ -8,12 +8,14 @@
   of the week's runs.
 
 Stdout is for a person: sentences, aligned counters, never a bare id. Warnings and errors go to
-stderr. Exit code 0 for a completed or degraded run (with a ``warning:`` for degraded); 1 for a
-failed run or a refusal (``app/cli.py`` turns a refusal into one ``error:`` line).
+stderr. ``start`` exits 0 for a completed or degraded run (with a ``warning:`` for degraded) and
+1 for a failed one. ``show`` exits 0 whatever the run's status: inspecting a failure is not a
+failure. A refusal is 1 everywhere (``app/cli.py`` turns it into one ``error:`` line).
 """
 
 import argparse
 import asyncio
+import re
 import sys
 from collections.abc import Awaitable
 from datetime import date
@@ -21,6 +23,7 @@ from uuid import UUID
 
 from app.core.cost import format_usd
 from app.core.database import dispose_engine, get_sessionmaker
+from app.manifests.schemas import SLUG_MAX_LENGTH, SLUG_PATTERN
 from app.promotion.client import aclose_hubspot_client, get_hubspot_client
 from app.runs.report import WeeklyReportService
 from app.runs.schemas import (
@@ -51,6 +54,16 @@ def _positive(raw: str) -> int:
     return value
 
 
+def _slug(raw: str) -> str:
+    """``--vertical``: the slug ``WeeklyRunRequest`` demands, refused here as a usage error."""
+    if re.fullmatch(SLUG_PATTERN, raw) is None or len(raw) > SLUG_MAX_LENGTH:
+        raise argparse.ArgumentTypeError(
+            f"{raw!r} is not a lowercase slug of at most {SLUG_MAX_LENGTH} characters "
+            "(e.g. freight)"
+        )
+    return raw
+
+
 def _day(raw: str) -> date:
     try:
         return date.fromisoformat(raw)
@@ -68,7 +81,9 @@ def register(parser: argparse.ArgumentParser) -> None:
             "and promote to pending review in HubSpot"
         ),
     )
-    start.add_argument("--vertical", required=True, help="a vertical with an ACTIVE manifest")
+    start.add_argument(
+        "--vertical", required=True, type=_slug, help="a vertical with an ACTIVE manifest"
+    )
     start.add_argument(
         "--batch-size",
         type=_positive,
@@ -114,7 +129,9 @@ def dispatch(args: argparse.Namespace) -> int:
         return _emit(asyncio.run(_closing(_service().run(request))))
     if subcommand == "show":
         run_id: UUID = args.run_id
-        return _emit(asyncio.run(_closing(_service().get(run_id))))
+        for line in run_lines(asyncio.run(_closing(_service().get(run_id)))):
+            print(line)
+        return 0
     if subcommand == "report":
         week: date | None = args.week
         for line in report_lines(asyncio.run(_closing(_report(week)))):

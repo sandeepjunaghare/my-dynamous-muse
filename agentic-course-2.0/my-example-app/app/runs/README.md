@@ -76,8 +76,8 @@ DST week is 167 or 169 hours. It has three parts:
    prefix (DECISION 1). A read of the portal on 2026-10-17 found every real touch logged as a
    free-text note; the portal's calls and meetings are HubSpot sample data. So a note whose text
    **starts with** `Door knock`, `Owner conversation` or `Assessment booked` counts toward that
-   number. Leading emoji and punctuation are ignored, case is ignored, and `-`/`_` read as spaces
-   (`touches.py`). Every other note in the week is an **unclassified touch**, and the report shows
+   number, as whole words (`Door knocking planned` does not). Leading emoji and punctuation are
+   ignored, case is ignored, and `-`/`_` read as spaces (`touches.py`). Every other note in the week is an **unclassified touch**, and the report shows
    them, so whether the convention is being used is visible. **Paid assessments sold is
    `not configured`** (GATE-A, D10). `PlaybookNumber` cannot hold a 0 for it.
 2. **Runs.** Each weekly run requested in the week, with:

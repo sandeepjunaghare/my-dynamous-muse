@@ -231,6 +231,13 @@ class TestStart:
 
         assert _last_err(capsys) == f"error: weekly run {RUN} has been running"
 
+    def test_a_bad_vertical_is_a_usage_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exited:
+            main(["runs", "start", "--vertical", "Freight"])
+
+        assert exited.value.code == 2
+        assert "is not a lowercase slug" in capsys.readouterr().err
+
 
 class TestShow:
     def test_it_renders_like_start(
@@ -241,6 +248,27 @@ class TestShow:
         assert main(["runs", "show", str(RUN)]) == 0
 
         assert capsys.readouterr().out.splitlines()[0] == f"weekly run {RUN}  freight  completed"
+
+    def test_a_past_failure_is_0_without_an_error(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Inspecting a failed run succeeds; only ``start`` maps the run's status to the exit."""
+        _stub_get(
+            monkeypatch,
+            _run(
+                WeeklyRunStatus.failed,
+                status_detail="reaped",
+                sourced_at=None,
+                promoted_at=None,
+                promotion_counts={},
+            ),
+        )
+
+        assert main(["runs", "show", str(RUN)]) == 0
+
+        out = capsys.readouterr()
+        assert out.out.splitlines()[0] == f"weekly run {RUN}  freight  failed"
+        assert "error:" not in out.err
 
     def test_an_unknown_id(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

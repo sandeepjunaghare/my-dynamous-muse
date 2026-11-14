@@ -1994,3 +1994,14 @@ Plan: `.claude/plans/t10-weekly-run.md`. Founder's decisions, asked before plann
   add up on Friday. Two-line change if wanted. (2) `.claude/skills/piv-validate/SKILL.md` still says port
   5433. (3) Level 4 steps 5-8: the M5 check on the adopted 22, the first real run, the launchd jobs, telling
   the founders the note-prefix convention. (4) Cross-check the 2 door knocks of 2026-09-28 in HubSpot by hand.
+
+### PR #39 review fixes: L2–L4 (2026-11-13)
+
+- [x] L2: `classify_note` accepts a prefix only at a word boundary ("Door knocking planned" is not a door knock);
+  cases in `tests/runs/test_touches.py`
+- [x] L3: `--vertical` validated by an argparse `_slug` type, as `lpe manifest` does: a usage error, no
+  traceback (instead of the review's catch-`ValidationError`, to match `_positive`/`_day` beside it); test
+- [x] L4: only `start` maps a failed run to exit 1; `show` of a failed run exits 0; test
+- [x] `/piv-validate`, commit, push to `feature/t10-weekly-run`
+  — PASS: ruff, format, mypy, pyright clean; 1862 passed, 4 skipped. No migration touched, so no alembic step
+- Also: the slice README now says the prefixes match as whole words

@@ -42,13 +42,15 @@ def _normalise(text: str) -> str:
 def classify_note(text: str | None) -> TouchKind | None:
     """The touch a note's text starts with, or ``None`` when it starts with none of them.
 
-    A prefix, never a search: ``Called; door knock tomorrow`` is a plan, not a door knock.
+    A prefix, never a search: ``Called; door knock tomorrow`` is a plan, not a door knock. And a
+    whole-word prefix: ``Door knocking planned Thursday`` is a plan too.
     """
     if not text:
         return None
     normalised = _normalise(text)
     for kind, prefix in PREFIXES.items():
-        if normalised.startswith(prefix):
+        rest = normalised.removeprefix(prefix)
+        if rest != normalised and not rest[:1].isalnum():
             return kind
     return None
 

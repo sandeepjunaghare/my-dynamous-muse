@@ -44,6 +44,18 @@ class TestClassifyNote:
     def test_a_label_mid_sentence_is_not_a_prefix(self) -> None:
         assert classify_note("Called; door knock tomorrow") is None
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Door knocking planned Thursday",
+            "Owner conversations to book",
+            "Assessment bookedness",
+            "door knocks: 3 this week",
+        ],
+    )
+    def test_a_prefix_must_end_on_a_word_boundary(self, text: str) -> None:
+        assert classify_note(text) is None
+
     @pytest.mark.parametrize("text", [None, "", "   ", "🚪"])
     def test_empty_is_unclassified(self, text: str | None) -> None:
         assert classify_note(text) is None
